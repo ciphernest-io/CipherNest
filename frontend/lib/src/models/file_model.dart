@@ -3,6 +3,7 @@ enum CnestFileType { image, document, other }
 class CnestFile {
   final String id;
   final String? cloudId;
+  final String? thumbnailCloudId;
   final int provider; // 0=Google, 1=OneDrive, 2=Dropbox
   final String? accountId; // The email (e.g. user@gmail.com)
   final String filename;
@@ -15,6 +16,7 @@ class CnestFile {
   CnestFile({
     required this.id,
     this.cloudId,
+    this.thumbnailCloudId,
     this.provider = 0, // Default to Google for now
     this.accountId,
     required this.filename,
@@ -29,6 +31,7 @@ class CnestFile {
     return {
       'id': id,
       'cloud_id': cloudId,
+      'thumbnail_cloud_id': thumbnailCloudId,
       'provider': provider,
       'account_id': accountId,
       'filename': filename,
@@ -44,6 +47,7 @@ class CnestFile {
     return CnestFile(
       id: map['id'],
       cloudId: map['cloud_id'],
+      thumbnailCloudId: map['thumbnail_cloud_id'],
       provider: map['provider'] ?? 0,
       accountId: map['account_id'],
       filename: map['filename'],

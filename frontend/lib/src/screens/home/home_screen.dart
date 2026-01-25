@@ -1,6 +1,8 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart'; // For thumbnails
+import 'package:file_picker/file_picker.dart'; // For documents
 
 import '../../config/routes.dart';
 import '../../config/theme.dart';
@@ -83,30 +85,36 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _handleUpload(bool isImage) async {
-    // ... (Keep the picking logic) ...
     Uint8List? fileBytes;
     String filename;
 
     try {
+      // 1. Pick the File
       if (isImage) {
         fileBytes = await ImagePickerService.pickImageAsBytes();
         filename = 'photo_${DateTime.now().millisecondsSinceEpoch}.jpg';
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Document picker coming soon!')),
+        // Document Picker
+        FilePickerResult? result = await FilePicker.platform.pickFiles(
+          type: FileType.any, 
+          withData: true,
         );
-        return;
+        if (result == null) return;
+        fileBytes = result.files.first.bytes;
+        filename = result.files.first.name;
       }
-      if (fileBytes == null) return; 
+
+      if (fileBytes == null) return;
 
       setState(() => _isUploading = true);
 
+      // 2. Prepare Database Entry
       final fileId = const Uuid().v4();
       final type = isImage ? CnestFileType.image : CnestFileType.document;
       final currentEmail = DriveService.currentEmail;
 
       if (currentEmail == null) throw Exception('No active Google Drive account found.');
-      
+
       final newFile = CnestFile(
         id: fileId,
         filename: filename,
@@ -117,28 +125,67 @@ class _HomeScreenState extends State<HomeScreen> {
         provider: 0,
         accountId: currentEmail,
       );
-      
+
       await DatabaseService().addFile(newFile);
 
-      final encryptedBytes = await EncryptionService.encryptFile(fileBytes);
-      final cloudFilename = '$fileId.cnest';
+      // 3. Generate Thumbnail (Images Only)
+      Uint8List? thumbnailBytes;
+      if (isImage) {
+        try {
+          thumbnailBytes = await FlutterImageCompress.compressWithList(
+            fileBytes,
+            minHeight: 400, // Optimized for Grid View
+            minWidth: 400,
+            quality: 70,    // Good balance of size/quality
+          );
+        } catch (e) {
+          debugPrint("Thumbnail generation failed: $e");
+          // Proceed without thumbnail if compression fails
+        }
+      }
+
+      // 4. Encrypt Main File
+      final encryptedMainBytes = await EncryptionService.encryptFile(fileBytes);
+      final mainCloudFilename = '$fileId.cnest';
+
+      // 5. Encrypt Thumbnail (if exists)
+      Uint8List? encryptedThumbBytes;
+      String? thumbCloudFilename;
       
-      // FIX: Pass isImage flag to tag the file metadata
-      final googleDriveId = await DriveService.uploadEncryptedFile(
-        encryptedBytes: encryptedBytes,
-        filename: cloudFilename,
-        isImage: isImage, // <--- NEW ARGUMENT
+      if (thumbnailBytes != null) {
+        encryptedThumbBytes = await EncryptionService.encryptFile(thumbnailBytes);
+        thumbCloudFilename = '${fileId}_thumb.cnest'; // Sidecar naming convention
+      }
+
+      // 6. Upload Main File
+      final mainCloudId = await DriveService.uploadEncryptedFile(
+        encryptedBytes: encryptedMainBytes,
+        filename: mainCloudFilename,
+        isImage: isImage,
       );
 
-      if (googleDriveId == null) throw Exception('Upload failed');
+      if (mainCloudId == null) throw Exception('Main upload failed');
 
-      await DatabaseService().markAsUploaded(fileId, googleDriveId);
+      // 7. Upload Thumbnail (if exists)
+      String? thumbCloudId;
+      if (encryptedThumbBytes != null && thumbCloudFilename != null) {
+        thumbCloudId = await DriveService.uploadEncryptedFile(
+          encryptedBytes: encryptedThumbBytes,
+          filename: thumbCloudFilename,
+          isImage: true, // Thumbnails are always images
+        );
+      }
+
+      // 8. Link in Database
+      // We update the row with BOTH IDs
+      await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Encryption & Upload Complete!')),
+          const SnackBar(content: Text('Secure Upload Complete')),
         );
       }
+
     } catch (e) {
       debugPrint('Upload error: $e');
       if (mounted) {
