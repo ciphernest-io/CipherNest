@@ -94,7 +94,6 @@ class _HomeScreenState extends State<HomeScreen> {
         fileBytes = await ImagePickerService.pickImageAsBytes();
         filename = 'photo_${DateTime.now().millisecondsSinceEpoch}.jpg';
       } else {
-        // Document Picker
         FilePickerResult? result = await FilePicker.platform.pickFiles(
           type: FileType.any, 
           withData: true,
@@ -134,13 +133,12 @@ class _HomeScreenState extends State<HomeScreen> {
         try {
           thumbnailBytes = await FlutterImageCompress.compressWithList(
             fileBytes,
-            minHeight: 400, // Optimized for Grid View
-            minWidth: 400,
-            quality: 70,    // Good balance of size/quality
+            minHeight: 300, 
+            minWidth: 300,
+            quality: 50,    
           );
         } catch (e) {
           debugPrint("Thumbnail generation failed: $e");
-          // Proceed without thumbnail if compression fails
         }
       }
 
@@ -154,30 +152,43 @@ class _HomeScreenState extends State<HomeScreen> {
       
       if (thumbnailBytes != null) {
         encryptedThumbBytes = await EncryptionService.encryptFile(thumbnailBytes);
-        thumbCloudFilename = '${fileId}_thumb.cnest'; // Sidecar naming convention
+        thumbCloudFilename = '${fileId}_thumb.cnest';
       }
 
-      // 6. Upload Main File
-      final mainCloudId = await DriveService.uploadEncryptedFile(
-        encryptedBytes: encryptedMainBytes,
-        filename: mainCloudFilename,
-        isImage: isImage,
-      );
+      // 6. PARALLEL UPLOAD (The Speed Fix)
+      // We start both uploads simultaneously and wait for both to finish.
+      final uploadFutures = <Future<String?>>[
+        // Task 1: Main File
+        DriveService.uploadEncryptedFile(
+          encryptedBytes: encryptedMainBytes,
+          filename: mainCloudFilename,
+          isImage: isImage,
+        ),
+      ];
+
+      // Task 2: Thumbnail (Only if we have one)
+      if (encryptedThumbBytes != null && thumbCloudFilename != null) {
+        uploadFutures.add(
+          DriveService.uploadEncryptedFile(
+            encryptedBytes: encryptedThumbBytes,
+            filename: thumbCloudFilename,
+            isImage: true, 
+          )
+        );
+      } else {
+        // Add a dummy future so the index matches if no thumb
+        uploadFutures.add(Future.value(null));
+      }
+
+      // Wait for both...
+      final results = await Future.wait(uploadFutures);
+      
+      final mainCloudId = results[0];
+      final thumbCloudId = results[1]; // This will be null if we didn't upload one
 
       if (mainCloudId == null) throw Exception('Main upload failed');
 
-      // 7. Upload Thumbnail (if exists)
-      String? thumbCloudId;
-      if (encryptedThumbBytes != null && thumbCloudFilename != null) {
-        thumbCloudId = await DriveService.uploadEncryptedFile(
-          encryptedBytes: encryptedThumbBytes,
-          filename: thumbCloudFilename,
-          isImage: true, // Thumbnails are always images
-        );
-      }
-
-      // 8. Link in Database
-      // We update the row with BOTH IDs
+      // 7. Link in Database
       await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId);
 
       if (mounted) {

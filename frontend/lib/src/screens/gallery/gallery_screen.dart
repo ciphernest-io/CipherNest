@@ -1,7 +1,11 @@
+import 'dart:io'; // Fixes 'File'
+import 'dart:typed_data';
+import 'package:path_provider/path_provider.dart';
 import 'package:flutter/material.dart';
 import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
 import '../../../services/drive_service.dart';
+import '../../../services/encryption_service.dart';
 import 'image_viewer_screen.dart';
 
 class GalleryScreen extends StatefulWidget {
@@ -79,7 +83,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
                   )
                 : GridView.builder(
                     physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.all(2),
                     gridDelegate:
                         const SliverGridDelegateWithFixedCrossAxisCount(
                           crossAxisCount: 3,
@@ -107,31 +111,91 @@ class _GalleryScreenState extends State<GalleryScreen> {
                             _refresh(); // This re-queries the DB, and the deleted photo vanishes.
                           }
                         },
-                        child: Container(
-                          color: Colors.grey[900],
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Icon(Icons.lock, color: Colors.white54),
-                              const SizedBox(height: 4),
-                              Text(
-                                file.filename,
-                                style: const TextStyle(
-                                  fontSize: 10,
-                                  color: Colors.white70,
-                                ),
-                                textAlign: TextAlign.center,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
-                          ),
-                        ),
+                        child: _GalleryGridItem(file: file),
                       );
                     },
                   ),
           );
         },
       ),
+    );
+  }
+}
+
+class _GalleryGridItem extends StatefulWidget {
+  final CnestFile file;
+  const _GalleryGridItem({required this.file});
+
+  @override
+  State<_GalleryGridItem> createState() => _GalleryGridItemState();
+}
+
+class _GalleryGridItemState extends State<_GalleryGridItem> {
+  Uint8List? _imageData;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadThumbnail();
+  }
+
+  Future<void> _loadThumbnail() async {
+    if (!mounted) return;
+    
+    try {
+      final cacheDir = await getTemporaryDirectory();
+      // Naming convention: thumb_{cloudId}.jpg
+      // If we don't have a thumbnail ID, we try to load the main file (fallback)
+      final targetCloudId = widget.file.thumbnailCloudId ?? widget.file.cloudId;
+      
+      if (targetCloudId == null) throw Exception("No ID");
+
+      final isThumbnail = widget.file.thumbnailCloudId != null;
+      final fileName = isThumbnail 
+          ? 'thumb_${widget.file.cloudId}.jpg' // Distinct name for thumbnails
+          : '${widget.file.cloudId}_decrypted.jpg'; // Main file fallback
+
+      final cacheFile = File('${cacheDir.path}/$fileName');
+
+      // 1. Check Cache
+      if (await cacheFile.exists()) {
+        final bytes = await cacheFile.readAsBytes();
+        if (mounted) setState(() { _imageData = bytes; _loading = false; });
+        return;
+      }
+
+      // 2. Download & Decrypt
+      final encryptedBytes = await DriveService.downloadFile(targetCloudId);
+      final decryptedBytes = await EncryptionService.decryptFile(encryptedBytes);
+
+      // 3. Save to Cache
+      await cacheFile.writeAsBytes(decryptedBytes);
+
+      if (mounted) setState(() { _imageData = decryptedBytes; _loading = false; });
+
+    } catch (e) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return Container(color: Colors.grey[900]);
+    }
+    
+    if (_imageData == null) {
+      return Container(
+        color: Colors.grey[900],
+        child: const Icon(Icons.broken_image, color: Colors.white24),
+      );
+    }
+
+    return Image.memory(
+      _imageData!,
+      fit: BoxFit.cover,
+      cacheWidth: 200, // Memory optimization
     );
   }
 }

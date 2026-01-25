@@ -59,7 +59,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       if (fileToDelete.cloudId != null) {
         await DriveService.deleteFile(fileToDelete.cloudId!);
       }
-      
+      if (fileToDelete.thumbnailCloudId != null) {
+        await DriveService.deleteFile(fileToDelete.thumbnailCloudId!);
+      }
       // 2. Delete from Local DB
       await DatabaseService().deleteFile(fileToDelete.id);
 
@@ -113,6 +115,8 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         itemCount: _currentFiles.length,
         onPageChanged: (index) {
           setState(() => _currentIndex = index);
+          _precacheNeighbor(index + 1);
+          _precacheNeighbor(index - 1);
         },
         itemBuilder: (context, index) {
           return _SinglePhotoView(file: _currentFiles[index]);
@@ -120,13 +124,22 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       ),
     );
   }
+
+  void _precacheNeighbor(int index) {
+    if (index < 0 || index >= widget.files.length) return;
+    // We just access the file logic. The _SinglePhotoView state handles logic, 
+    // but since PageView lazy-loads, we can't easily force it to build widgets that are off-screen.
+    // A simple hack for V1: The PageView actually renders the next/prev page if we keep viewport fraction default.
+    // Flutter's cacheExtent usually handles this.
+    // If it's still black, we might need to manually trigger a download service here.
+    // For now, let's trust the updated _SinglePhotoView logic first.
+  }
 }
 
 /// A separate widget handles loading/caching for each individual photo.
 /// This makes swiping smoother because adjacent pages can pre-load.
 class _SinglePhotoView extends StatefulWidget {
   final CnestFile file;
-
   const _SinglePhotoView({required this.file});
 
   @override
@@ -134,77 +147,95 @@ class _SinglePhotoView extends StatefulWidget {
 }
 
 class _SinglePhotoViewState extends State<_SinglePhotoView> with AutomaticKeepAliveClientMixin {
-  Uint8List? _imageData;
-  bool _loading = true;
-  String? _error;
-
+  Uint8List? _fullImage;
+  Uint8List? _thumbImage;
+  bool _isLoadingFull = true;
+  
   @override
-  bool get wantKeepAlive => true; // Keeps the photo in memory when you swipe away slightly
+  bool get wantKeepAlive => true; // Essential for swipe smoothness
 
   @override
   void initState() {
     super.initState();
-    _loadWithCache();
+    _loadImages();
   }
 
-  Future<void> _loadWithCache() async {
-    try {
-      if (widget.file.cloudId == null) throw Exception('File not synced');
+  Future<void> _loadImages() async {
+    if (!mounted) return;
+    final cacheDir = await getTemporaryDirectory();
 
-      // 1. Check Local Cache
-      final cacheDir = await getTemporaryDirectory();
-      final cacheFile = File('${cacheDir.path}/${widget.file.cloudId}_decrypted.jpg');
-
-      if (await cacheFile.exists()) {
-        // HIT: Read from disk (Fast!)
-        final bytes = await cacheFile.readAsBytes();
-        if (mounted) setState(() { _imageData = bytes; _loading = false; });
-        return;
+    // 1. Load Thumbnail IMMEDIATELY (if exists)
+    // This removes the "black screen" on initial load
+    final thumbFile = File('${cacheDir.path}/thumb_${widget.file.cloudId}.jpg');
+    if (await thumbFile.exists()) {
+      if (mounted) {
+        setState(() {
+          _thumbImage = thumbFile.readAsBytesSync();
+        });
       }
+    }
 
-      // 2. MISS: Download & Decrypt (Slow...)
-      final encryptedBytes = await DriveService.downloadFile(widget.file.cloudId!);
-      final decryptedBytes = await EncryptionService.decryptFile(encryptedBytes);
+    // 2. Check for Full Image
+    final fullFile = File('${cacheDir.path}/${widget.file.cloudId}_decrypted.jpg');
+    if (await fullFile.exists()) {
+      final bytes = await fullFile.readAsBytes();
+      if (mounted) setState(() { _fullImage = bytes; _isLoadingFull = false; });
+      return;
+    }
 
-      // 3. Write to Cache (for next time)
-      await cacheFile.writeAsBytes(decryptedBytes);
-
-      if (mounted) setState(() { _imageData = decryptedBytes; _loading = false; });
-
-    } catch (e) {
-      if (mounted) setState(() { _error = e.toString(); _loading = false; });
+    // 3. If no full image, fetch it
+    if (widget.file.cloudId != null) {
+      try {
+        final encryptedBytes = await DriveService.downloadFile(widget.file.cloudId!);
+        final decryptedBytes = await EncryptionService.decryptFile(encryptedBytes);
+        await fullFile.writeAsBytes(decryptedBytes);
+        
+        if (mounted) {
+          setState(() { 
+            _fullImage = decryptedBytes; 
+            _isLoadingFull = false; 
+          });
+        }
+      } catch (e) {
+        debugPrint("Error loading full image: $e");
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    super.build(context); // Required for AutomaticKeepAliveClientMixin
-
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: Colors.white));
-    }
-
-    if (_error != null) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.broken_image, color: Colors.white54, size: 48),
-            const SizedBox(height: 16),
-            Text('Error: $_error', style: const TextStyle(color: Colors.red)),
-          ],
-        ),
-      );
-    }
+    super.build(context);
 
     return InteractiveViewer(
       minScale: 1.0,
       maxScale: 4.0,
-      child: Center(
-        child: Image.memory(
-          _imageData!,
-          fit: BoxFit.contain,
-        ),
+      child: Stack(
+        fit: StackFit.expand, // Fill the screen
+        children: [
+          // Layer 1: Thumbnail (Always visible until obscured)
+          if (_thumbImage != null)
+            Image.memory(
+              _thumbImage!,
+              fit: BoxFit.contain,
+              gaplessPlayback: true, // Prevents flickering
+            ),
+            
+          // Layer 2: Full Image (Fade In)
+          if (_fullImage != null)
+            AnimatedOpacity(
+              opacity: _fullImage != null ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 200),
+              child: Image.memory(
+                _fullImage!,
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+              ),
+            ),
+
+          // Layer 3: Spinner (Only if we have NOTHING)
+          if (_isLoadingFull && _fullImage == null)
+             const Center(child: CircularProgressIndicator(color: Colors.white)),
+        ],
       ),
     );
   }
