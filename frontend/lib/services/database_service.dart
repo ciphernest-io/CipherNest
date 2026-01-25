@@ -33,6 +33,7 @@ class DatabaseService {
           CREATE TABLE files(
             id TEXT PRIMARY KEY,
             cloud_id TEXT,
+            thumbnail_cloud_id TEXT,
             provider INTEGER DEFAULT 0,
             account_id TEXT,
             filename TEXT NOT NULL,
@@ -61,6 +62,7 @@ class DatabaseService {
       localPath: file.localPath,
       isUploaded: file.isUploaded,
       cloudId: file.cloudId,
+      thumbnailCloudId: file.thumbnailCloudId,
       provider: 0, 
       accountId: _currentAccountId, 
     );
@@ -77,13 +79,14 @@ class DatabaseService {
     await db.delete('files', where: 'id = ?', whereArgs: [id]);
   }
 
-  Future<void> markAsUploaded(String id, String cloudId) async {
+  Future<void> markAsUploaded(String id, String cloudId, String? thumbId) async {
     final db = await database;
     await db.update(
       'files',
       {
         'is_uploaded': 1,
         'cloud_id': cloudId,
+        'thumbnail_cloud_id': thumbId,
         'local_path': null, 
       },
       where: 'id = ?',
