@@ -1,6 +1,7 @@
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import '../src/models/file_model.dart';
+import 'drive_service.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 
 class DatabaseService {
@@ -216,5 +217,48 @@ class DatabaseService {
     }
 
     await linkBatch.commit(noResult: true);
+  }
+
+  // Add this to DatabaseService class
+  Future<Map<String, int>> getStorageStats() async {
+    final db = await database;
+    final email = DriveService.currentEmail;
+    if (email == null) return {'images': 0, 'docs': 0, 'total_count': 0};
+
+    // 1. Get Total File Count
+    final countResult = await db.rawQuery(
+      'SELECT COUNT(*) as count FROM files WHERE account_id = ?', 
+      [email]
+    );
+    final count = Sqflite.firstIntValue(countResult) ?? 0;
+
+    // 2. Get Size by Type (0 = Image, 1 = Document)
+    // We sum up the 'size_bytes' column
+    final List<Map<String, dynamic>> result = await db.rawQuery('''
+      SELECT type, SUM(size_bytes) as total_size 
+      FROM files 
+      WHERE account_id = ? 
+      GROUP BY type
+    ''', [email]);
+
+    int imageBytes = 0;
+    int docBytes = 0;
+
+    for (var row in result) {
+      final type = row['type'] as int;
+      final size = row['total_size'] as int? ?? 0;
+      
+      if (type == 0) { // CnestFileType.image.index
+        imageBytes = size;
+      } else {
+        docBytes += size; // Combine docs + others
+      }
+    }
+
+    return {
+      'images': imageBytes,
+      'docs': docBytes,
+      'total_count': count,
+    };
   }
 }
