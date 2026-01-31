@@ -119,9 +119,8 @@ class DatabaseService {
     final db = await database;
     final batch = db.batch();
 
-    // A. CLEANUP 
+    // --- PHASE A: CLEANUP (Remove deleted files) ---
     final cloudIds = cloudFiles.map((f) => f.id).whereType<String>().toSet();
-    
     final localRows = await db.query(
       'files', 
       columns: ['id', 'cloud_id'], 
@@ -135,8 +134,12 @@ class DatabaseService {
         batch.delete('files', where: 'id = ?', whereArgs: [row['id']]);
       }
     }
+    
+    // Commit deletes first to clear space
+    await batch.commit(noResult: true);
+    final insertBatch = db.batch(); // New batch for inserts
 
-    // B. IMPORT 
+    // --- PHASE B: SEPARATION ---
     final knownCloudIdsRows = await db.query(
       'files', 
       columns: ['cloud_id'], 
@@ -145,31 +148,41 @@ class DatabaseService {
     );
     final knownCloudIds = knownCloudIdsRows.map((r) => r['cloud_id']).toSet();
 
+    // Split files into "Main" and "Thumbnails"
+    final mainFiles = <drive.File>[];
+    final thumbnailFiles = <drive.File>[];
+
     for (var file in cloudFiles) {
       if (file.id == null || knownCloudIds.contains(file.id)) continue;
+      
+      final name = file.name ?? '';
+      if (name.endsWith('_thumb.cnest')) {
+        thumbnailFiles.add(file);
+      } else {
+        mainFiles.add(file);
+      }
+    }
 
-      // FIX: Check metadata first, fallback to name
+    // --- PHASE C: IMPORT MAIN FILES (Pass 1) ---
+    for (var file in mainFiles) {
       final props = file.appProperties ?? {};
       final realFilename = props['original_name'] ?? 'Restored File';
       final typeStr = props['type'] ?? '';
       
       bool isImage = false;
-      if (typeStr == 'image') {
-        isImage = true;
-      } else if (typeStr == 'document') {
-        isImage = false;
-      } else {
-        // Fallback for legacy files
-        final name = file.name ?? 'Unknown';
-        isImage = name.toLowerCase().contains('.jpg') || 
-                  name.toLowerCase().contains('.png') ||
-                  name.toLowerCase().contains('photo');
+      if (typeStr == 'image') isImage = true;
+      else if (typeStr == 'document') isImage = false;
+      else isImage = (file.name ?? '').contains('photo');
+
+      String localId = file.id!;
+      if (file.name != null && file.name!.endsWith('.cnest')) {
+         localId = file.name!.replaceAll('.cnest', '');
       }
 
-      batch.insert(
+      insertBatch.insert(
         'files',
         {
-          'id': file.id!,
+          'id': localId,
           'cloud_id': file.id,
           'provider': 0,
           'account_id': _currentAccountId, 
@@ -178,12 +191,30 @@ class DatabaseService {
           'created_at': file.createdTime?.millisecondsSinceEpoch ?? DateTime.now().millisecondsSinceEpoch,
           'is_uploaded': 1,
           'local_path': null,
-          'type': isImage ? 0 : 1, // 0 = Image
+          'type': isImage ? 0 : 1,
         },
         conflictAlgorithm: ConflictAlgorithm.ignore,
       );
     }
+    
+    // Commit Main Files immediately so they exist for Phase D
+    await insertBatch.commit(noResult: true);
+    final linkBatch = db.batch();
 
-    await batch.commit(noResult: true);
+    // --- PHASE D: LINK THUMBNAILS (Pass 2) ---
+    for (var file in thumbnailFiles) {
+      final name = file.name ?? '';
+      // Extract UUID: "abc-123_thumb.cnest" -> "abc-123"
+      final parentFileId = name.replaceAll('_thumb.cnest', '');
+      
+      linkBatch.update(
+        'files',
+        {'thumbnail_cloud_id': file.id},
+        where: 'id = ?',
+        whereArgs: [parentFileId],
+      );
+    }
+
+    await linkBatch.commit(noResult: true);
   }
 }
