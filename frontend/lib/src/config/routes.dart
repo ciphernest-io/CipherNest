@@ -10,6 +10,8 @@ import '../screens/cloud_selection/cloud_selection_screen.dart';
 import '../screens/home/home_screen.dart';
 import '../screens/gallery/gallery_screen.dart';
 import '../screens/documents/documents_screen.dart';
+import '../screens/settings/settings_screen.dart';
+import '../screens/settings/key_management_screen.dart';
 
 class AppRoutes {
   static const String splash = '/';
@@ -22,9 +24,12 @@ class AppRoutes {
   static const String home = '/home';
   static const String gallery = '/gallery';
   static const String documents = '/documents';
+  static const String settings = '/settings'; 
+  static const String keyManagement = '/key-management'; 
 
-  static Route<dynamic> generateRoute(RouteSettings settings) {
-    switch (settings.name) {
+  // CHANGED argument name to 'routeSettings' to avoid conflict
+  static Route<dynamic> generateRoute(RouteSettings routeSettings) {
+    switch (routeSettings.name) {
       case splash:
         return MaterialPageRoute(builder: (_) => const SplashScreen());
 
@@ -54,6 +59,12 @@ class AppRoutes {
 
       case documents:
         return MaterialPageRoute(builder: (_) => const DocumentsScreen());
+
+      case settings: // Now this correctly refers to the static String
+        return MaterialPageRoute(builder: (_) => const SettingsScreen());
+
+      case keyManagement:
+        return MaterialPageRoute(builder: (_) => const KeyManagementScreen());
 
       default:
         return MaterialPageRoute(
