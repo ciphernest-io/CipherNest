@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:open_file/open_file.dart'; // Launches native PDF reader
 import 'package:path_provider/path_provider.dart'; // For temp storage
 import 'package:intl/intl.dart'; // You might need to add intl to pubspec
+import 'dart:typed_data';
 
 import '../../config/theme.dart';
 import '../../models/file_model.dart';
@@ -102,54 +103,6 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
     }
   }
 
-  // --- UI HELPER: FILE ICONS ---
-  Widget _buildFileIcon(String filename) {
-    final ext = filename.split('.').last.toLowerCase();
-    
-    IconData icon;
-    Color color;
-
-    switch (ext) {
-      case 'pdf':
-        icon = Icons.picture_as_pdf;
-        color = Colors.redAccent;
-        break;
-      case 'doc':
-      case 'docx':
-        icon = Icons.description;
-        color = Colors.blueAccent;
-        break;
-      case 'xls':
-      case 'xlsx':
-      case 'csv':
-        icon = Icons.table_chart;
-        color = Colors.greenAccent;
-        break;
-      case 'ppt':
-      case 'pptx':
-        icon = Icons.slideshow;
-        color = Colors.orangeAccent;
-        break;
-      case 'zip':
-      case 'rar':
-        icon = Icons.folder_zip;
-        color = Colors.yellowAccent;
-        break;
-      default:
-        icon = Icons.insert_drive_file;
-        color = Colors.grey;
-    }
-
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.15),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Icon(icon, color: color, size: 28),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -191,59 +144,235 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
           return ListView.separated(
             padding: const EdgeInsets.all(16),
             itemCount: files.length,
-            separatorBuilder: (ctx, i) => const Divider(height: 1, color: Colors.white10),
+            separatorBuilder: (ctx, i) => const SizedBox(height: 12), // Space between cards
             itemBuilder: (context, index) {
               final file = files[index];
               final isOpening = _openingFileId == file.id;
 
-              return ListTile(
-                contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-                leading: _buildFileIcon(file.filename),
-                title: Text(
-                  file.filename,
-                  style: const TextStyle(
-                    color: Colors.white, 
-                    fontWeight: FontWeight.w500
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+              return Container(
+                height: 90, // Taller row for better preview
+                decoration: BoxDecoration(
+                  color: AppColors.surface, // Use your theme surface color
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white10),
                 ),
-                subtitle: Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    '${(file.sizeBytes / 1024).toStringAsFixed(0)} KB • ${DateFormat.yMMMd().format(file.createdAt)}',
-                    style: TextStyle(color: Colors.grey[400], fontSize: 12),
-                  ),
-                ),
-                trailing: isOpening 
-                  ? const SizedBox(
-                      width: 24, height: 24, 
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)
-                    )
-                  : PopupMenuButton(
-                      icon: const Icon(Icons.more_vert, color: Colors.grey),
-                      itemBuilder: (ctx) => [
-                        const PopupMenuItem(
-                          value: 'delete',
-                          child: Row(
+                child: InkWell(
+                  onTap: () => _handleOpen(file),
+                  borderRadius: BorderRadius.circular(12),
+                  child: Row(
+                    children: [
+                      // --- BIG THUMBNAIL (Left) ---
+                      Container(
+                        width: 80, 
+                        height: double.infinity,
+                        decoration: const BoxDecoration(
+                          color: Colors.black26,
+                          borderRadius: BorderRadius.horizontal(left: Radius.circular(12)),
+                        ),
+                        child: _DocumentThumbnail(
+                          key: ValueKey(file.id), // <--- THIS FIXES THE JUMBLING
+                          file: file,
+                        ),
+                      ),
+                      
+                      // --- TEXT INFO (Middle) ---
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.delete, color: Colors.red, size: 20),
-                              SizedBox(width: 12),
-                              Text('Delete', style: TextStyle(color: Colors.red)),
+                              Text(
+                                file.filename,
+                                style: const TextStyle(
+                                  color: Colors.white, 
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 16,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 6),
+                              FittedBox(
+                                fit: BoxFit.scaleDown, 
+                                alignment: Alignment.centerLeft,
+                                child: Row(
+                                  children: [
+                                    // File Type Tag
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(
+                                        file.filename.split('.').last.toUpperCase(),
+                                        style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      '${(file.sizeBytes / 1024).toStringAsFixed(0)} KB',
+                                      style: TextStyle(color: Colors.grey[400], fontSize: 12),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      '•  ${DateFormat.yMMMd().format(file.createdAt)}',
+                                      style: TextStyle(color: Colors.grey[400], fontSize: 12),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ],
                           ),
                         ),
-                      ],
-                      onSelected: (value) {
-                        if (value == 'delete') _handleDelete(file);
-                      },
-                    ),
-                onTap: () => _handleOpen(file),
+                      ),
+
+                      // --- ACTIONS (Right) ---
+                      if (isOpening)
+                        const Padding(
+                          padding: EdgeInsets.only(right: 24),
+                          child: SizedBox(
+                            width: 20, height: 20, 
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          ),
+                        )
+                      else
+                        PopupMenuButton(
+                          icon: const Icon(Icons.more_vert, color: Colors.grey),
+                          itemBuilder: (ctx) => [
+                            const PopupMenuItem(
+                              value: 'delete',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.delete, color: Colors.red, size: 20),
+                                  SizedBox(width: 12),
+                                  Text('Delete', style: TextStyle(color: Colors.red)),
+                                ],
+                              ),
+                            ),
+                          ],
+                          onSelected: (value) {
+                            if (value == 'delete') _handleDelete(file);
+                          },
+                        ),
+                      const SizedBox(width: 8),
+                    ],
+                  ),
+                ),
               );
             },
           );
         },
       ),
     );
+  }
+}
+
+class _DocumentThumbnail extends StatefulWidget {
+  final CnestFile file;
+  const _DocumentThumbnail({super.key, required this.file});
+
+  @override
+  State<_DocumentThumbnail> createState() => _DocumentThumbnailState();
+}
+
+class _DocumentThumbnailState extends State<_DocumentThumbnail> {
+  Uint8List? _thumbBytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadThumb();
+  }
+
+  Future<void> _loadThumb() async {
+    if (widget.file.thumbnailCloudId == null) return; // No thumb? Stop.
+
+    try {
+      final cacheDir = await getTemporaryDirectory();
+      final cacheFile = File('${cacheDir.path}/thumb_${widget.file.cloudId}.jpg');
+
+      if (await cacheFile.exists()) {
+        final bytes = await cacheFile.readAsBytes();
+        if (mounted) setState(() => _thumbBytes = bytes);
+        return;
+      }
+
+      // Download
+      final encBytes = await DriveService.downloadFile(widget.file.thumbnailCloudId!);
+      final decBytes = await EncryptionService.decryptFile(encBytes);
+      
+      await cacheFile.writeAsBytes(decBytes);
+      if (mounted) setState(() => _thumbBytes = decBytes);
+
+    } catch (e) {
+      // Fail silently, showing icon is fine
+    }
+  }
+
+  Widget _buildFallbackIcon() {
+    // robust extension parsing
+    final ext = widget.file.filename.split('.').last.toLowerCase().trim();
+    
+    IconData icon;
+    Color color;
+
+    switch (ext) {
+      case 'pdf': 
+        icon = Icons.picture_as_pdf; 
+        color = Colors.redAccent; 
+        break;
+      case 'doc': 
+      case 'docx': 
+        icon = Icons.description; 
+        color = Colors.blueAccent; 
+        break;
+      case 'xls': 
+      case 'xlsx': 
+      case 'csv': 
+        icon = Icons.table_chart; 
+        color = Colors.greenAccent; 
+        break;
+      case 'ppt': 
+      case 'pptx': 
+        icon = Icons.slideshow; 
+        color = Colors.orangeAccent; 
+        break;
+      case 'txt': // NEW: Added Text support
+        icon = Icons.text_snippet;
+        color = Colors.grey[400]!;
+        break;
+      case 'zip':
+      case 'rar':
+        icon = Icons.folder_zip;
+        color = Colors.yellowAccent;
+        break;
+      default: 
+        icon = Icons.insert_drive_file; 
+        color = Colors.grey;
+    }
+
+    return Center(
+      child: Icon(icon, color: color.withOpacity(0.8), size: 36),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_thumbBytes != null) {
+      return ClipRRect(
+        borderRadius: const BorderRadius.horizontal(left: Radius.circular(12)),
+        child: Image.memory(
+          _thumbBytes!, 
+          width: double.infinity, 
+          height: double.infinity, 
+          fit: BoxFit.cover, // Ensures it fills the 80x90 box completely
+          alignment: Alignment.topCenter, // Focus on the top of the document
+        ),
+      );
+    }
+    return _buildFallbackIcon();
   }
 }

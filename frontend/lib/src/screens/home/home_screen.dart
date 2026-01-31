@@ -2,7 +2,11 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart'; // For thumbnails
+import 'package:printing/printing.dart';
 import 'package:file_picker/file_picker.dart'; // For documents
+import 'package:path_provider/path_provider.dart';
+import 'dart:io';
+import 'dart:ui' as ui;
 
 import '../../config/routes.dart';
 import '../../config/theme.dart';
@@ -84,30 +88,115 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<Uint8List?> _generatePdfThumbnail(Uint8List fileBytes) async {
+    try {
+      // 1. Rasterize the PDF page
+      await for (final page in Printing.raster(fileBytes, pages: [0], dpi: 72)) {
+        final pdfImage = await page.toImage();
+
+        // 2. Create a White Background (The "Paper")
+        final recorder = ui.PictureRecorder();
+        final canvas = Canvas(recorder);
+        final paint = Paint()..color = Colors.white;
+        
+        // Fill the canvas with white
+        canvas.drawRect(
+          Rect.fromLTWH(0, 0, pdfImage.width.toDouble(), pdfImage.height.toDouble()),
+          paint
+        );
+
+        // Draw the PDF image on top of the white
+        canvas.drawImage(pdfImage, Offset.zero, Paint());
+
+        // 3. Convert back to an Image
+        final compositedImage = await recorder.endRecording().toImage(
+          pdfImage.width, 
+          pdfImage.height
+        );
+
+        // 4. Export to PNG (Intermediate Step - Unavoidable in Flutter)
+        // But now it's OPAQUE (no transparency), so it's safe.
+        final byteData = await compositedImage.toByteData(format: ui.ImageByteFormat.png);
+        
+        if (byteData == null) return null;
+        var pngBytes = byteData.buffer.asUint8List();
+
+        // 5. Convert to JPEG (Final Step)
+        // This gives us the small file size we want, with a clean white background.
+        final jpegBytes = await FlutterImageCompress.compressWithList(
+           pngBytes,
+           minHeight: 300,
+           minWidth: 300,
+           quality: 60,
+           format: CompressFormat.jpeg,
+        );
+        
+        return jpegBytes;
+      }
+      return null;
+    } catch (e) {
+      debugPrint("PDF Thumbnail error: $e");
+      return null;
+    }
+  }
+
   Future<void> _handleUpload(bool isImage) async {
+    // Define these at the top so they are available everywhere
     Uint8List? fileBytes;
-    String filename;
+    String filename = ''; 
+    Uint8List? thumbnailBytes;
 
     try {
-      // 1. Pick the File
+      // --- STEP 1: PICK THE FILE ---
       if (isImage) {
         fileBytes = await ImagePickerService.pickImageAsBytes();
         filename = 'photo_${DateTime.now().millisecondsSinceEpoch}.jpg';
       } else {
+        // FIX: Restrict to common document formats
         FilePickerResult? result = await FilePicker.platform.pickFiles(
-          type: FileType.any, 
+          type: FileType.custom,
+          allowedExtensions: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt'], 
           withData: true,
         );
-        if (result == null) return;
+        
+        if (result == null) return; // User cancelled
+        
         fileBytes = result.files.first.bytes;
         filename = result.files.first.name;
       }
 
+      // Safety check: Did we actually get a file?
       if (fileBytes == null) return;
 
       setState(() => _isUploading = true);
 
-      // 2. Prepare Database Entry
+      // --- STEP 2: PROCESS (Generate Thumbnails) ---
+      // Now that we have the file, we check its type
+      
+      if (isImage) {
+        // A. Image Compression
+        try {
+          thumbnailBytes = await FlutterImageCompress.compressWithList(
+            fileBytes,
+            minHeight: 300,
+            minWidth: 300,
+            quality: 50,
+          );
+        } catch (e) {
+          debugPrint("Image thumbnail failed: $e");
+        }
+      } else if (filename.toLowerCase().endsWith('.pdf')) {
+        // B. PDF Rendering (Clean & Simple)
+        try {
+          // The generator handles the White Background AND JPEG compression internally
+          // We use '!' because we know fileBytes is not null here
+          thumbnailBytes = await _generatePdfThumbnail(fileBytes);
+        } catch (e) {
+          debugPrint("PDF thumbnail failed: $e");
+        }
+      }
+
+      // --- STEP 3: DATABASE PREP ---
       final fileId = const Uuid().v4();
       final type = isImage ? CnestFileType.image : CnestFileType.document;
       final currentEmail = DriveService.currentEmail;
@@ -127,26 +216,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
       await DatabaseService().addFile(newFile);
 
-      // 3. Generate Thumbnail (Images Only)
-      Uint8List? thumbnailBytes;
-      if (isImage) {
-        try {
-          thumbnailBytes = await FlutterImageCompress.compressWithList(
-            fileBytes,
-            minHeight: 300, 
-            minWidth: 300,
-            quality: 50,    
-          );
-        } catch (e) {
-          debugPrint("Thumbnail generation failed: $e");
-        }
-      }
-
-      // 4. Encrypt Main File
+      // --- STEP 4: ENCRYPTION ---
       final encryptedMainBytes = await EncryptionService.encryptFile(fileBytes);
       final mainCloudFilename = '$fileId.cnest';
 
-      // 5. Encrypt Thumbnail (if exists)
       Uint8List? encryptedThumbBytes;
       String? thumbCloudFilename;
       
@@ -155,10 +228,8 @@ class _HomeScreenState extends State<HomeScreen> {
         thumbCloudFilename = '${fileId}_thumb.cnest';
       }
 
-      // 6. PARALLEL UPLOAD (The Speed Fix)
-      // We start both uploads simultaneously and wait for both to finish.
+      // --- STEP 5: PARALLEL UPLOAD ---
       final uploadFutures = <Future<String?>>[
-        // Task 1: Main File
         DriveService.uploadEncryptedFile(
           encryptedBytes: encryptedMainBytes,
           filename: mainCloudFilename,
@@ -166,7 +237,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ];
 
-      // Task 2: Thumbnail (Only if we have one)
       if (encryptedThumbBytes != null && thumbCloudFilename != null) {
         uploadFutures.add(
           DriveService.uploadEncryptedFile(
@@ -176,19 +246,16 @@ class _HomeScreenState extends State<HomeScreen> {
           )
         );
       } else {
-        // Add a dummy future so the index matches if no thumb
         uploadFutures.add(Future.value(null));
       }
 
-      // Wait for both...
       final results = await Future.wait(uploadFutures);
-      
       final mainCloudId = results[0];
-      final thumbCloudId = results[1]; // This will be null if we didn't upload one
+      final thumbCloudId = results[1];
 
       if (mainCloudId == null) throw Exception('Main upload failed');
 
-      // 7. Link in Database
+      // --- STEP 6: FINALIZE ---
       await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId);
 
       if (mounted) {
