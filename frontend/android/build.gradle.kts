@@ -1,3 +1,17 @@
+buildscript {
+    val kotlin_version by extra("1.9.10")
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        // Essential for building the app
+        classpath("com.android.tools.build:gradle:8.1.1")
+        // The fix for your "Daemon failed" / Printing package error
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version")
+    }
+}
+
 allprojects {
     repositories {
         google()
