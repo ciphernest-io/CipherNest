@@ -157,6 +157,11 @@ class DriveService {
     final driveApi = await _getDriveApi();
     await driveApi.files.delete(fileId);
   }
+
+  static Future<void> signOut() async {
+    await _googleSignIn.disconnect(); // Disconnects and revokes current token
+    _currentUser = null;
+  }
 }
 
 class GoogleAuthClient extends http.BaseClient {

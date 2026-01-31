@@ -312,7 +312,7 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),
-            onPressed: () {},
+            onPressed: () => Navigator.pushNamed(context, AppRoutes.settings),
           ),
         ],
       ),
