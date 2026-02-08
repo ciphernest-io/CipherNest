@@ -12,7 +12,7 @@ import '../../config/routes.dart';
 import '../../config/theme.dart';
 import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
-import '../../../services/drive_service.dart';
+import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/image_picker_service.dart';
 
@@ -43,10 +43,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       // 1. Check if we already have an email (from login flow)
-      String? email = DriveService.currentEmail;
+      String? email = CloudService().currentEmail;
       
       // 2. If not, try to restore it silently
-      email ??= await DriveService.restoreSession();
+      email ??= await CloudService().restoreSession();
 
       if (mounted) {
         if (email != null) {
@@ -75,8 +75,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _handleReconnect() async {
     setState(() => _isLoadingSession = true);
     try {
-      // Ensure DriveService has a public signIn method or exposes _googleSignIn
-      await DriveService.signIn(); 
+      // Ensure CloudService has a public signIn method or exposes _googleSignIn
+      await CloudService().signIn(); 
       await _initSession(); // Retry init after sign in
     } catch (e) {
       if (mounted) {
@@ -199,7 +199,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // --- STEP 3: DATABASE PREP ---
       final fileId = const Uuid().v4();
       final type = isImage ? CnestFileType.image : CnestFileType.document;
-      final currentEmail = DriveService.currentEmail;
+      final currentEmail = CloudService().currentEmail;
 
       if (currentEmail == null) throw Exception('No active Google Drive account found.');
 
@@ -230,8 +230,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // --- STEP 5: PARALLEL UPLOAD ---
       final uploadFutures = <Future<String?>>[
-        DriveService.uploadEncryptedFile(
-          encryptedBytes: encryptedMainBytes,
+        CloudService().uploadEncryptedFile(
+          bytes: encryptedMainBytes,
           filename: mainCloudFilename,
           isImage: isImage,
         ),
@@ -239,8 +239,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
       if (encryptedThumbBytes != null && thumbCloudFilename != null) {
         uploadFutures.add(
-          DriveService.uploadEncryptedFile(
-            encryptedBytes: encryptedThumbBytes,
+          CloudService().uploadEncryptedFile(
+            bytes: encryptedThumbBytes,
             filename: thumbCloudFilename,
             isImage: true, 
           )
@@ -325,11 +325,11 @@ class _HomeScreenState extends State<HomeScreen> {
               'Your Vault',
               style: Theme.of(context).textTheme.headlineMedium,
             ),
-            if (DriveService.currentEmail != null)
+            if (CloudService().currentEmail != null)
               Padding(
                 padding: const EdgeInsets.only(top: 4.0),
                 child: Text(
-                  DriveService.currentEmail!,
+                  CloudService().currentEmail!,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
                 ),
               ),

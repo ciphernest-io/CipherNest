@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../config/routes.dart';
 import '../../config/theme.dart';
-import '../../../services/drive_service.dart';
+import '../../../services/cloud/cloud_service.dart';
 import '../../../services/database_service.dart';
 
 class CloudSelectionScreen extends StatefulWidget {
@@ -18,7 +18,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
     setState(() => _isLoading = true);
     try {
       // 1. Run Canary Test (Connects, Auth, Checks File Headers)
-      final isValid = await DriveService.canaryTest();
+      final isValid = await CloudService().canaryTest();
 
       if (!isValid) {
         if (mounted) {
@@ -31,14 +31,14 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       }
 
       // 2. Set the Active Account in DB
-      final email = DriveService.currentEmail;
+      final email = CloudService().currentEmail;
       if (email != null) {
         DatabaseService().setCurrentAccount(email);
       }
 
       // 3. Trigger Initial Sync Logic (Background)
-      final files = await DriveService.listCloudFiles();
-      await DatabaseService().reconcile(files);
+      final files = await CloudService().listCloudFiles();
+      await DatabaseService().reconcile(files.cast<Map<String, dynamic>>());
 
       // 4. Go Home
       if (mounted) {

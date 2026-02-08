@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../config/theme.dart';
-import '../../../services/drive_service.dart';
+import '../../../services/cloud/cloud_service.dart';
 
 class KeyManagementScreen extends StatefulWidget {
   const KeyManagementScreen({super.key});
@@ -21,8 +21,8 @@ class _KeyManagementScreenState extends State<KeyManagementScreen> {
       _resultColor = Colors.yellow;
     });
 
-    // Run the actual test from DriveService
-    final success = await DriveService.canaryTest();
+    // Run the actual test from CloudService
+    final success = await CloudService().canaryTest();
 
     if (!mounted) return;
 
