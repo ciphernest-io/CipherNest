@@ -23,7 +23,6 @@ class GoogleDriveProvider implements CloudProvider {
   Future<drive.DriveApi> _getApi() async {
     _authHeaders ??= await _currentUserAccount?.authHeaders;
     if (_authHeaders == null) {
-       // Try silent sign-in if headers are missing
        await restoreSession();
        if (_authHeaders == null) throw Exception("Not authenticated");
     }
@@ -71,7 +70,9 @@ class GoogleDriveProvider implements CloudProvider {
   Future<String?> uploadEncryptedFile({
     required String filename,
     required bool isImage,
-    required Uint8List fileBytes,
+    Uint8List? fileBytes,
+    Stream<List<int>>? fileStream,
+    int? fileSize,
   }) async {
     final api = await _getApi();
     
@@ -84,10 +85,19 @@ class GoogleDriveProvider implements CloudProvider {
         'original_name': filename, 
       };
 
-    final media = drive.Media(
-      Future.value(fileBytes).asStream().asBroadcastStream(),
-      fileBytes.length,
-    );
+    drive.Media? media;
+
+    // LOGIC: Choose between RAM (bytes) or STREAM (video)
+    if (fileBytes != null) {
+      media = drive.Media(
+        Future.value(fileBytes).asStream().asBroadcastStream(),
+        fileBytes.length,
+      );
+    } else if (fileStream != null && fileSize != null) {
+      media = drive.Media(fileStream, fileSize);
+    } else {
+      throw Exception("No data provided for upload");
+    }
 
     final result = await api.files.create(
       driveFile,
@@ -136,7 +146,6 @@ class GoogleDriveProvider implements CloudProvider {
       pageSize: 1000, 
     );
 
-    // Map to generic structure
     return fileList.files?.map((f) => {
       'id': f.id,
       'name': f.name,
@@ -147,14 +156,13 @@ class GoogleDriveProvider implements CloudProvider {
     }).toList() ?? [];
   }
 
-  // Implementation of "canaryTest"
   @override
   Future<bool> checkIntegrity() async {
     try {
       if (_currentUserAccount == null) await signIn();
       
       final list = await listCloudFiles();
-      if (list.isEmpty) return true; // Empty is valid
+      if (list.isEmpty) return true;
 
       final fileId = list.first['id'];
       final api = await _getApi();
@@ -164,7 +172,6 @@ class GoogleDriveProvider implements CloudProvider {
       ) as drive.Media;
       
       final chunk = await media.stream.first;
-      // This validates the Master Key against the file header
       await EncryptionService.verifyKey(Uint8List.fromList(chunk));
       return true;
     } catch (e) {

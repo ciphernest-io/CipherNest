@@ -12,24 +12,29 @@ class CloudService {
   // --- IDENTITY ---
   String? get currentEmail => _provider.currentUser;
 
-  // --- AUTH METHODS (Replacing DriveService auth) ---
+  // --- AUTH METHODS ---
   Future<void> signIn() => _provider.signIn();
   Future<void> signOut() => _provider.signOut();
   Future<String?> restoreSession() => _provider.restoreSession();
 
-  // --- INTEGRITY (Replacing DriveService.canaryTest) ---
+  // --- INTEGRITY ---
   Future<bool> canaryTest() => _provider.checkIntegrity();
 
-  // --- FILE OPS (Replacing DriveService ops) ---
+  // --- FILE OPS ---
+  // UPDATED: Now supports both bytes (images) and streams (videos)
   Future<String?> uploadEncryptedFile({
     required String filename,
     required bool isImage,
-    required Uint8List bytes,
+    Uint8List? bytes,
+    Stream<List<int>>? stream,
+    int? size,
   }) {
     return _provider.uploadEncryptedFile(
       filename: filename,
       isImage: isImage,
       fileBytes: bytes,
+      fileStream: stream,
+      fileSize: size,
     );
   }
 

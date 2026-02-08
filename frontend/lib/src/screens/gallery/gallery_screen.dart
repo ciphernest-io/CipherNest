@@ -30,13 +30,11 @@ class _GalleryScreenState extends State<GalleryScreen> {
     });
   }
 
-  /// Syncs local database with Cloud
   Future<void> _handleSync() async {
     try {
       final cloudFiles = await CloudService().listCloudFiles();
       await DatabaseService().reconcile(cloudFiles);
       _refresh();
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sync complete')));
       }
@@ -45,7 +43,6 @@ class _GalleryScreenState extends State<GalleryScreen> {
     }
   }
 
-  // Handle delete directly from Grid (Long Press)
   Future<void> _handleDelete(CnestFile file) async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -65,26 +62,42 @@ class _GalleryScreenState extends State<GalleryScreen> {
     if (confirm != true) return;
 
     try {
-      // 1. Delete from Cloud & DB
+      // 1. Delete from Cloud
       if (file.cloudId != null) await CloudService().deleteFile(file.cloudId!);
       if (file.thumbnailCloudId != null) await CloudService().deleteFile(file.thumbnailCloudId!);
+      
+      // 2. Delete from DB
       await DatabaseService().deleteFile(file.id);
 
-      // 2. Clean Local Cache
+      // 3. AGGRESSIVE CACHE CLEANUP
       final tempDir = await getTemporaryDirectory();
-      final thumb = File('${tempDir.path}/${file.id}_thumb.jpg');
-      final main = File('${tempDir.path}/${file.id}.cnest_decrypted');
-      if (thumb.existsSync()) thumb.deleteSync();
-      if (main.existsSync()) main.deleteSync();
+      final potentialFiles = [
+        // Current Naming Standards
+        File('${tempDir.path}/thumb_${file.cloudId}.jpg'),       // Thumbnail
+        File('${tempDir.path}/${file.cloudId}_decrypted.jpg'),   // Full Image
+        File('${tempDir.path}/${file.id}_decrypted.mp4'),        // Full Video
+        
+        // Legacy/Fallback Naming Standards (Safety Net)
+        File('${tempDir.path}/${file.id}_thumb.jpg'),
+        File('${tempDir.path}/${file.id}.cnest_decrypted'),
+      ];
 
-      // 3. Update UI
+      for (final artifact in potentialFiles) {
+        if (await artifact.exists()) {
+          await artifact.delete();
+        }
+      }
+
+      // 4. Refresh UI
       _refresh();
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Photo deleted')));
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+      }
     }
   }
 
@@ -133,15 +146,12 @@ class _GalleryScreenState extends State<GalleryScreen> {
                               ),
                             ),
                           );
-
-                          // If result is true, a file was deleted. Refresh.
                           if (result == true) {
                             _refresh(); 
                           }
                         },
                         onLongPress: () => _handleDelete(file),
                         child: _GalleryGridItem(
-                          // FIX: Key ensures widget rebuilds when data shifts
                           key: ValueKey(file.id), 
                           file: file
                         ),
@@ -166,23 +176,40 @@ class _GalleryGridItem extends StatefulWidget {
 class _GalleryGridItemState extends State<_GalleryGridItem> {
   Uint8List? _imageData;
   bool _loading = true;
+  bool _isVideo = false;
 
   @override
   void initState() {
     super.initState();
+    _checkFileType();
     _loadThumbnail();
+  }
+
+  void _checkFileType() {
+    final ext = widget.file.filename.split('.').last.toLowerCase();
+    _isVideo = ['mp4', 'mov', 'avi', 'mkv'].contains(ext);
   }
 
   Future<void> _loadThumbnail() async {
     if (!mounted) return;
     
+    // SAFETY CHECK: If it's a video and has no separate thumbnail, STOP.
+    // We do NOT want to download the main file (500MB) to show a grid item.
+    if (_isVideo && widget.file.thumbnailCloudId == null) {
+      if (mounted) setState(() { _loading = false; });
+      return;
+    }
+
     try {
       final cacheDir = await getTemporaryDirectory();
+      // If thumb exists, use it. If not, use main file (ONLY if it's an image)
       final targetCloudId = widget.file.thumbnailCloudId ?? widget.file.cloudId;
       
       if (targetCloudId == null) throw Exception("No ID");
 
       final isThumbnail = widget.file.thumbnailCloudId != null;
+      
+      // Filename logic
       final fileName = isThumbnail 
           ? 'thumb_${widget.file.cloudId}.jpg'
           : '${widget.file.cloudId}_decrypted.jpg';
@@ -210,12 +237,35 @@ class _GalleryGridItemState extends State<_GalleryGridItem> {
   @override
   Widget build(BuildContext context) {
     if (_loading) return Container(color: Colors.grey[900]);
-    if (_imageData == null) return Container(color: Colors.grey[900], child: const Icon(Icons.broken_image, color: Colors.white24));
+    
+    // If no image data, show appropriate icon
+    if (_imageData == null) {
+      return Container(
+        color: Colors.grey[900],
+        child: Center(
+          child: Icon(
+            _isVideo ? Icons.play_circle_outline : Icons.broken_image, 
+            color: Colors.white54, 
+            size: 40
+          ),
+        ),
+      );
+    }
 
-    return Image.memory(
-      _imageData!,
-      fit: BoxFit.cover,
-      cacheWidth: 200,
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Image.memory(
+          _imageData!,
+          fit: BoxFit.cover,
+          cacheWidth: 200,
+        ),
+        // Overlay Play Icon for Videos
+        if (_isVideo)
+          const Center(
+            child: Icon(Icons.play_circle_fill, color: Colors.white70, size: 40),
+          ),
+      ],
     );
   }
 }

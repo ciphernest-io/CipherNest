@@ -9,10 +9,15 @@ abstract class CloudProvider {
   Future<String?> restoreSession();
 
   // Core Ops
+  /// Uploads a file. 
+  /// Provide [fileBytes] for small files (images).
+  /// Provide [fileStream] and [fileSize] for large files (videos).
   Future<String?> uploadEncryptedFile({
     required String filename,
     required bool isImage,
-    required Uint8List fileBytes,
+    Uint8List? fileBytes,
+    Stream<List<int>>? fileStream,
+    int? fileSize,
   });
 
   Future<Uint8List> downloadFile(String cloudId);

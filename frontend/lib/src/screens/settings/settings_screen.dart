@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:sqflite/sqflite.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // ENABLED
 import '../../config/routes.dart';
 import '../../config/theme.dart';
 import '../../../services/cloud/cloud_service.dart';
@@ -16,6 +16,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   String _cacheSize = "Calculating...";
+  double _cacheLimitGB = 0.5; // Default value
   
   // Storage Stats
   int _totalFileCount = 0;
@@ -27,10 +28,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     _loadStats();
+    _loadPreferences(); // ENABLED
+  }
+
+  // --- NEW: PERSISTENCE LOGIC ---
+  Future<void> _loadPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      // Try to read 'cache_limit', default to 0.5 if not found
+      _cacheLimitGB = prefs.getDouble('cache_limit') ?? 0.5;
+    });
+  }
+
+  Future<void> _savePreferences(double value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('cache_limit', value);
   }
 
   Future<void> _loadStats() async {
-    // 1. Cache Size
     final tempDir = await getTemporaryDirectory();
     int cacheBytes = 0;
     try {
@@ -45,7 +60,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       debugPrint("Cache error: $e");
     }
 
-    // 2. Database Stats (The Color Bar Data)
     final stats = await DatabaseService().getStorageStats();
 
     if (mounted) {
@@ -78,8 +92,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _handleSignOut() async {
-    // ... (Keep existing sign out logic) ...
-    // (If you need me to paste it again, let me know!)
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -107,8 +119,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) {
     final email = CloudService().currentEmail ?? 'Not Connected';
     final totalBytes = _imageBytes + _docBytes;
-    
-    // Avoid division by zero for the bar
     final totalForBar = totalBytes == 0 ? 1 : totalBytes; 
     final imageFlex = (_imageBytes / totalForBar * 100).round();
     final docFlex = (_docBytes / totalForBar * 100).round();
@@ -117,33 +127,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
         children: [
-          // --- SECTION: ACCOUNT ---
+          // ... Account Section ...
           _SectionHeader(title: "Account"),
           ListTile(
-            leading: const CircleAvatar(
-              backgroundColor: Colors.purpleAccent,
-              child: Icon(Icons.person, color: Colors.white),
-            ),
+            leading: const CircleAvatar(backgroundColor: Colors.purpleAccent, child: Icon(Icons.person, color: Colors.white)),
             title: Text(email, style: const TextStyle(color: Colors.white)),
             subtitle: const Text('Google Drive Connected', style: TextStyle(color: Colors.grey)),
-            trailing: IconButton(
-              icon: const Icon(Icons.logout, color: Colors.redAccent),
-              onPressed: _handleSignOut,
-            ),
+            trailing: IconButton(icon: const Icon(Icons.logout, color: Colors.redAccent), onPressed: _handleSignOut),
           ),
-
           const Divider(color: Colors.white10),
 
-          // --- SECTION: STORAGE BAR ---
+          // ... Storage Bar Section ...
           _SectionHeader(title: "Vault Usage"),
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 16),
             padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white10),
-            ),
+            decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white10)),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -155,8 +154,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                
-                // THE BAR
                 ClipRRect(
                   borderRadius: BorderRadius.circular(8),
                   child: SizedBox(
@@ -172,23 +169,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ),
-                
                 const SizedBox(height: 16),
-                
-                // LEGEND
+                Row(children: [
+                  _LegendItem(color: Colors.purpleAccent, label: "Photos", size: _imageBytes),
+                  const SizedBox(width: 24),
+                  _LegendItem(color: Colors.blueAccent, label: "Documents", size: _docBytes),
+                ]),
+              ],
+            ),
+          ),
+
+          // --- DATA MANAGEMENT ---
+          _SectionHeader(title: "Data Management"),
+          
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
                 Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    _LegendItem(color: Colors.purpleAccent, label: "Photos", size: _imageBytes),
-                    const SizedBox(width: 24),
-                    _LegendItem(color: Colors.blueAccent, label: "Documents", size: _docBytes),
+                    const Text("Max Cache Size", style: TextStyle(color: Colors.white)),
+                    Text("${_cacheLimitGB.toStringAsFixed(1)} GB", style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
                   ],
+                ),
+                Slider(
+                  value: _cacheLimitGB,
+                  min: 0.1,
+                  max: 2.0,
+                  divisions: 19,
+                  activeColor: AppColors.primary,
+                  inactiveColor: Colors.grey[800],
+                  onChanged: (val) {
+                    setState(() => _cacheLimitGB = val);
+                    _savePreferences(val); // Save instantly
+                  },
+                ),
+                const Text(
+                  "Older files will be removed from device when cache exceeds this limit.",
+                  style: TextStyle(color: Colors.grey, fontSize: 11),
                 ),
               ],
             ),
           ),
 
-          // --- SECTION: DATA ---
-          _SectionHeader(title: "Data Management"),
           ListTile(
             leading: const Icon(Icons.cleaning_services, color: Colors.orangeAccent),
             title: const Text('Clear Local Cache', style: TextStyle(color: Colors.white)),
@@ -197,8 +222,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
 
           const Divider(color: Colors.white10),
-
-          // --- SECTION: SECURITY ---
+          // ... Security Section ...
           _SectionHeader(title: "Security"),
           ListTile(
             leading: const Icon(Icons.vpn_key, color: Colors.greenAccent),
@@ -216,7 +240,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-// Helper Widget for the Legend
 class _LegendItem extends StatelessWidget {
   final Color color;
   final String label;
