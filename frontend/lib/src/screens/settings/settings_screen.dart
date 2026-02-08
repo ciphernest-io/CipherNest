@@ -4,7 +4,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import '../../config/routes.dart';
 import '../../config/theme.dart';
-import '../../../services/drive_service.dart';
+import '../../../services/cloud/cloud_service.dart';
 import '../../../services/database_service.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -96,7 +96,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
 
     if (confirm == true) {
-      await DriveService.signOut();
+      await CloudService().signOut();
       if (mounted) {
         Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false);
       }
@@ -105,7 +105,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final email = DriveService.currentEmail ?? 'Not Connected';
+    final email = CloudService().currentEmail ?? 'Not Connected';
     final totalBytes = _imageBytes + _docBytes;
     
     // Avoid division by zero for the bar

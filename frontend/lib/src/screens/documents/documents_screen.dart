@@ -8,7 +8,7 @@ import 'dart:typed_data';
 import '../../config/theme.dart';
 import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
-import '../../../services/drive_service.dart';
+import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
 
 class DocumentsScreen extends StatefulWidget {
@@ -55,7 +55,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
       // 2. Download & Decrypt
       if (file.cloudId == null) throw Exception("File not synced");
       
-      final encryptedBytes = await DriveService.downloadFile(file.cloudId!);
+      final encryptedBytes = await CloudService().downloadFile(file.cloudId!);
       final decryptedBytes = await EncryptionService.decryptFile(encryptedBytes);
 
       // 3. Write to Disk & Launch
@@ -96,7 +96,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
 
     if (confirm == true) {
       if (file.cloudId != null) {
-        await DriveService.deleteFile(file.cloudId!);
+        await CloudService().deleteFile(file.cloudId!);
       }
       await DatabaseService().deleteFile(file.id);
       _refresh();
@@ -113,8 +113,8 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
             icon: const Icon(Icons.sync),
             onPressed: () async {
               // Quick manual sync trigger
-              final cloudFiles = await DriveService.listCloudFiles();
-              await DatabaseService().reconcile(cloudFiles);
+              final cloudFiles = await CloudService().listCloudFiles();
+              await DatabaseService().reconcile(cloudFiles.cast<Map<String, dynamic>>());
               _refresh();
             },
           )
@@ -301,7 +301,7 @@ class _DocumentThumbnailState extends State<_DocumentThumbnail> {
       }
 
       // Download
-      final encBytes = await DriveService.downloadFile(widget.file.thumbnailCloudId!);
+      final encBytes = await CloudService().downloadFile(widget.file.thumbnailCloudId!);
       final decBytes = await EncryptionService.decryptFile(encBytes);
       
       await cacheFile.writeAsBytes(decBytes);

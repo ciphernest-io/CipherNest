@@ -1,8 +1,7 @@
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import '../src/models/file_model.dart';
-import 'drive_service.dart';
-import 'package:googleapis/drive/v3.dart' as drive;
+import 'cloud/cloud_service.dart';
 
 class DatabaseService {
   static final DatabaseService _instance = DatabaseService._internal();
@@ -53,7 +52,6 @@ class DatabaseService {
 
   Future<void> addFile(CnestFile file) async {
     final db = await database;
-    // Force the current account ID onto the file
     final fileWithAccount = CnestFile(
       id: file.id,
       filename: file.filename,
@@ -75,11 +73,6 @@ class DatabaseService {
     );
   }
 
-  Future<void> deleteFile(String id) async {
-    final db = await database;
-    await db.delete('files', where: 'id = ?', whereArgs: [id]);
-  }
-
   Future<void> markAsUploaded(String id, String cloudId, String? thumbId) async {
     final db = await database;
     await db.update(
@@ -95,13 +88,14 @@ class DatabaseService {
     );
   }
 
+  Future<void> deleteFile(String id) async {
+    final db = await database;
+    await db.delete('files', where: 'id = ?', whereArgs: [id]);
+  }
+
   Future<List<CnestFile>> getFilesByType(CnestFileType type) async {
     final db = await database;
-    
-    // Safety: If no account is set, return empty to avoid leaking or showing wrong data
-    if (_currentAccountId == null) {
-      return [];
-    }
+    if (_currentAccountId == null) return [];
 
     final List<Map<String, dynamic>> maps = await db.query(
       'files',
@@ -112,16 +106,15 @@ class DatabaseService {
     return List.generate(maps.length, (i) => CnestFile.fromMap(maps[i]));
   }
 
-  // --- SYNC LOGIC ---
+  // --- SYNC LOGIC (MAP ADAPTED) ---
 
-  Future<void> reconcile(List<drive.File> cloudFiles) async {
+  Future<void> reconcile(List<Map<String, dynamic>> cloudFiles) async {
     if (_currentAccountId == null) return; 
 
     final db = await database;
     final batch = db.batch();
 
-    // --- PHASE A: CLEANUP (Remove deleted files) ---
-    final cloudIds = cloudFiles.map((f) => f.id).whereType<String>().toSet();
+    final cloudIds = cloudFiles.map((f) => f['id'] as String).toSet();
     final localRows = await db.query(
       'files', 
       columns: ['id', 'cloud_id'], 
@@ -136,11 +129,9 @@ class DatabaseService {
       }
     }
     
-    // Commit deletes first to clear space
     await batch.commit(noResult: true);
-    final insertBatch = db.batch(); // New batch for inserts
+    final insertBatch = db.batch(); 
 
-    // --- PHASE B: SEPARATION ---
     final knownCloudIdsRows = await db.query(
       'files', 
       columns: ['cloud_id'], 
@@ -149,47 +140,52 @@ class DatabaseService {
     );
     final knownCloudIds = knownCloudIdsRows.map((r) => r['cloud_id']).toSet();
 
-    // Split files into "Main" and "Thumbnails"
-    final mainFiles = <drive.File>[];
-    final thumbnailFiles = <drive.File>[];
+    final mainFiles = <Map<String, dynamic>>[];
+    final thumbnailFiles = <Map<String, dynamic>>[];
 
     for (var file in cloudFiles) {
-      if (file.id == null || knownCloudIds.contains(file.id)) continue;
-      
-      final name = file.name ?? '';
+      final id = file['id'];
+      final name = file['name'] as String? ?? '';
+
       if (name.endsWith('_thumb.cnest')) {
         thumbnailFiles.add(file);
-      } else {
+      } else if (id != null && !knownCloudIds.contains(id)) {
         mainFiles.add(file);
       }
     }
 
-    // --- PHASE C: IMPORT MAIN FILES (Pass 1) ---
     for (var file in mainFiles) {
-      final props = file.appProperties ?? {};
-      final realFilename = props['original_name'] ?? 'Restored File';
-      final typeStr = props['type'] ?? '';
+      final name = file['name'] as String? ?? '';
+      final props = file['appProperties'] as Map<String, dynamic>? ?? {};
+      final realFilename = props['original_name'] ?? name.replaceAll('.cnest', '');
+      final typeStr = props['type'];
       
       bool isImage = false;
       if (typeStr == 'image') isImage = true;
       else if (typeStr == 'document') isImage = false;
-      else isImage = (file.name ?? '').contains('photo');
+      else isImage = name.contains('photo');
 
-      String localId = file.id!;
-      if (file.name != null && file.name!.endsWith('.cnest')) {
-         localId = file.name!.replaceAll('.cnest', '');
+      String localId = file['id'];
+      if (name.endsWith('.cnest')) {
+         localId = name.replaceAll('.cnest', '');
       }
+
+      int size = 0;
+      if (file['size'] is int) size = file['size'];
+      else if (file['size'] is String) size = int.tryParse(file['size']) ?? 0;
 
       insertBatch.insert(
         'files',
         {
           'id': localId,
-          'cloud_id': file.id,
+          'cloud_id': file['id'],
           'provider': 0,
           'account_id': _currentAccountId, 
           'filename': realFilename, 
-          'size_bytes': int.tryParse(file.size ?? '0') ?? 0,
-          'created_at': file.createdTime?.millisecondsSinceEpoch ?? DateTime.now().millisecondsSinceEpoch,
+          'size_bytes': size,
+          'created_at': file['created'] != null 
+              ? DateTime.parse(file['created']).millisecondsSinceEpoch 
+              : DateTime.now().millisecondsSinceEpoch,
           'is_uploaded': 1,
           'local_path': null,
           'type': isImage ? 0 : 1,
@@ -198,19 +194,16 @@ class DatabaseService {
       );
     }
     
-    // Commit Main Files immediately so they exist for Phase D
     await insertBatch.commit(noResult: true);
     final linkBatch = db.batch();
 
-    // --- PHASE D: LINK THUMBNAILS (Pass 2) ---
     for (var file in thumbnailFiles) {
-      final name = file.name ?? '';
-      // Extract UUID: "abc-123_thumb.cnest" -> "abc-123"
+      final name = file['name'] as String? ?? '';
       final parentFileId = name.replaceAll('_thumb.cnest', '');
       
       linkBatch.update(
         'files',
-        {'thumbnail_cloud_id': file.id},
+        {'thumbnail_cloud_id': file['id']},
         where: 'id = ?',
         whereArgs: [parentFileId],
       );
@@ -219,22 +212,18 @@ class DatabaseService {
     await linkBatch.commit(noResult: true);
   }
 
-  // Add this to DatabaseService class
   Future<Map<String, int>> getStorageStats() async {
     final db = await database;
-    final email = DriveService.currentEmail;
+    final email = CloudService().currentEmail;
     if (email == null) return {'images': 0, 'docs': 0, 'total_count': 0};
 
-    // 1. Get Total File Count
     final countResult = await db.rawQuery(
       'SELECT COUNT(*) as count FROM files WHERE account_id = ?', 
       [email]
     );
     final count = Sqflite.firstIntValue(countResult) ?? 0;
 
-    // 2. Get Size by Type (0 = Image, 1 = Document)
-    // We sum up the 'size_bytes' column
-    final List<Map<String, dynamic>> result = await db.rawQuery('''
+    final result = await db.rawQuery('''
       SELECT type, SUM(size_bytes) as total_size 
       FROM files 
       WHERE account_id = ? 
@@ -247,12 +236,8 @@ class DatabaseService {
     for (var row in result) {
       final type = row['type'] as int;
       final size = row['total_size'] as int? ?? 0;
-      
-      if (type == 0) { // CnestFileType.image.index
-        imageBytes = size;
-      } else {
-        docBytes += size; // Combine docs + others
-      }
+      if (type == 0) imageBytes = size;
+      else docBytes += size;
     }
 
     return {
