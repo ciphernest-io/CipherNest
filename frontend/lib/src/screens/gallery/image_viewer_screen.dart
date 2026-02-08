@@ -25,7 +25,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   late PageController _pageController;
   late int _currentIndex;
   late List<CnestFile> _currentFiles;
-  bool _hasDeleted = false; // Tracks if we need to refresh gallery on return
+  bool _hasDeleted = false;
+
+  static final Set<String> _activeDownloads = {};
 
   @override
   void initState() {
@@ -33,6 +35,66 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     _currentIndex = widget.initialIndex;
     _currentFiles = List.from(widget.files);
     _pageController = PageController(initialPage: widget.initialIndex);
+  }
+
+  // --- SAFE WATERFALL PRE-FETCHING ---
+  // Triggered ONLY after the current image is fully loaded.
+  Future<void> _handleCurrentPhotoLoaded(int loadedIndex) async {
+    // ZOMBIE CHECK 1: If the user has already swiped away from this photo, STOP.
+    // The 'loadedIndex' helps us know if this request is stale.
+    if (!mounted || loadedIndex != _currentIndex) return;
+
+    // 1. Next (Highest Probability)
+    await _downloadFileAtIndex(_currentIndex + 1);
+    
+    // ZOMBIE CHECK 2: User might have swiped during the previous download
+    if (!mounted || loadedIndex != _currentIndex) return;
+
+    // 2. Previous
+    await _downloadFileAtIndex(_currentIndex - 1);
+
+    // ZOMBIE CHECK 3
+    if (!mounted || loadedIndex != _currentIndex) return;
+
+    // 3. Next + 2
+    await _downloadFileAtIndex(_currentIndex + 2);
+
+    // ZOMBIE CHECK 4
+    if (!mounted || loadedIndex != _currentIndex) return;
+
+    // 4. Previous - 2
+    await _downloadFileAtIndex(_currentIndex - 2);
+  }
+
+  Future<void> _downloadFileAtIndex(int index) async {
+    // Boundary check handles End/Start of list seamlessly
+    if (index < 0 || index >= _currentFiles.length) return;
+    
+    final file = _currentFiles[index];
+    if (file.cloudId == null) return;
+    
+    if (_activeDownloads.contains(file.cloudId)) return;
+
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final fullPath = '${tempDir.path}/${file.cloudId}_decrypted.jpg';
+      
+      if (File(fullPath).existsSync()) return;
+
+      _activeDownloads.add(file.cloudId!);
+
+      final encryptedBytes = await CloudService().downloadFile(file.cloudId!);
+      // Optimistic check: if user killed app/swiped far away, skip heavy decryption
+      if (!mounted) return; 
+      
+      final decryptedBytes = await EncryptionService.decryptFile(encryptedBytes);
+      await File(fullPath).writeAsBytes(decryptedBytes);
+
+    } catch (e) {
+      // Fail silent
+    } finally {
+      _activeDownloads.remove(file.cloudId);
+    }
   }
 
   Future<void> _handleDelete() async {
@@ -56,27 +118,23 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     if (confirm != true) return;
 
     try {
-      // 1. Delete Logic
       if (fileToDelete.cloudId != null) await CloudService().deleteFile(fileToDelete.cloudId!);
       if (fileToDelete.thumbnailCloudId != null) await CloudService().deleteFile(fileToDelete.thumbnailCloudId!);
       await DatabaseService().deleteFile(fileToDelete.id);
 
-      // 2. Clear Cache
       final tempDir = await getTemporaryDirectory();
       final thumb = File('${tempDir.path}/${fileToDelete.id}_thumb.jpg');
       final main = File('${tempDir.path}/${fileToDelete.id}.cnest_decrypted');
       if (thumb.existsSync()) thumb.deleteSync();
       if (main.existsSync()) main.deleteSync();
 
-      // 3. UI Update (Shift to next photo)
       setState(() {
         _currentFiles.removeAt(_currentIndex);
         _hasDeleted = true;
 
         if (_currentFiles.isEmpty) {
-          Navigator.pop(context, true); // Empty album, go back
+          Navigator.pop(context, true);
         } else {
-          // Adjust index if we were at the end
           if (_currentIndex >= _currentFiles.length) {
             _currentIndex = _currentFiles.length - 1;
           }
@@ -139,9 +197,10 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
           },
           itemBuilder: (context, index) {
             return _SinglePhotoView(
-              // FIX: Key is CRITICAL here. It forces a rebuild when the file at this index changes.
               key: ValueKey(_currentFiles[index].id), 
-              file: _currentFiles[index]
+              file: _currentFiles[index],
+              index: index, // Pass index so we can verify if it's still current
+              onLoaded: (loadedIdx) => _handleCurrentPhotoLoaded(loadedIdx), 
             );
           },
         ),
@@ -152,7 +211,15 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
 
 class _SinglePhotoView extends StatefulWidget {
   final CnestFile file;
-  const _SinglePhotoView({super.key, required this.file});
+  final int index;
+  final Function(int) onLoaded;
+
+  const _SinglePhotoView({
+    super.key, 
+    required this.file,
+    required this.index,
+    required this.onLoaded,
+  });
 
   @override
   State<_SinglePhotoView> createState() => _SinglePhotoViewState();
@@ -186,7 +253,11 @@ class _SinglePhotoViewState extends State<_SinglePhotoView> with AutomaticKeepAl
     final fullFile = File('${cacheDir.path}/${widget.file.cloudId}_decrypted.jpg');
     if (await fullFile.exists()) {
       final bytes = await fullFile.readAsBytes();
-      if (mounted) setState(() { _fullImage = bytes; _isLoadingFull = false; });
+      if (mounted) {
+        setState(() { _fullImage = bytes; _isLoadingFull = false; });
+        // Signal success
+        widget.onLoaded(widget.index);
+      }
       return;
     }
 
@@ -194,10 +265,21 @@ class _SinglePhotoViewState extends State<_SinglePhotoView> with AutomaticKeepAl
     if (widget.file.cloudId != null) {
       try {
         final encryptedBytes = await CloudService().downloadFile(widget.file.cloudId!);
+        
+        // Zombie Check: If widget disposed during download, stop here.
+        if (!mounted) return;
+
         final decryptedBytes = await EncryptionService.decryptFile(encryptedBytes);
         await fullFile.writeAsBytes(decryptedBytes);
         
-        if (mounted) setState(() { _fullImage = decryptedBytes; _isLoadingFull = false; });
+        if (mounted) {
+          setState(() { 
+            _fullImage = decryptedBytes; 
+            _isLoadingFull = false; 
+          });
+          // Signal success
+          widget.onLoaded(widget.index);
+        }
       } catch (e) {
         if (mounted) setState(() => _isLoadingFull = false);
       }
