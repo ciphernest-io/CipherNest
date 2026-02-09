@@ -6,6 +6,7 @@ import '../../config/routes.dart';
 import '../../config/theme.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/database_service.dart';
+import '../../../services/cache_manager_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -16,13 +17,15 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   String _cacheSize = "Calculating...";
-  double _cacheLimitGB = 0.5; // Default value
+  double _cacheLimitGB = 0.5;    // The value the slider shows NOW
+  double _originalLimitGB = 0.5; // The value saved on DISK
   
   // Storage Stats
   int _totalFileCount = 0;
   int _imageBytes = 0;
   int _docBytes = 0;
   bool _isLoading = true;
+  bool get _hasChanges => _cacheLimitGB != _originalLimitGB;
 
   @override
   void initState() {
@@ -34,15 +37,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // --- NEW: PERSISTENCE LOGIC ---
   Future<void> _loadPreferences() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      // Try to read 'cache_limit', default to 0.5 if not found
-      _cacheLimitGB = prefs.getDouble('cache_limit') ?? 0.5;
-    });
+    if (mounted) {
+      setState(() {
+        final val = prefs.getDouble('cache_limit') ?? 0.5;
+        _cacheLimitGB = val;
+        _originalLimitGB = val; // Sync them initially
+      });
+    }
   }
 
-  Future<void> _savePreferences(double value) async {
+  Future<void> _savePreferences() async {
+    setState(() => _isLoading = true); // Show loading feedback
+
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble('cache_limit', value);
+    await prefs.setDouble('cache_limit', _cacheLimitGB);
+
+    // Run the cleaner immediately
+    await CacheManagerService().enforceCacheLimit();
+
+    if (mounted) {
+      setState(() {
+        _originalLimitGB = _cacheLimitGB; // Sync them, so button disables
+        _isLoading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cache limit saved & applied')));
+      _loadStats(); // Reload stats to show freed space
+    }
   }
 
   Future<void> _loadStats() async {
@@ -191,7 +211,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     const Text("Max Cache Size", style: TextStyle(color: Colors.white)),
-                    Text("${_cacheLimitGB.toStringAsFixed(1)} GB", style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
+                    // Highlight if unsaved
+                    Text(
+                      "${_cacheLimitGB.toStringAsFixed(1)} GB", 
+                      style: TextStyle(
+                        color: _hasChanges ? Colors.orangeAccent : AppColors.primary, 
+                        fontWeight: FontWeight.bold
+                      )
+                    ),
                   ],
                 ),
                 Slider(
@@ -199,13 +226,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   min: 0.1,
                   max: 2.0,
                   divisions: 19,
-                  activeColor: AppColors.primary,
+                  activeColor: _hasChanges ? Colors.orangeAccent : AppColors.primary,
                   inactiveColor: Colors.grey[800],
                   onChanged: (val) {
                     setState(() => _cacheLimitGB = val);
-                    _savePreferences(val); // Save instantly
+                    // Note: We do NOT save here anymore. We just update UI.
                   },
                 ),
+                // --- SAVE BUTTON ---
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (_hasChanges)
+                      const Text("Unsaved changes", style: TextStyle(color: Colors.orangeAccent, fontSize: 12)),
+                    const SizedBox(width: 12),
+                    ElevatedButton(
+                      onPressed: _hasChanges ? _savePreferences : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white, // <--- FORCE TEXT WHITE
+                        disabledBackgroundColor: Colors.grey[800],
+                        disabledForegroundColor: Colors.grey[500],
+                      ),
+                      child: const Text("Save & Apply"),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
                 const Text(
                   "Older files will be removed from device when cache exceeds this limit.",
                   style: TextStyle(color: Colors.grey, fontSize: 11),
