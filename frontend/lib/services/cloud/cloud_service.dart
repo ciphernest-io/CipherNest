@@ -25,6 +25,7 @@ class CloudService {
   Future<String?> uploadEncryptedFile({
     required String filename,
     required bool isImage,
+    String? originalName,
     Uint8List? bytes,
     Stream<List<int>>? stream,
     int? size,
@@ -32,6 +33,7 @@ class CloudService {
     return _provider.uploadEncryptedFile(
       filename: filename,
       isImage: isImage,
+      originalName: originalName,
       fileBytes: bytes,
       fileStream: stream,
       fileSize: size,
@@ -42,4 +44,8 @@ class CloudService {
   Future<void> deleteFile(String id) => _provider.deleteFile(id);
   Future<List<Map<String, dynamic>>> listCloudFiles() =>
       _provider.listCloudFiles();
+
+  // --- LOOKUP ---
+  Future<String?> findFileByName(String name) =>
+      _provider.findFileByName(name);
 }

@@ -10,6 +10,7 @@ import '../../models/file_model.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/database_service.dart';
+import '../../../services/database_backup_service.dart';
 
 class ImageViewerScreen extends StatefulWidget {
   final List<CnestFile> files;
@@ -142,6 +143,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
 
       // 2. Delete from DB
       await DatabaseService().deleteFile(fileToDelete.id);
+      DatabaseBackupService().scheduleBackup();
 
       // 3. AGGRESSIVE CACHE CLEANUP
       final tempDir = await getTemporaryDirectory();

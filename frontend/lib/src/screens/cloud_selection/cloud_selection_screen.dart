@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import '../../config/routes.dart';
 import '../../config/theme.dart';
 import '../../../services/cloud/cloud_service.dart';
+import '../../../services/database_backup_service.dart';
 import '../../../services/database_service.dart';
+import '../../models/file_model.dart';
 
 class CloudSelectionScreen extends StatefulWidget {
   const CloudSelectionScreen({super.key});
@@ -36,7 +38,27 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
         DatabaseService().setCurrentAccount(email);
       }
 
-      // 3. Trigger Initial Sync Logic (Background)
+      // 3. Check for and restore cloud DB backup
+      final hasBackup = await DatabaseBackupService().hasCloudBackup();
+      if (hasBackup) {
+        final localImages = await DatabaseService().getFilesByType(CnestFileType.image);
+        final localDocs = await DatabaseService().getFilesByType(CnestFileType.document);
+        final localIsEmpty = localImages.isEmpty && localDocs.isEmpty;
+
+        bool shouldRestore = localIsEmpty;
+        if (!localIsEmpty && mounted) {
+          shouldRestore = await _showRestoreDialog() ?? false;
+        }
+
+        if (shouldRestore) {
+          final restored = await DatabaseBackupService().restoreDatabase();
+          if (restored && email != null) {
+            DatabaseService().setCurrentAccount(email);
+          }
+        }
+      }
+
+      // 4. Trigger Initial Sync Logic (Background)
       final files = await CloudService().listCloudFiles();
       await DatabaseService().reconcile(files.cast<Map<String, dynamic>>());
 
@@ -51,6 +73,30 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  Future<bool?> _showRestoreDialog() {
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Backup Found'),
+        content: const Text(
+          'A vault index backup was found on your cloud. '
+          'Restore it? This replaces your current local index.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Skip'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Restore'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showErrorDialog(String title, String content) {
