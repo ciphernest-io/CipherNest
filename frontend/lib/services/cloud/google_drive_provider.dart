@@ -70,19 +70,20 @@ class GoogleDriveProvider implements CloudProvider {
   Future<String?> uploadEncryptedFile({
     required String filename,
     required bool isImage,
+    String? originalName,
     Uint8List? fileBytes,
     Stream<List<int>>? fileStream,
     int? fileSize,
   }) async {
     final api = await _getApi();
-    
+
     final driveFile = drive.File()
       ..name = filename
       ..parents = ['appDataFolder']
       ..mimeType = 'application/octet-stream'
       ..appProperties = {
         'type': isImage ? 'image' : 'document',
-        'original_name': filename, 
+        'original_name': originalName ?? filename,
       };
 
     drive.Media? media;
@@ -154,6 +155,21 @@ class GoogleDriveProvider implements CloudProvider {
       'type': f.appProperties?['type'],
       'original_name': f.appProperties?['original_name'],
     }).toList() ?? [];
+  }
+
+  @override
+  Future<String?> findFileByName(String name) async {
+    final api = await _getApi();
+    final fileList = await api.files.list(
+      q: "trashed = false and name = '$name'",
+      spaces: 'appDataFolder',
+      $fields: 'files(id)',
+      pageSize: 1,
+    );
+    if (fileList.files != null && fileList.files!.isNotEmpty) {
+      return fileList.files!.first.id;
+    }
+    return null;
   }
 
   @override

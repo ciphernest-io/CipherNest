@@ -8,8 +8,10 @@ import 'dart:typed_data';
 import '../../config/theme.dart';
 import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
+import '../../../services/database_backup_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
+import '../../../services/sync_service.dart';
 
 class DocumentsScreen extends StatefulWidget {
   const DocumentsScreen({super.key});
@@ -25,13 +27,28 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
   @override
   void initState() {
     super.initState();
+    SyncService().syncNotifier.addListener(_onSyncComplete);
     _refresh();
+  }
+
+  @override
+  void dispose() {
+    SyncService().syncNotifier.removeListener(_onSyncComplete);
+    super.dispose();
+  }
+
+  void _onSyncComplete() {
+    if (mounted) _refresh();
   }
 
   void _refresh() {
     setState(() {
       _filesFuture = DatabaseService().getFilesByType(CnestFileType.document);
     });
+  }
+
+  Future<void> _handleSync() async {
+    await SyncService().syncNow(force: true);
   }
 
   // --- LOGIC: SECURE OPEN ---
@@ -99,6 +116,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
         await CloudService().deleteFile(file.cloudId!);
       }
       await DatabaseService().deleteFile(file.id);
+      DatabaseBackupService().scheduleBackup();
       _refresh();
     }
   }
@@ -111,40 +129,43 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.sync),
-            onPressed: () async {
-              // Quick manual sync trigger
-              final cloudFiles = await CloudService().listCloudFiles();
-              await DatabaseService().reconcile(cloudFiles.cast<Map<String, dynamic>>());
-              _refresh();
-            },
+            onPressed: _handleSync,
           )
         ],
       ),
-      body: FutureBuilder<List<CnestFile>>(
-        future: _filesFuture,
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-             return const Center(child: CircularProgressIndicator());
-          }
-          
-          final files = snapshot.data!;
-          if (files.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.folder_open, size: 64, color: Colors.grey[800]),
-                  const SizedBox(height: 16),
-                  const Text('No documents found', style: TextStyle(color: Colors.grey)),
-                ],
-              ),
-            );
-          }
+      body: RefreshIndicator(
+        onRefresh: _handleSync,
+        child: FutureBuilder<List<CnestFile>>(
+          future: _filesFuture,
+          builder: (context, snapshot) {
+            if (!snapshot.hasData) {
+               return const Center(child: CircularProgressIndicator());
+            }
 
-          return ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: files.length,
-            separatorBuilder: (ctx, i) => const SizedBox(height: 12), // Space between cards
+            final files = snapshot.data!;
+            if (files.isEmpty) {
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  const SizedBox(height: 200),
+                  Center(
+                    child: Column(
+                      children: [
+                        Icon(Icons.folder_open, size: 64, color: Colors.grey[800]),
+                        const SizedBox(height: 16),
+                        const Text('No documents found', style: TextStyle(color: Colors.grey)),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            }
+
+            return ListView.separated(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.all(16),
+              itemCount: files.length,
+              separatorBuilder: (ctx, i) => const SizedBox(height: 12),
             itemBuilder: (context, index) {
               final file = files[index];
               final isOpening = _openingFileId == file.id;
@@ -265,6 +286,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
             },
           );
         },
+      ),
       ),
     );
   }

@@ -15,6 +15,7 @@ abstract class CloudProvider {
   Future<String?> uploadEncryptedFile({
     required String filename,
     required bool isImage,
+    String? originalName,
     Uint8List? fileBytes,
     Stream<List<int>>? fileStream,
     int? fileSize,
@@ -26,6 +27,9 @@ abstract class CloudProvider {
   // Returns generic Maps so we don't depend on 'drive.File'
   Future<List<Map<String, dynamic>>> listCloudFiles(); 
 
+  // Lookup
+  Future<String?> findFileByName(String name);
+
   // The replacement for "canaryTest"
-  Future<bool> checkIntegrity(); 
+  Future<bool> checkIntegrity();
 }

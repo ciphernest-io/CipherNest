@@ -6,6 +6,7 @@ import '../../config/routes.dart';
 import '../../config/theme.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/database_service.dart';
+import '../../../services/database_backup_service.dart';
 import '../../../services/cache_manager_service.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -108,6 +109,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cache cleared')));
       _loadStats();
+    }
+  }
+
+  Future<void> _handleBackup() async {
+    setState(() => _isLoading = true);
+    try {
+      await DatabaseBackupService().backupDatabase();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Vault index backed up successfully')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Backup failed: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -266,6 +287,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: const Text('Clear Local Cache', style: TextStyle(color: Colors.white)),
             subtitle: Text('Free up $_cacheSize on device', style: const TextStyle(color: Colors.grey)),
             onTap: _clearCache,
+          ),
+          ListTile(
+            leading: const Icon(Icons.backup, color: Colors.greenAccent),
+            title: const Text('Backup Vault Index', style: TextStyle(color: Colors.white)),
+            subtitle: const Text('Encrypt and upload your vault index to the cloud', style: TextStyle(color: Colors.grey)),
+            onTap: _handleBackup,
           ),
 
           const Divider(color: Colors.white10),

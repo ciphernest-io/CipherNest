@@ -34,6 +34,8 @@ These are the highest priority items currently being worked on:
 * **Database Cloud Backup:** Uploading an encrypted snapshot of the SQLite `.db` file to Google Drive to allow multi-device sync and account recovery ("Last Write Wins" safety check).
 * **In-App Image Editor:** Must be entirely in-app (e.g., `pro_image_editor`) to prevent decrypted files from leaking to public storage via external apps.
 * **Zero-Knowledge Sharing (The "Magic Link"):** Hash-Fragment Key sharing system (`ciphernest://share?id=123#key=abc`).
+* **Migration Script** An intuitve, UI/UX-powered method of migration of unencrypted old photos in Google Photos and files in Drive to CipherNest infrastructure to support easy onboarding. 
+
 
 ## 6. Feature Backlog (To-Do / Planned Refinements)
 * **Performance/UX:** Background loading ahead and back (pre-fetching in viewer), fixing any gaps in swiping, squeeze gallery view to resize grid.

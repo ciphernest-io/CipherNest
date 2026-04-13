@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import '../../config/theme.dart';
 import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
+import '../../../services/database_backup_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
+import '../../../services/sync_service.dart';
 import 'image_viewer_screen.dart';
 
 class GalleryScreen extends StatefulWidget {
@@ -23,7 +25,18 @@ class _GalleryScreenState extends State<GalleryScreen> {
   @override
   void initState() {
     super.initState();
+    SyncService().syncNotifier.addListener(_onSyncComplete);
     _refresh();
+  }
+
+  @override
+  void dispose() {
+    SyncService().syncNotifier.removeListener(_onSyncComplete);
+    super.dispose();
+  }
+
+  void _onSyncComplete() {
+    if (mounted) _refresh();
   }
 
   void _refresh() {
@@ -33,15 +46,11 @@ class _GalleryScreenState extends State<GalleryScreen> {
   }
 
   Future<void> _handleSync() async {
-    try {
-      final cloudFiles = await CloudService().listCloudFiles();
-      await DatabaseService().reconcile(cloudFiles);
-      _refresh();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sync complete')));
-      }
-    } catch (e) {
-      // debugPrint(e.toString());
+    await SyncService().syncNow(force: true);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sync complete')),
+      );
     }
   }
 
@@ -70,6 +79,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
       
       // 2. Delete from DB
       await DatabaseService().deleteFile(file.id);
+      DatabaseBackupService().scheduleBackup();
 
       // 3. AGGRESSIVE CACHE CLEANUP
       final tempDir = await getTemporaryDirectory();

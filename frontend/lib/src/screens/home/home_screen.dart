@@ -13,8 +13,10 @@ import '../../config/routes.dart';
 import '../../config/theme.dart';
 import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
+import '../../../services/database_backup_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
+import '../../../services/sync_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -23,7 +25,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isUploading = false;
   bool _isLoadingSession = true;
   String? _sessionError;
@@ -31,7 +33,21 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initSession();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      SyncService().syncNow();
+    }
   }
 
   Future<void> _initSession() async {
@@ -48,6 +64,7 @@ class _HomeScreenState extends State<HomeScreen> {
         if (email != null) {
           DatabaseService().setCurrentAccount(email);
           setState(() => _isLoadingSession = false);
+          SyncService().syncNow();
         } else {
           setState(() {
             _isLoadingSession = false;
@@ -222,6 +239,7 @@ class _HomeScreenState extends State<HomeScreen> {
         mainUploadFuture = CloudService().uploadEncryptedFile(
           filename: mainCloudFilename,
           isImage: false,
+          originalName: filename,
           stream: encryptedStream,
           size: encryptedSize,
           bytes: null,
@@ -230,7 +248,8 @@ class _HomeScreenState extends State<HomeScreen> {
         final encryptedMainBytes = await EncryptionService.encryptFile(fileBytes);
         mainUploadFuture = CloudService().uploadEncryptedFile(
           filename: mainCloudFilename,
-          isImage: isMedia, 
+          isImage: isMedia,
+          originalName: filename,
           bytes: encryptedMainBytes,
         );
       } else {
@@ -256,6 +275,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mainCloudId == null) throw Exception('Main upload failed');
 
       await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId);
+      DatabaseBackupService().scheduleBackup();
 
       // --- 6. CACHE MANAGEMENT (THE FIX) ---
       try {

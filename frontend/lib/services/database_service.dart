@@ -21,6 +21,18 @@ class DatabaseService {
     return _database!;
   }
 
+  Future<String> getDatabasePath() async {
+    final dbPath = await getDatabasesPath();
+    return join(dbPath, 'ciphernest_v3.db');
+  }
+
+  Future<void> closeDatabase() async {
+    if (_database != null) {
+      await _database!.close();
+      _database = null;
+    }
+  }
+
   Future<Database> _initDB() async {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, 'ciphernest_v3.db'); 
@@ -143,6 +155,9 @@ class DatabaseService {
     final mainFiles = <Map<String, dynamic>>[];
     final thumbnailFiles = <Map<String, dynamic>>[];
 
+    // Exclude the DB backup file from reconciliation
+    cloudFiles.removeWhere((f) => f['name'] == 'ciphernest_db_backup.cnest');
+
     for (var file in cloudFiles) {
       final id = file['id'];
       final name = file['name'] as String? ?? '';
@@ -156,9 +171,8 @@ class DatabaseService {
 
     for (var file in mainFiles) {
       final name = file['name'] as String? ?? '';
-      final props = file['appProperties'] as Map<String, dynamic>? ?? {};
-      final realFilename = props['original_name'] ?? name.replaceAll('.cnest', '');
-      final typeStr = props['type'];
+      final realFilename = file['original_name'] as String? ?? name.replaceAll('.cnest', '');
+      final typeStr = file['type'] as String?;
       
       bool isImage = false;
       if (typeStr == 'image') isImage = true;
@@ -245,5 +259,23 @@ class DatabaseService {
       'docs': docBytes,
       'total_count': count,
     };
+  }
+
+  Future<Map<String, String>> getCloudToLocalIdMap() async {
+    final db = await database;
+    final rows = await db.query(
+      'files',
+      columns: ['id', 'cloud_id', 'thumbnail_cloud_id'],
+      where: 'is_uploaded = 1',
+    );
+    final map = <String, String>{};
+    for (final row in rows) {
+      final localId = row['id'] as String;
+      if (row['cloud_id'] != null) map[row['cloud_id'] as String] = localId;
+      if (row['thumbnail_cloud_id'] != null) {
+        map[row['thumbnail_cloud_id'] as String] = localId;
+      }
+    }
+    return map;
   }
 }
