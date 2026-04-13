@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter/material.dart';
+import '../../config/theme.dart';
 import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
 import '../../../services/cloud/cloud_service.dart';
@@ -17,6 +18,7 @@ class GalleryScreen extends StatefulWidget {
 
 class _GalleryScreenState extends State<GalleryScreen> {
   late Future<List<CnestFile>> _filesFuture;
+  int _bottomNavIndex = 0;
 
   @override
   void initState() {
@@ -103,15 +105,17 @@ class _GalleryScreenState extends State<GalleryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Removed explicit backgroundColor: Colors.black
     return Scaffold(
-      appBar: AppBar(title: const Text('Encrypted Gallery')),
+      appBar: AppBar(
+        title: const Text('Encrypted Gallery'),
+        // Removed explicit backgroundColor/foregroundColor to use theme
+        elevation: 0,
+      ),
       body: FutureBuilder<List<CnestFile>>(
         future: _filesFuture,
         builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
           final files = snapshot.data!;
 
           return RefreshIndicator(
@@ -121,16 +125,16 @@ class _GalleryScreenState extends State<GalleryScreen> {
                     physics: const AlwaysScrollableScrollPhysics(),
                     children: const [
                       SizedBox(height: 300),
-                      Center(child: Text('No encrypted photos yet.\nPull to sync.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white54))),
+                      Center(child: Text('No encrypted photos yet.\nPull to sync.', textAlign: TextAlign.center)),
                     ],
                   )
                 : GridView.builder(
                     physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.all(2),
+                    padding: const EdgeInsets.all(0),
                     gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                       crossAxisCount: 3,
-                      crossAxisSpacing: 8,
-                      mainAxisSpacing: 8,
+                      crossAxisSpacing: 1.5,
+                      mainAxisSpacing: 1.5,
                     ),
                     itemCount: files.length,
                     itemBuilder: (context, index) {
@@ -146,20 +150,29 @@ class _GalleryScreenState extends State<GalleryScreen> {
                               ),
                             ),
                           );
-                          if (result == true) {
-                            _refresh(); 
-                          }
+                          if (result == true) _refresh(); 
                         },
                         onLongPress: () => _handleDelete(file),
-                        child: _GalleryGridItem(
-                          key: ValueKey(file.id), 
-                          file: file
-                        ),
+                        child: _GalleryGridItem(key: ValueKey(file.id), file: file),
                       );
                     },
                   ),
           );
         },
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        // Removed explicit backgroundColor to use theme
+        selectedItemColor: AppColors.primary, 
+        unselectedItemColor: Colors.grey,
+        type: BottomNavigationBarType.fixed,
+        currentIndex: _bottomNavIndex,
+        onTap: (index) => setState(() => _bottomNavIndex = index),
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.photo), label: 'Pictures'),
+          BottomNavigationBarItem(icon: Icon(Icons.photo_album), label: 'Albums'),
+          BottomNavigationBarItem(icon: Icon(Icons.history), label: 'Stories'),
+          BottomNavigationBarItem(icon: Icon(Icons.menu), label: 'Menu'),
+        ],
       ),
     );
   }
