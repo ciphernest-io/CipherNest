@@ -8,6 +8,8 @@ import '../../../services/cloud/cloud_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/cache_manager_service.dart';
+import '../../../services/auto_sync_service.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -28,6 +30,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isLoading = true;
   bool get _hasChanges => _cacheLimitGB != _originalLimitGB;
 
+  // Auto-Sync
+  bool _autoSyncEnabled = false;
+  String _lastSyncDisplay = 'Never';
+
   @override
   void initState() {
     super.initState();
@@ -39,10 +45,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadPreferences() async {
     final prefs = await SharedPreferences.getInstance();
     if (mounted) {
+      final lastRunMs = prefs.getInt('auto_sync_last_run') ?? 0;
       setState(() {
         final val = prefs.getDouble('cache_limit') ?? 0.5;
         _cacheLimitGB = val;
-        _originalLimitGB = val; // Sync them initially
+        _originalLimitGB = val;
+        _autoSyncEnabled = prefs.getBool('auto_sync_enabled') ?? false;
+        if (lastRunMs > 0) {
+          final dt = DateTime.fromMillisecondsSinceEpoch(lastRunMs);
+          _lastSyncDisplay = '${dt.month}/${dt.day} ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}';
+        }
       });
     }
   }
@@ -125,6 +137,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Backup failed: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _toggleAutoSync(bool enabled) async {
+    if (enabled) {
+      // Request permissions first
+      final status = await [Permission.photos, Permission.videos].request();
+      final allGranted = status.values.every(
+        (s) => s.isGranted || s.isLimited,
+      );
+      if (!allGranted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Media permissions are required for auto-sync')),
+          );
+        }
+        return;
+      }
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('auto_sync_enabled', enabled);
+    if (enabled) {
+      // Set watermark to NOW — only photos taken after this moment auto-sync.
+      // Existing gallery photos require the Migration feature instead.
+      await prefs.setInt(
+        'auto_sync_watermark',
+        DateTime.now().millisecondsSinceEpoch,
+      );
+    }
+    if (mounted) setState(() => _autoSyncEnabled = enabled);
+  }
+
+  Future<void> _handleSyncNow() async {
+    setState(() => _isLoading = true);
+    try {
+      final result = await AutoSyncService().runFullSync();
+      if (mounted) {
+        final msg = result.synced > 0
+            ? '${result.synced} photo${result.synced == 1 ? '' : 's'} secured'
+            : 'No new photos found';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+        _loadPreferences();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sync failed: $e'), backgroundColor: Colors.red),
         );
       }
     } finally {
@@ -294,6 +358,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
             subtitle: const Text('Encrypt and upload your vault index to the cloud', style: TextStyle(color: Colors.grey)),
             onTap: _handleBackup,
           ),
+          ListTile(
+            leading: const Icon(Icons.photo_library, color: Colors.cyanAccent),
+            title: const Text('Migrate Gallery', style: TextStyle(color: Colors.white)),
+            subtitle: const Text('Import existing photos into CipherNest', style: TextStyle(color: Colors.grey)),
+            trailing: const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+            onTap: () => Navigator.pushNamed(context, AppRoutes.migration),
+          ),
+
+          const Divider(color: Colors.white10),
+
+          // --- AUTO-SYNC ---
+          _SectionHeader(title: "Auto-Sync"),
+          SwitchListTile(
+            secondary: const Icon(Icons.sync, color: Colors.cyanAccent),
+            title: const Text('Auto-Sync Gallery', style: TextStyle(color: Colors.white)),
+            subtitle: Text(
+              _autoSyncEnabled ? 'Last sync: $_lastSyncDisplay' : 'Automatically encrypt new photos',
+              style: const TextStyle(color: Colors.grey),
+            ),
+            value: _autoSyncEnabled,
+            activeColor: Colors.cyanAccent,
+            onChanged: _toggleAutoSync,
+          ),
+          if (_autoSyncEnabled)
+            ListTile(
+              leading: const SizedBox(width: 24),
+              title: const Text('Sync Now', style: TextStyle(color: Colors.cyanAccent)),
+              subtitle: const Text('New photos sync automatically on app open', style: TextStyle(color: Colors.grey, fontSize: 12)),
+              trailing: const Icon(Icons.play_arrow, color: Colors.cyanAccent),
+              onTap: _handleSyncNow,
+            ),
 
           const Divider(color: Colors.white10),
           // ... Security Section ...

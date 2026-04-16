@@ -12,6 +12,7 @@ import '../screens/gallery/gallery_screen.dart';
 import '../screens/documents/documents_screen.dart';
 import '../screens/settings/settings_screen.dart';
 import '../screens/settings/key_management_screen.dart';
+import '../screens/migration/migration_screen.dart';
 
 class AppRoutes {
   static const String splash = '/';
@@ -25,7 +26,8 @@ class AppRoutes {
   static const String gallery = '/gallery';
   static const String documents = '/documents';
   static const String settings = '/settings'; 
-  static const String keyManagement = '/key-management'; 
+  static const String keyManagement = '/key-management';
+  static const String migration = '/migration';
 
   // CHANGED argument name to 'routeSettings' to avoid conflict
   static Route<dynamic> generateRoute(RouteSettings routeSettings) {
@@ -65,6 +67,9 @@ class AppRoutes {
 
       case keyManagement:
         return MaterialPageRoute(builder: (_) => const KeyManagementScreen());
+
+      case migration:
+        return MaterialPageRoute(builder: (_) => const MigrationScreen());
 
       default:
         return MaterialPageRoute(
