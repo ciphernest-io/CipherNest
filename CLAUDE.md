@@ -36,7 +36,6 @@ These are the highest priority items currently being worked on:
 * **Zero-Knowledge Sharing (The "Magic Link"):** Hash-Fragment Key sharing system (`ciphernest://share?id=123#key=abc`).
 * **Migration Script** An intuitve, UI/UX-powered method of migration of unencrypted old photos in Google Photos and files in Drive to CipherNest infrastructure to support easy onboarding. 
 
-
 ## 6. Feature Backlog (To-Do / Planned Refinements)
 * **Performance/UX:** Background loading ahead and back (pre-fetching in viewer), fixing any gaps in swiping, squeeze gallery view to resize grid.
 * **Media Management:** Rename photos/files, multi-selection ("Hold to Select"), auto-sync with Android gallery, save a decrypted copy to local public storage.
