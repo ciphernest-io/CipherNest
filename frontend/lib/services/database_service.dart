@@ -1,6 +1,8 @@
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:uuid/uuid.dart';
 import '../src/models/file_model.dart';
+import '../src/models/album_model.dart';
 import 'cloud/cloud_service.dart';
 
 class DatabaseService {
@@ -35,11 +37,11 @@ class DatabaseService {
 
   Future<Database> _initDB() async {
     final dbPath = await getDatabasesPath();
-    final path = join(dbPath, 'ciphernest_v3.db'); 
+    final path = join(dbPath, 'ciphernest_v3.db');
 
-    return await openDatabase(
+    final db = await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE files(
@@ -56,8 +58,61 @@ class DatabaseService {
             type INTEGER
           )
         ''');
+        await _createAlbumTables(db);
+        await _seedSmartAlbums(db);
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await _createAlbumTables(db);
+          await _seedSmartAlbums(db);
+        }
       },
     );
+    await db.execute('PRAGMA foreign_keys = ON');
+    return db;
+  }
+
+  static Future<void> _createAlbumTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE albums(
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        cover_file_id TEXT,
+        is_smart INTEGER DEFAULT 0,
+        smart_query TEXT,
+        created_at INTEGER,
+        updated_at INTEGER
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE album_files(
+        album_id TEXT NOT NULL,
+        file_id TEXT NOT NULL,
+        added_at INTEGER,
+        PRIMARY KEY (album_id, file_id),
+        FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE CASCADE,
+        FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+      )
+    ''');
+  }
+
+  static Future<void> _seedSmartAlbums(Database db) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final album in [
+      {'id': 'smart_all_photos', 'name': 'All Photos', 'query': 'all_images'},
+      {'id': 'smart_camera', 'name': 'Camera', 'query': 'camera'},
+      {'id': 'smart_screenshots', 'name': 'Screenshots', 'query': 'screenshots'},
+      {'id': 'smart_videos', 'name': 'Videos', 'query': 'videos'},
+    ]) {
+      await db.insert('albums', {
+        'id': album['id'],
+        'name': album['name'],
+        'is_smart': 1,
+        'smart_query': album['query'],
+        'created_at': now,
+        'updated_at': now,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
   }
 
   // --- CRUD Operations ---
@@ -277,5 +332,197 @@ class DatabaseService {
       }
     }
     return map;
+  }
+
+  // --- ALBUM OPERATIONS ---
+
+  Future<List<CnestAlbum>> getAlbums() async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT a.*,
+        CASE WHEN a.is_smart = 1 THEN 0
+        ELSE (SELECT COUNT(*) FROM album_files af WHERE af.album_id = a.id)
+        END as file_count
+      FROM albums a
+      ORDER BY a.is_smart DESC, a.created_at ASC
+    ''');
+    final albums = rows.map((r) => CnestAlbum.fromMap(r)).toList();
+
+    // Populate smart album counts
+    for (final album in albums) {
+      if (album.isSmart) {
+        album.fileCount = await _smartAlbumCount(db, album.smartQuery ?? '');
+      }
+    }
+    return albums;
+  }
+
+  Future<CnestAlbum> createAlbum(String name) async {
+    final db = await database;
+    final now = DateTime.now();
+    final album = CnestAlbum(
+      id: const Uuid().v4(),
+      name: name,
+      createdAt: now,
+      updatedAt: now,
+    );
+    await db.insert('albums', album.toMap());
+    return album;
+  }
+
+  Future<void> renameAlbum(String albumId, String newName) async {
+    final db = await database;
+    await db.update(
+      'albums',
+      {'name': newName, 'updated_at': DateTime.now().millisecondsSinceEpoch},
+      where: 'id = ? AND is_smart = 0',
+      whereArgs: [albumId],
+    );
+  }
+
+  Future<void> deleteAlbum(String albumId) async {
+    final db = await database;
+    await db.delete('albums', where: 'id = ? AND is_smart = 0', whereArgs: [albumId]);
+  }
+
+  Future<void> setAlbumCover(String albumId, String fileId) async {
+    final db = await database;
+    await db.update(
+      'albums',
+      {'cover_file_id': fileId, 'updated_at': DateTime.now().millisecondsSinceEpoch},
+      where: 'id = ?',
+      whereArgs: [albumId],
+    );
+  }
+
+  Future<void> addFileToAlbum(String albumId, String fileId) async {
+    final db = await database;
+    await db.insert('album_files', {
+      'album_id': albumId,
+      'file_id': fileId,
+      'added_at': DateTime.now().millisecondsSinceEpoch,
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+  }
+
+  Future<void> addFilesToAlbum(String albumId, List<String> fileIds) async {
+    final db = await database;
+    final batch = db.batch();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final fileId in fileIds) {
+      batch.insert('album_files', {
+        'album_id': albumId,
+        'file_id': fileId,
+        'added_at': now,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+    await batch.commit(noResult: true);
+  }
+
+  Future<void> removeFileFromAlbum(String albumId, String fileId) async {
+    final db = await database;
+    await db.delete(
+      'album_files',
+      where: 'album_id = ? AND file_id = ?',
+      whereArgs: [albumId, fileId],
+    );
+  }
+
+  Future<List<CnestFile>> getFilesForAlbum(CnestAlbum album) async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+
+    if (album.isSmart) return _smartAlbumFiles(db, album.smartQuery ?? '');
+
+    final maps = await db.rawQuery('''
+      SELECT f.* FROM files f
+      INNER JOIN album_files af ON af.file_id = f.id
+      WHERE af.album_id = ? AND f.account_id = ?
+      ORDER BY f.created_at DESC
+    ''', [album.id, _currentAccountId]);
+    return maps.map((m) => CnestFile.fromMap(m)).toList();
+  }
+
+  Future<CnestFile?> getAlbumCoverFile(CnestAlbum album) async {
+    final db = await database;
+    if (_currentAccountId == null) return null;
+
+    // Explicit cover set
+    if (album.coverFileId != null) {
+      final rows = await db.query('files',
+          where: 'id = ?', whereArgs: [album.coverFileId], limit: 1);
+      if (rows.isNotEmpty) return CnestFile.fromMap(rows.first);
+    }
+
+    // Fallback: most recent file in the album
+    if (album.isSmart) {
+      final files = await _smartAlbumFiles(db, album.smartQuery ?? '', limit: 1);
+      return files.isNotEmpty ? files.first : null;
+    }
+
+    final maps = await db.rawQuery('''
+      SELECT f.* FROM files f
+      INNER JOIN album_files af ON af.file_id = f.id
+      WHERE af.album_id = ? AND f.account_id = ?
+      ORDER BY f.created_at DESC LIMIT 1
+    ''', [album.id, _currentAccountId]);
+    return maps.isNotEmpty ? CnestFile.fromMap(maps.first) : null;
+  }
+
+  // --- SMART ALBUM HELPERS ---
+
+  Future<List<CnestFile>> _smartAlbumFiles(Database db, String query, {int? limit}) async {
+    final where = _smartAlbumWhere(query);
+    if (where == null) return [];
+    final limitClause = limit != null ? ' LIMIT $limit' : '';
+    final maps = await db.rawQuery(
+      'SELECT * FROM files WHERE $where AND account_id = ? ORDER BY created_at DESC$limitClause',
+      [_currentAccountId],
+    );
+    return maps.map((m) => CnestFile.fromMap(m)).toList();
+  }
+
+  Future<int> _smartAlbumCount(Database db, String query) async {
+    final where = _smartAlbumWhere(query);
+    if (where == null) return 0;
+    final result = await db.rawQuery(
+      'SELECT COUNT(*) as cnt FROM files WHERE $where AND account_id = ?',
+      [_currentAccountId],
+    );
+    return Sqflite.firstIntValue(result) ?? 0;
+  }
+
+  String? _smartAlbumWhere(String query) {
+    switch (query) {
+      case 'all_images':
+        return 'type = 0';
+      case 'camera':
+        return "type = 0 AND (LOWER(filename) LIKE '%img_%' OR LOWER(filename) LIKE '%dcim%' OR LOWER(filename) LIKE '%camera%')";
+      case 'screenshots':
+        return "type = 0 AND LOWER(filename) LIKE '%screenshot%'";
+      case 'videos':
+        return "type = 0 AND (LOWER(filename) LIKE '%.mp4' OR LOWER(filename) LIKE '%.mov' OR LOWER(filename) LIKE '%.avi' OR LOWER(filename) LIKE '%.mkv')";
+      default:
+        return null;
+    }
+  }
+
+  // --- FEATURED CONTENT ---
+
+  Future<List<CnestFile>> getFilesFromOneYearAgo({int dayRange = 3}) async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+
+    final now = DateTime.now();
+    final yearAgo = DateTime(now.year - 1, now.month, now.day);
+    final minMs = yearAgo.subtract(Duration(days: dayRange)).millisecondsSinceEpoch;
+    final maxMs = yearAgo.add(Duration(days: dayRange)).millisecondsSinceEpoch;
+
+    final maps = await db.query(
+      'files',
+      where: 'type = 0 AND account_id = ? AND created_at BETWEEN ? AND ?',
+      whereArgs: [_currentAccountId, minMs, maxMs],
+      orderBy: 'created_at DESC',
+    );
+    return maps.map((m) => CnestFile.fromMap(m)).toList();
   }
 }

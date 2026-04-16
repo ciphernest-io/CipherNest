@@ -34,6 +34,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _autoSyncEnabled = false;
   String _lastSyncDisplay = 'Never';
 
+  // Gallery
+  bool _showFeatured = true;
+  bool _showYearAgo = true;
+
   @override
   void initState() {
     super.initState();
@@ -51,6 +55,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _cacheLimitGB = val;
         _originalLimitGB = val;
         _autoSyncEnabled = prefs.getBool('auto_sync_enabled') ?? false;
+        _showFeatured = prefs.getBool('gallery_show_featured') ?? true;
+        _showYearAgo = prefs.getBool('gallery_show_year_ago') ?? true;
         if (lastRunMs > 0) {
           final dt = DateTime.fromMillisecondsSinceEpoch(lastRunMs);
           _lastSyncDisplay = '${dt.month}/${dt.day} ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}';
@@ -194,6 +200,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  Future<void> _toggleFeatured(bool val) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('gallery_show_featured', val);
+    if (mounted) setState(() => _showFeatured = val);
+  }
+
+  Future<void> _toggleYearAgo(bool val) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('gallery_show_year_ago', val);
+    if (mounted) setState(() => _showYearAgo = val);
   }
 
   Future<void> _handleSignOut() async {
@@ -389,6 +407,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
               trailing: const Icon(Icons.play_arrow, color: Colors.cyanAccent),
               onTap: _handleSyncNow,
             ),
+
+          const Divider(color: Colors.white10),
+
+          // --- GALLERY ---
+          _SectionHeader(title: "Gallery"),
+          SwitchListTile(
+            secondary: const Icon(Icons.auto_awesome, color: Colors.amberAccent),
+            title: const Text('Show Featured Content', style: TextStyle(color: Colors.white)),
+            subtitle: const Text('Display stories and highlights', style: TextStyle(color: Colors.grey)),
+            value: _showFeatured,
+            activeColor: Colors.amberAccent,
+            onChanged: _toggleFeatured,
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.history, color: Colors.amberAccent),
+            title: const Text('A Year Ago Memories', style: TextStyle(color: Colors.white)),
+            subtitle: const Text('Show photos from this day last year', style: TextStyle(color: Colors.grey)),
+            value: _showYearAgo,
+            activeColor: Colors.amberAccent,
+            onChanged: _toggleYearAgo,
+          ),
 
           const Divider(color: Colors.white10),
           // ... Security Section ...
