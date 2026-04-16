@@ -9,6 +9,7 @@ import '../../config/theme.dart';
 import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
+import '../../../services/auto_sync_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/sync_service.dart';
@@ -116,6 +117,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
         await CloudService().deleteFile(file.cloudId!);
       }
       await DatabaseService().deleteFile(file.id);
+      AutoSyncService.trackDeletion(file.filename, file.sizeBytes);
       DatabaseBackupService().scheduleBackup();
       _refresh();
     }

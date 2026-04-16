@@ -11,6 +11,7 @@ import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
+import '../../../services/auto_sync_service.dart';
 
 class ImageViewerScreen extends StatefulWidget {
   final List<CnestFile> files;
@@ -141,8 +142,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       if (fileToDelete.thumbnailCloudId != null)
         await CloudService().deleteFile(fileToDelete.thumbnailCloudId!);
 
-      // 2. Delete from DB
+      // 2. Delete from DB and track deletion for auto-sync
       await DatabaseService().deleteFile(fileToDelete.id);
+      AutoSyncService.trackDeletion(fileToDelete.filename, fileToDelete.sizeBytes);
       DatabaseBackupService().scheduleBackup();
 
       // 3. AGGRESSIVE CACHE CLEANUP

@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'auto_sync_service.dart';
 import 'cloud/cloud_service.dart';
 import 'database_service.dart';
 
@@ -49,7 +51,13 @@ class SyncService {
 
       _lastSyncTime = DateTime.now();
 
-      // 5. Notify all subscribed screens
+      // 5. If auto-sync is enabled, upload new gallery photos (foreground)
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool('auto_sync_enabled') == true) {
+        await AutoSyncService().runFullSync();
+      }
+
+      // 6. Notify all subscribed screens
       syncNotifier.value++;
     } catch (e) {
       debugPrint('SyncService error: $e');
