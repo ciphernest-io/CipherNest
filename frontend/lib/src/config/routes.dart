@@ -13,6 +13,8 @@ import '../screens/documents/documents_screen.dart';
 import '../screens/settings/settings_screen.dart';
 import '../screens/settings/key_management_screen.dart';
 import '../screens/migration/migration_screen.dart';
+import '../screens/gallery/album_detail_screen.dart';
+import '../models/album_model.dart';
 
 class AppRoutes {
   static const String splash = '/';
@@ -28,6 +30,7 @@ class AppRoutes {
   static const String settings = '/settings'; 
   static const String keyManagement = '/key-management';
   static const String migration = '/migration';
+  static const String albumDetail = '/album-detail';
 
   // CHANGED argument name to 'routeSettings' to avoid conflict
   static Route<dynamic> generateRoute(RouteSettings routeSettings) {
@@ -70,6 +73,12 @@ class AppRoutes {
 
       case migration:
         return MaterialPageRoute(builder: (_) => const MigrationScreen());
+
+      case albumDetail:
+        final album = routeSettings.arguments as CnestAlbum;
+        return MaterialPageRoute(
+          builder: (_) => AlbumDetailScreen(album: album),
+        );
 
       default:
         return MaterialPageRoute(
