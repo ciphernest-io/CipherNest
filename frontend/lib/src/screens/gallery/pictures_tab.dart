@@ -258,6 +258,18 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
   Future<void> _loadThumbnail() async {
     if (!mounted) return;
 
+    // LOCAL-FIRST: If the original exists on device, use it directly (no decryption).
+    // Skip for videos — generating a thumbnail from a local video per grid item is too expensive.
+    if (!_isVideo && widget.file.localPath != null) {
+      final localFile = File(widget.file.localPath!);
+      if (await localFile.exists()) {
+        final bytes = await localFile.readAsBytes();
+        if (mounted) setState(() { _imageData = bytes; _loading = false; });
+        return;
+      }
+    }
+
+    // CLOUD FALLBACK: download encrypted thumbnail, decrypt, cache
     if (_isVideo && widget.file.thumbnailCloudId == null) {
       if (mounted) setState(() => _loading = false);
       return;

@@ -81,6 +81,10 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     if (index < 0 || index >= _currentFiles.length) return;
     final file = _currentFiles[index];
     if (file.cloudId == null) return;
+
+    // LOCAL-FIRST: skip download if the original exists on device
+    if (file.localPath != null && File(file.localPath!).existsSync()) return;
+
     if (_activeDownloads.contains(file.cloudId)) return;
 
     try {
@@ -598,21 +602,43 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
 
   Future<void> _loadImages() async {
     if (!mounted) return;
+
+    // LOCAL-FIRST: If the original file exists on device, use it directly
+    if (widget.file.localPath != null) {
+      final localFile = File(widget.file.localPath!);
+      if (await localFile.exists()) {
+        if (_isVideo) {
+          // For videos, show thumbnail from local path, video player handles playback
+          if (mounted) {
+            setState(() => _isLoadingFull = false);
+            widget.onLoaded(widget.index);
+          }
+          return;
+        }
+        final bytes = await localFile.readAsBytes();
+        if (mounted) {
+          setState(() {
+            _fullImage = bytes;
+            _isLoadingFull = false;
+          });
+          widget.onLoaded(widget.index);
+        }
+        return;
+      }
+    }
+
+    // CLOUD FALLBACK: existing download+decrypt flow
     final cacheDir = await getTemporaryDirectory();
 
     // 1. THUMBNAIL LOGIC
     final thumbFile = File('${cacheDir.path}/thumb_${widget.file.cloudId}.jpg');
     if (await thumbFile.exists()) {
-      // Case A: Have it? Show it.
       if (mounted) setState(() => _thumbImage = thumbFile.readAsBytesSync());
     } else {
-      // Case B: Don't have it? Download it in background!
-      // This gives us the "Black -> Thumb -> Full" transition you wanted.
       _downloadThumbnail(thumbFile);
     }
 
     // 2. STOP HERE IF VIDEO
-    // (Videos rely on the play button, which sits on top of the thumbnail we just handled)
     if (_isVideo) {
       if (mounted) {
         setState(() => _isLoadingFull = false);
