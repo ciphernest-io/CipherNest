@@ -148,7 +148,6 @@ class DatabaseService {
         'is_uploaded': 1,
         'cloud_id': cloudId,
         'thumbnail_cloud_id': thumbId,
-        'local_path': null, 
       },
       where: 'id = ?',
       whereArgs: [id],

@@ -261,13 +261,14 @@ class MigrationService {
       }
     }
 
-    // Create DB record
+    // Create DB record — store gallery path for local-first loading
     final newFile = CnestFile(
       id: fileId,
       filename: filename,
       sizeBytes: fileSize,
       createdAt: asset.createDateTime,
       isUploaded: false,
+      localPath: file.path,
       type: isImage ? CnestFileType.image : CnestFileType.document,
       provider: 0,
       accountId: email,

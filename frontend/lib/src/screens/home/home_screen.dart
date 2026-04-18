@@ -215,12 +215,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       if (currentEmail == null) throw Exception('No active account.');
 
+      // Detect if picked from local storage vs a cloud content provider
+      final isLocalFile = pickedPath.startsWith('/storage/') || pickedPath.startsWith('/sdcard/');
+
       final newFile = CnestFile(
         id: fileId,
         filename: filename,
         sizeBytes: fileSize,
         createdAt: DateTime.now(),
         isUploaded: false,
+        localPath: isLocalFile ? pickedPath : null,
         type: type,
         provider: 0,
         accountId: currentEmail,
@@ -277,16 +281,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId);
       DatabaseBackupService().scheduleBackup();
 
-      // --- 6. CACHE MANAGEMENT (THE FIX) ---
+      // --- 6. CACHE MANAGEMENT ---
       try {
-
-        // B. DELETE SOURCE FILE (So we don't double-dip storage)
-        // This ensures the cache stays empty until you explicitly view the file later.
-        final pickerFile = File(pickedPath);
-        if (await pickerFile.exists()) {
-          await pickerFile.delete();
+        // Only delete the source if it's a temp file from a cloud content provider.
+        // Local gallery files are kept for local-first thumbnail loading.
+        if (!isLocalFile) {
+          final pickerFile = File(pickedPath);
+          if (await pickerFile.exists()) {
+            await pickerFile.delete();
+          }
         }
-            } catch (e) {
+      } catch (e) {
         debugPrint("Cleanup warning: $e");
       }
 

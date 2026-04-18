@@ -247,6 +247,17 @@ class _ThumbnailLoaderState extends State<_ThumbnailLoader> {
   }
 
   Future<void> _load() async {
+    // LOCAL-FIRST: use device file if it exists
+    if (widget.file.localPath != null) {
+      final localFile = File(widget.file.localPath!);
+      if (await localFile.exists()) {
+        final bytes = await localFile.readAsBytes();
+        if (mounted) setState(() => _bytes = bytes);
+        return;
+      }
+    }
+
+    // CLOUD FALLBACK
     final targetId =
         widget.file.thumbnailCloudId ?? widget.file.cloudId;
     if (targetId == null) return;
