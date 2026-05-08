@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../config/theme.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 import '../../models/album_model.dart';
 import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
@@ -137,20 +137,21 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   }
 
   Future<void> _showOptions() async {
+    final cs = Theme.of(context).colorScheme;
     final action = await showModalBottomSheet<String>(
       context: context,
-      backgroundColor: AppColors.surface,
+      backgroundColor: cs.surface,
       builder: (ctx) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.edit, color: Colors.white),
-              title: const Text('Rename Album', style: TextStyle(color: Colors.white)),
+              leading: Icon(PhosphorIcons.pencilSimple(PhosphorIconsStyle.thin), color: cs.onSurface),
+              title: Text('Rename Album', style: TextStyle(color: cs.onSurface)),
               onTap: () => Navigator.pop(ctx, 'rename'),
             ),
             ListTile(
-              leading: const Icon(Icons.delete, color: Colors.redAccent),
+              leading: Icon(PhosphorIcons.trash(PhosphorIconsStyle.thin), color: Colors.redAccent),
               title: const Text('Delete Album', style: TextStyle(color: Colors.redAccent)),
               onTap: () => Navigator.pop(ctx, 'delete'),
             ),
@@ -208,17 +209,17 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         title: Text(widget.album.name),
         actions: [
           if (!widget.album.isSmart) ...[
-            IconButton(icon: const Icon(Icons.add_photo_alternate), onPressed: _addPhotos),
-            IconButton(icon: const Icon(Icons.more_vert), onPressed: _showOptions),
+            IconButton(icon: Icon(PhosphorIcons.imageSquare(PhosphorIconsStyle.thin)), onPressed: _addPhotos),
+            IconButton(icon: Icon(PhosphorIcons.dotsThreeVertical(PhosphorIconsStyle.thin)), onPressed: _showOptions),
           ],
         ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _files.isEmpty
-              ? const Center(
+              ? Center(
                   child: Text('No photos in this album',
-                      style: TextStyle(color: Colors.grey)))
+                      style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(120))))
               : GridView.builder(
                   padding: EdgeInsets.zero,
                   gridDelegate:
@@ -259,20 +260,21 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   }
 
   Future<void> _showItemOptions(CnestFile file) async {
+    final cs = Theme.of(context).colorScheme;
     final action = await showModalBottomSheet<String>(
       context: context,
-      backgroundColor: AppColors.surface,
+      backgroundColor: cs.surface,
       builder: (ctx) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.remove_circle_outline, color: Colors.orangeAccent),
-              title: const Text('Remove from Album', style: TextStyle(color: Colors.white)),
+              leading: Icon(PhosphorIcons.minusCircle(PhosphorIconsStyle.thin), color: cs.primary),
+              title: Text('Remove from Album', style: TextStyle(color: cs.onSurface)),
               onTap: () => Navigator.pop(ctx, 'remove'),
             ),
             ListTile(
-              leading: const Icon(Icons.delete, color: Colors.redAccent),
+              leading: Icon(PhosphorIcons.trash(PhosphorIconsStyle.thin), color: Colors.redAccent),
               title: const Text('Delete from Vault', style: TextStyle(color: Colors.redAccent)),
               onTap: () => Navigator.pop(ctx, 'delete'),
             ),
@@ -302,6 +304,7 @@ class _VaultPhotoPickerState extends State<_VaultPhotoPicker> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
         title: Text('${_selected.length} selected'),
@@ -317,7 +320,7 @@ class _VaultPhotoPickerState extends State<_VaultPhotoPicker> {
             child: Text('Add',
                 style: TextStyle(
                     color:
-                        _selected.isEmpty ? Colors.grey : AppColors.primary,
+                        _selected.isEmpty ? cs.onSurface.withAlpha(120) : cs.primary,
                     fontWeight: FontWeight.bold)),
           ),
         ],
@@ -357,13 +360,13 @@ class _VaultPhotoPickerState extends State<_VaultPhotoPicker> {
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color:
-                          isSelected ? AppColors.primary : Colors.black38,
+                          isSelected ? cs.primary : Colors.black38,
                       border:
-                          Border.all(color: Colors.white, width: 1.5),
+                          Border.all(color: cs.onSurface, width: 1.5),
                     ),
                     child: isSelected
-                        ? const Icon(Icons.check,
-                            size: 16, color: Colors.white)
+                        ? Icon(PhosphorIcons.check(PhosphorIconsStyle.fill),
+                            size: 16, color: cs.onPrimary)
                         : null,
                   ),
                 ),

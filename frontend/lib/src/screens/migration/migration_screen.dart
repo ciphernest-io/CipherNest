@@ -1,8 +1,9 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:photo_manager/photo_manager.dart';
 import '../../config/routes.dart';
-import '../../config/theme.dart';
+
 import '../../../services/migration_service.dart';
 
 enum _MigrationPhase { choosing, selectingAlbums, scanning, ready, migrating, paused, complete }
@@ -195,7 +196,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
           leading: _phase == _MigrationPhase.selectingAlbums ||
                   _phase == _MigrationPhase.ready
               ? IconButton(
-                  icon: const Icon(Icons.arrow_back),
+                  icon: Icon(PhosphorIcons.arrowLeft(PhosphorIconsStyle.thin)),
                   onPressed: () => setState(() => _phase = _MigrationPhase.choosing),
                 )
               : null,
@@ -228,39 +229,40 @@ class _MigrationScreenState extends State<MigrationScreen> {
 
   // --- PHASE: Choosing migration mode ---
   Widget _buildChoosing() {
+    final cs = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 20),
-        const Icon(Icons.photo_library, color: Colors.cyanAccent, size: 48),
+        Icon(PhosphorIcons.images(PhosphorIconsStyle.thin), color: cs.primary, size: 48),
         const SizedBox(height: 16),
-        const Text(
+        Text(
           'Import Your Gallery',
-          style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+          style: TextStyle(color: cs.onSurface, fontSize: 24, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
         Text(
           'Choose what to migrate into CipherNest. '
           'Files already in your vault will be skipped automatically.',
-          style: TextStyle(color: Colors.grey[400], fontSize: 14),
+          style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 14),
         ),
         const SizedBox(height: 32),
         _MigrationOption(
-          icon: Icons.all_inclusive,
+          icon: PhosphorIcons.infinity(PhosphorIconsStyle.thin),
           title: 'Entire Gallery',
           subtitle: 'Encrypt all photos and videos on this device',
           onTap: _scanFullGallery,
         ),
         const SizedBox(height: 12),
         _MigrationOption(
-          icon: Icons.photo_album,
+          icon: PhosphorIcons.folderSimple(PhosphorIconsStyle.thin),
           title: 'Select Albums',
           subtitle: 'Choose specific albums to migrate',
           onTap: _showAlbumPicker,
         ),
         const SizedBox(height: 12),
         _MigrationOption(
-          icon: Icons.touch_app,
+          icon: PhosphorIcons.handTap(PhosphorIconsStyle.thin),
           title: 'Pick Photos Manually',
           subtitle: 'Hand-pick individual photos and videos',
           onTap: _pickManualPhotos,
@@ -271,17 +273,18 @@ class _MigrationScreenState extends State<MigrationScreen> {
 
   // --- PHASE: Album selector ---
   Widget _buildAlbumSelector() {
+    final cs = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
+        Text(
           'Select Albums',
-          style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
+          style: TextStyle(color: cs.onSurface, fontSize: 22, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
         Text(
           '${_selectedAlbumIndices.length} album${_selectedAlbumIndices.length == 1 ? '' : 's'} selected',
-          style: const TextStyle(color: Colors.grey, fontSize: 14),
+          style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 14),
         ),
         const SizedBox(height: 16),
         Expanded(
@@ -292,14 +295,14 @@ class _MigrationScreenState extends State<MigrationScreen> {
               final selected = _selectedAlbumIndices.contains(index);
               return CheckboxListTile(
                 value: selected,
-                activeColor: Colors.cyanAccent,
-                checkColor: Colors.black,
-                title: Text(album.name, style: const TextStyle(color: Colors.white)),
+                activeColor: cs.primary,
+                checkColor: cs.onPrimary,
+                title: Text(album.name, style: TextStyle(color: cs.onSurface)),
                 subtitle: Text(
                   '${album.count} item${album.count == 1 ? '' : 's'}',
-                  style: const TextStyle(color: Colors.grey),
+                  style: TextStyle(color: cs.onSurface.withAlpha(120)),
                 ),
-                secondary: const Icon(Icons.photo_album, color: Colors.grey),
+                secondary: Icon(PhosphorIcons.folderSimple(PhosphorIconsStyle.thin), color: cs.onSurface.withAlpha(120)),
                 onChanged: (val) {
                   setState(() {
                     if (val == true) {
@@ -319,9 +322,9 @@ class _MigrationScreenState extends State<MigrationScreen> {
           child: ElevatedButton(
             onPressed: _selectedAlbumIndices.isEmpty ? null : _scanSelectedAlbums,
             style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              foregroundColor: Colors.white,
-              disabledBackgroundColor: Colors.grey[800],
+              backgroundColor: cs.primary,
+              foregroundColor: cs.onPrimary,
+              disabledBackgroundColor: cs.surfaceContainerHighest,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
             ),
             child: Text('Scan ${_selectedAlbumIndices.length} Album${_selectedAlbumIndices.length == 1 ? '' : 's'}'),
@@ -334,15 +337,16 @@ class _MigrationScreenState extends State<MigrationScreen> {
 
   // --- PHASE: Scanning gallery ---
   Widget _buildScanning() {
-    return const Center(
+    final cs = Theme.of(context).colorScheme;
+    return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          CircularProgressIndicator(),
-          SizedBox(height: 24),
-          Text('Scanning your gallery...', style: TextStyle(color: Colors.white, fontSize: 18)),
-          SizedBox(height: 8),
-          Text('This may take a moment for large libraries', style: TextStyle(color: Colors.grey, fontSize: 14)),
+          const CircularProgressIndicator(),
+          const SizedBox(height: 24),
+          Text('Scanning your gallery...', style: TextStyle(color: cs.onSurface, fontSize: 18)),
+          const SizedBox(height: 8),
+          Text('This may take a moment for large libraries', style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 14)),
         ],
       ),
     );
@@ -350,22 +354,24 @@ class _MigrationScreenState extends State<MigrationScreen> {
 
   // --- PHASE: Ready to migrate ---
   Widget _buildReady() {
+    final cs = Theme.of(context).colorScheme;
+
     if (_assets.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.check_circle, color: Colors.greenAccent, size: 64),
+            Icon(PhosphorIcons.checkCircle(PhosphorIconsStyle.fill), color: Colors.greenAccent, size: 64),
             const SizedBox(height: 16),
-            const Text('All caught up!',
-                style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+            Text('All caught up!',
+                style: TextStyle(color: cs.onSurface, fontSize: 22, fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
-            const Text('All selected photos are already in CipherNest.',
-                style: TextStyle(color: Colors.grey, fontSize: 14), textAlign: TextAlign.center),
+            Text('All selected photos are already in CipherNest.',
+                style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 14), textAlign: TextAlign.center),
             const SizedBox(height: 32),
             ElevatedButton(
               onPressed: () => Navigator.pop(context),
-              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+              style: ElevatedButton.styleFrom(backgroundColor: cs.primary, foregroundColor: cs.onPrimary),
               child: const Text('Done'),
             ),
           ],
@@ -382,43 +388,43 @@ class _MigrationScreenState extends State<MigrationScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 20),
-        const Text('Ready to Migrate',
-            style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+        Text('Ready to Migrate',
+            style: TextStyle(color: cs.onSurface, fontSize: 24, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
         Text('Encrypt and upload the selected media to CipherNest.',
-            style: TextStyle(color: Colors.grey[400], fontSize: 14)),
+            style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 14)),
         const SizedBox(height: 32),
         Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            color: AppColors.surface,
+            color: cs.surface,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white10),
+            border: Border.all(color: cs.outline),
           ),
           child: Column(
             children: [
-              _StatRow(label: 'Photos', value: '$photoCount', icon: Icons.image),
+              _StatRow(label: 'Photos', value: '$photoCount', icon: PhosphorIcons.image(PhosphorIconsStyle.thin)),
               if (videoCount > 0)
-                _StatRow(label: 'Videos', value: '$videoCount', icon: Icons.videocam),
-              _StatRow(label: 'Total Size', value: _formatBytes(_totalBytes), icon: Icons.storage),
-              _StatRow(label: 'Estimated Time', value: '~${_formatDuration(estimatedDuration)}', icon: Icons.timer),
+                _StatRow(label: 'Videos', value: '$videoCount', icon: PhosphorIcons.videoCamera(PhosphorIconsStyle.thin)),
+              _StatRow(label: 'Total Size', value: _formatBytes(_totalBytes), icon: PhosphorIcons.hardDrive(PhosphorIconsStyle.thin)),
+              _StatRow(label: 'Estimated Time', value: '~${_formatDuration(estimatedDuration)}', icon: PhosphorIcons.timer(PhosphorIconsStyle.thin)),
             ],
           ),
         ),
         const SizedBox(height: 16),
         Text('You can pause or cancel at any time. Already-uploaded files will not be affected.',
-            style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+            style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 12)),
         const Spacer(),
         SizedBox(
           width: double.infinity,
           height: 52,
           child: ElevatedButton.icon(
             onPressed: _startMigration,
-            icon: const Icon(Icons.lock, color: Colors.white),
+            icon: Icon(PhosphorIcons.lock(PhosphorIconsStyle.thin), color: cs.onPrimary),
             label: const Text('Start Migration', style: TextStyle(fontSize: 16)),
             style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              foregroundColor: Colors.white,
+              backgroundColor: cs.primary,
+              foregroundColor: cs.onPrimary,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
             ),
           ),
@@ -430,6 +436,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
 
   // --- PHASE: Migrating (and Paused) ---
   Widget _buildMigrating() {
+    final cs = Theme.of(context).colorScheme;
     final p = _progress;
     final fraction = p != null && p.total > 0 ? p.current / p.total : 0.0;
     final percent = (fraction * 100).toStringAsFixed(0);
@@ -440,12 +447,12 @@ class _MigrationScreenState extends State<MigrationScreen> {
         const SizedBox(height: 20),
         Text(
           _phase == _MigrationPhase.paused ? 'Paused' : 'Migrating...',
-          style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+          style: TextStyle(color: cs.onSurface, fontSize: 24, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
         if (p != null)
           Text('Encrypting: ${p.currentFileName}',
-              style: const TextStyle(color: Colors.grey, fontSize: 13),
+              style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 13),
               maxLines: 1, overflow: TextOverflow.ellipsis),
         const SizedBox(height: 32),
         Center(
@@ -458,9 +465,9 @@ class _MigrationScreenState extends State<MigrationScreen> {
                   width: 160, height: 160,
                   child: CircularProgressIndicator(
                     value: fraction, strokeWidth: 8,
-                    backgroundColor: Colors.white10,
+                    backgroundColor: cs.outline,
                     valueColor: AlwaysStoppedAnimation<Color>(
-                      _phase == _MigrationPhase.paused ? Colors.orangeAccent : Colors.cyanAccent,
+                      _phase == _MigrationPhase.paused ? Colors.orangeAccent : cs.primary,
                     ),
                   ),
                 ),
@@ -468,9 +475,9 @@ class _MigrationScreenState extends State<MigrationScreen> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Text('$percent%',
-                        style: const TextStyle(color: Colors.white, fontSize: 36, fontWeight: FontWeight.bold)),
+                        style: TextStyle(color: cs.onSurface, fontSize: 36, fontWeight: FontWeight.bold)),
                     if (p != null)
-                      Text('${p.current} / ${p.total}', style: const TextStyle(color: Colors.grey, fontSize: 14)),
+                      Text('${p.current} / ${p.total}', style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 14)),
                   ],
                 ),
               ],
@@ -482,17 +489,17 @@ class _MigrationScreenState extends State<MigrationScreen> {
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: AppColors.surface,
+              color: cs.surface,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white10),
+              border: Border.all(color: cs.outline),
             ),
             child: Column(
               children: [
-                _StatRow(label: 'Secured', value: '${p.synced}', icon: Icons.check_circle, color: Colors.greenAccent),
+                _StatRow(label: 'Secured', value: '${p.synced}', icon: PhosphorIcons.checkCircle(PhosphorIconsStyle.fill), color: Colors.greenAccent),
                 if (p.failed > 0)
-                  _StatRow(label: 'Failed', value: '${p.failed}', icon: Icons.error, color: Colors.redAccent),
-                _StatRow(label: 'Uploaded', value: _formatBytes(p.bytesUploaded), icon: Icons.cloud_upload),
-                _StatRow(label: 'ETA', value: _formatDuration(p.eta), icon: Icons.timer),
+                  _StatRow(label: 'Failed', value: '${p.failed}', icon: PhosphorIcons.warning(PhosphorIconsStyle.fill), color: Colors.redAccent),
+                _StatRow(label: 'Uploaded', value: _formatBytes(p.bytesUploaded), icon: PhosphorIcons.cloudArrowUp(PhosphorIconsStyle.thin)),
+                _StatRow(label: 'ETA', value: _formatDuration(p.eta), icon: PhosphorIcons.timer(PhosphorIconsStyle.thin)),
               ],
             ),
           ),
@@ -515,8 +522,8 @@ class _MigrationScreenState extends State<MigrationScreen> {
               child: ElevatedButton(
                 onPressed: _phase == _MigrationPhase.paused ? _resume : _pause,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: _phase == _MigrationPhase.paused ? Colors.cyanAccent : Colors.orangeAccent,
-                  foregroundColor: Colors.black,
+                  backgroundColor: _phase == _MigrationPhase.paused ? cs.primary : Colors.orangeAccent,
+                  foregroundColor: cs.onPrimary,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
                 child: Text(_phase == _MigrationPhase.paused ? 'Resume' : 'Pause'),
@@ -531,37 +538,38 @@ class _MigrationScreenState extends State<MigrationScreen> {
 
   // --- PHASE: Complete ---
   Widget _buildComplete() {
+    final cs = Theme.of(context).colorScheme;
     final r = _result;
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
-            r != null && r.failed == 0 ? Icons.check_circle : Icons.info_outline,
+            r != null && r.failed == 0 ? PhosphorIcons.checkCircle(PhosphorIconsStyle.fill) : PhosphorIcons.info(PhosphorIconsStyle.thin),
             color: r != null && r.failed == 0 ? Colors.greenAccent : Colors.orangeAccent,
             size: 72,
           ),
           const SizedBox(height: 20),
           Text(
             r != null && r.failed == 0 ? 'Migration Complete' : 'Migration Finished',
-            style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+            style: TextStyle(color: cs.onSurface, fontSize: 24, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 24),
           if (r != null)
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: AppColors.surface,
+                color: cs.surface,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white10),
+                border: Border.all(color: cs.outline),
               ),
               child: Column(
                 children: [
-                  _StatRow(label: 'Secured', value: '${r.synced}', icon: Icons.check_circle, color: Colors.greenAccent),
+                  _StatRow(label: 'Secured', value: '${r.synced}', icon: PhosphorIcons.checkCircle(PhosphorIconsStyle.fill), color: Colors.greenAccent),
                   if (r.failed > 0)
-                    _StatRow(label: 'Failed', value: '${r.failed}', icon: Icons.error, color: Colors.redAccent),
+                    _StatRow(label: 'Failed', value: '${r.failed}', icon: PhosphorIcons.warning(PhosphorIconsStyle.fill), color: Colors.redAccent),
                   if (r.skipped > 0)
-                    _StatRow(label: 'Skipped', value: '${r.skipped}', icon: Icons.skip_next, color: Colors.grey),
+                    _StatRow(label: 'Skipped', value: '${r.skipped}', icon: PhosphorIcons.skipForward(PhosphorIconsStyle.thin), color: Colors.grey),
                 ],
               ),
             ),
@@ -571,8 +579,8 @@ class _MigrationScreenState extends State<MigrationScreen> {
             child: ElevatedButton(
               onPressed: () => Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false),
               style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: Colors.white,
+                backgroundColor: cs.primary,
+                foregroundColor: cs.onPrimary,
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),
               child: const Text('Go to Gallery', style: TextStyle(fontSize: 16)),
@@ -624,31 +632,32 @@ class _MigrationOption extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(14),
       child: Container(
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
-          color: AppColors.surface,
+          color: cs.surface,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.white10),
+          border: Border.all(color: cs.outline),
         ),
         child: Row(
           children: [
-            Icon(icon, color: Colors.cyanAccent, size: 28),
+            Icon(icon, color: cs.primary, size: 28),
             const SizedBox(width: 16),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 16)),
+                  Text(title, style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w600, fontSize: 16)),
                   const SizedBox(height: 2),
-                  Text(subtitle, style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                  Text(subtitle, style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 13)),
                 ],
               ),
             ),
-            const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+            Icon(PhosphorIcons.caretRight(PhosphorIconsStyle.thin), size: 16, color: cs.onSurface.withAlpha(120)),
           ],
         ),
       ),
@@ -670,6 +679,7 @@ class _AssetPickerScreenState extends State<_AssetPickerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
         title: Text('${_selected.length} selected'),
@@ -684,7 +694,7 @@ class _AssetPickerScreenState extends State<_AssetPickerScreen> {
             child: Text(
               'Done',
               style: TextStyle(
-                color: _selected.isEmpty ? Colors.grey : Colors.cyanAccent,
+                color: _selected.isEmpty ? cs.onSurface.withAlpha(120) : cs.primary,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -722,13 +732,13 @@ class _AssetPickerScreenState extends State<_AssetPickerScreen> {
                     if (snap.hasData && snap.data != null) {
                       return Image.memory(snap.data!, fit: BoxFit.cover);
                     }
-                    return Container(color: Colors.grey[900]);
+                    return Container(color: cs.surfaceContainerHighest);
                   },
                 ),
                 if (asset.type == AssetType.video)
-                  const Positioned(
+                  Positioned(
                     bottom: 4, right: 4,
-                    child: Icon(Icons.videocam, color: Colors.white, size: 18),
+                    child: Icon(PhosphorIcons.videoCamera(PhosphorIconsStyle.thin), color: cs.onSurface, size: 18),
                   ),
                 Positioned(
                   top: 4, right: 4,
@@ -736,11 +746,11 @@ class _AssetPickerScreenState extends State<_AssetPickerScreen> {
                     width: 24, height: 24,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: isSelected ? Colors.cyanAccent : Colors.black38,
-                      border: Border.all(color: Colors.white, width: 1.5),
+                      color: isSelected ? cs.primary : Colors.black38,
+                      border: Border.all(color: cs.onSurface, width: 1.5),
                     ),
                     child: isSelected
-                        ? const Icon(Icons.check, size: 16, color: Colors.black)
+                        ? Icon(PhosphorIcons.check(PhosphorIconsStyle.fill), size: 16, color: cs.onPrimary)
                         : null,
                   ),
                 ),
@@ -768,16 +778,17 @@ class _StatRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
-          Icon(icon, size: 18, color: color ?? Colors.grey),
+          Icon(icon, size: 18, color: color ?? cs.onSurface.withAlpha(120)),
           const SizedBox(width: 12),
-          Text(label, style: const TextStyle(color: Colors.grey, fontSize: 14)),
+          Text(label, style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 14)),
           const Spacer(),
           Text(value,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
+              style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w600, fontSize: 14)),
         ],
       ),
     );

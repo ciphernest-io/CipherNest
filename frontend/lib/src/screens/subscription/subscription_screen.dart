@@ -1,8 +1,8 @@
 import 'dart:io'; // <--- Added for exit(0)
 import 'package:flutter/material.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 
 import '../../config/routes.dart';
-import '../../config/theme.dart';
 
 class SubscriptionScreen extends StatelessWidget {
   const SubscriptionScreen({super.key});
@@ -44,9 +44,9 @@ class SubscriptionScreen extends StatelessWidget {
                     exit(0);
                   }
                 },
-                child: const Text(
+                child: Text(
                   'Maybe later',
-                  style: TextStyle(color: Colors.grey),
+                  style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(120)),
                 ),
               ),
 
@@ -62,14 +62,15 @@ class SubscriptionScreen extends StatelessWidget {
 class _PlanCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: cs.surface,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: AppColors.primary.withOpacity(0.4),
+          color: cs.primary.withAlpha(102),
           width: 1,
         ),
       ),
@@ -81,7 +82,7 @@ class _PlanCard extends StatelessWidget {
               vertical: 6,
             ),
             decoration: BoxDecoration(
-              color: AppColors.primary.withOpacity(0.15),
+              color: cs.primary.withAlpha(38),
               borderRadius: BorderRadius.circular(20),
             ),
             child: Text(
@@ -90,7 +91,7 @@ class _PlanCard extends StatelessWidget {
                   .textTheme
                   .bodyMedium
                   ?.copyWith(
-                    color: AppColors.primary,
+                    color: cs.primary,
                     fontWeight: FontWeight.w600,
                     letterSpacing: 1.1,
                   ),
@@ -144,13 +145,14 @@ class _FeatureItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
       child: Row(
         children: [
-          const Icon(
-            Icons.check_circle,
-            color: AppColors.primary,
+          Icon(
+            PhosphorIcons.checkCircle(PhosphorIconsStyle.fill),
+            color: cs.primary,
             size: 18,
           ),
           const SizedBox(width: 12),

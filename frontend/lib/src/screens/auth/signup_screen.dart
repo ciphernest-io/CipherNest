@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:flutter/services.dart';
 import '../../../services/key_manager_service.dart';
 import '../../config/routes.dart';
-import '../../config/theme.dart';
 
 class SignUpScreen extends StatefulWidget {
   const SignUpScreen({super.key});
@@ -118,13 +118,14 @@ class _SignUpScreenState extends State<SignUpScreen> {
   }
 
   Widget _buildRecoveryPhaseView() {
+    final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(title: const Text('Recovery Phrase')),
       body: Padding(
         padding: const EdgeInsets.all(24.0),
         child: Column(
           children: [
-            const Icon(Icons.security, size: 64, color: AppColors.primary),
+            Icon(PhosphorIcons.shieldCheck(PhosphorIconsStyle.thin), size: 64, color: cs.primary),
             const SizedBox(height: 24),
             Text(
               'Write this down!',
@@ -142,9 +143,9 @@ class _SignUpScreenState extends State<SignUpScreen> {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: AppColors.surface,
+                color: cs.surface,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.divider),
+                border: Border.all(color: cs.outline),
               ),
               child: Text(
                 _recoveryPhrase!,
@@ -165,7 +166,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   const SnackBar(content: Text('Copied to clipboard')),
                 );
               },
-              icon: const Icon(Icons.copy),
+              icon: Icon(PhosphorIcons.copy(PhosphorIconsStyle.thin)),
               label: const Text('Copy to Clipboard'),
             ),
             const Spacer(),
@@ -185,8 +186,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
               child: ElevatedButton(
                 onPressed: _copying ? _completeSetup : null,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: _copying ? AppColors.primary : Colors.grey,
-                  foregroundColor: Colors.white,
+                  backgroundColor: _copying ? cs.primary : cs.surfaceContainerHighest,
+                  foregroundColor: cs.onPrimary,
                 ),
                 child: const Text('I saved it. Enter CipherNest.'),
               ),

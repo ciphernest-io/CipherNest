@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../config/theme.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 import '../../../services/cloud/cloud_service.dart';
 
 class KeyManagementScreen extends StatefulWidget {
@@ -40,6 +40,7 @@ class _KeyManagementScreenState extends State<KeyManagementScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(title: const Text('Security Center')),
       body: Padding(
@@ -47,23 +48,23 @@ class _KeyManagementScreenState extends State<KeyManagementScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               "Encryption Status",
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: cs.onSurface),
             ),
             const SizedBox(height: 16),
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: Colors.black26,
+                color: cs.surface,
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: _resultColor),
               ),
               child: Column(
                 children: [
                   Icon(
-                    _resultColor == Colors.greenAccent ? Icons.lock : Icons.lock_clock,
+                    _resultColor == Colors.greenAccent ? PhosphorIcons.lock(PhosphorIconsStyle.thin) : PhosphorIcons.clock(PhosphorIconsStyle.thin),
                     size: 48,
                     color: _resultColor,
                   ),
@@ -88,23 +89,23 @@ class _KeyManagementScreenState extends State<KeyManagementScreen> {
               height: 50,
               child: ElevatedButton.icon(
                 onPressed: _isTesting ? null : _runCanaryTest,
-                icon: const Icon(Icons.health_and_safety),
+                icon: Icon(PhosphorIcons.shieldCheck(PhosphorIconsStyle.thin)),
                 label: const Text("Run Integrity Check"),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
+                  backgroundColor: cs.primary,
+                  foregroundColor: cs.onPrimary,
                 ),
               ),
             ),
             const SizedBox(height: 24),
-            const Text(
+            Text(
               "Technical Details:",
-              style: TextStyle(color: Colors.grey),
+              style: TextStyle(color: cs.onSurface.withAlpha(120)),
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               "• Algorithm: AES-256-GCM\n• Key Storage: Android Keystore / iOS Keychain\n• Protocol: Google Drive AppData Scope",
-              style: TextStyle(color: Colors.white54, height: 1.5, fontFamily: 'Courier'),
+              style: TextStyle(color: cs.onSurface.withAlpha(140), height: 1.5, fontFamily: 'Courier'),
             ),
           ],
         ),

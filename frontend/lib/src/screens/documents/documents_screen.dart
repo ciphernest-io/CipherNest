@@ -1,11 +1,12 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:open_file/open_file.dart'; // Launches native PDF reader
 import 'package:path_provider/path_provider.dart'; // For temp storage
 import 'package:intl/intl.dart'; // You might need to add intl to pubspec
 import 'dart:typed_data';
 
-import '../../config/theme.dart';
+
 import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
@@ -125,12 +126,14 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('My Documents'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.sync),
+            icon: Icon(PhosphorIcons.arrowsClockwise(PhosphorIconsStyle.thin)),
             onPressed: _handleSync,
           )
         ],
@@ -153,9 +156,9 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                   Center(
                     child: Column(
                       children: [
-                        Icon(Icons.folder_open, size: 64, color: Colors.grey[800]),
+                        Icon(PhosphorIcons.folderOpen(PhosphorIconsStyle.thin), size: 64, color: cs.surfaceContainerHighest),
                         const SizedBox(height: 16),
-                        const Text('No documents found', style: TextStyle(color: Colors.grey)),
+                        Text('No documents found', style: TextStyle(color: cs.onSurface.withAlpha(120))),
                       ],
                     ),
                   ),
@@ -173,11 +176,11 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
               final isOpening = _openingFileId == file.id;
 
               return Container(
-                height: 90, // Taller row for better preview
+                height: 90,
                 decoration: BoxDecoration(
-                  color: AppColors.surface, // Use your theme surface color
+                  color: cs.surface,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.white10),
+                  border: Border.all(color: cs.outline),
                 ),
                 child: InkWell(
                   onTap: () => _handleOpen(file),
@@ -186,18 +189,18 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                     children: [
                       // --- BIG THUMBNAIL (Left) ---
                       Container(
-                        width: 80, 
+                        width: 80,
                         height: double.infinity,
-                        decoration: const BoxDecoration(
-                          color: Colors.black26,
-                          borderRadius: BorderRadius.horizontal(left: Radius.circular(12)),
+                        decoration: BoxDecoration(
+                          color: cs.surface,
+                          borderRadius: const BorderRadius.horizontal(left: Radius.circular(12)),
                         ),
                         child: _DocumentThumbnail(
-                          key: ValueKey(file.id), // <--- THIS FIXES THE JUMBLING
+                          key: ValueKey(file.id),
                           file: file,
                         ),
                       ),
-                      
+
                       // --- TEXT INFO (Middle) ---
                       Expanded(
                         child: Padding(
@@ -208,8 +211,8 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                             children: [
                               Text(
                                 file.filename,
-                                style: const TextStyle(
-                                  color: Colors.white, 
+                                style: TextStyle(
+                                  color: cs.onSurface,
                                   fontWeight: FontWeight.w600,
                                   fontSize: 16,
                                 ),
@@ -218,7 +221,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                               ),
                               const SizedBox(height: 6),
                               FittedBox(
-                                fit: BoxFit.scaleDown, 
+                                fit: BoxFit.scaleDown,
                                 alignment: Alignment.centerLeft,
                                 child: Row(
                                   children: [
@@ -226,23 +229,23 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                                     Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                       decoration: BoxDecoration(
-                                        color: Colors.white.withOpacity(0.1),
+                                        color: cs.onSurface.withAlpha(25),
                                         borderRadius: BorderRadius.circular(4),
                                       ),
                                       child: Text(
                                         file.filename.split('.').last.toUpperCase(),
-                                        style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold),
+                                        style: TextStyle(color: cs.onSurface.withAlpha(180), fontSize: 10, fontWeight: FontWeight.bold),
                                       ),
                                     ),
                                     const SizedBox(width: 8),
                                     Text(
                                       '${(file.sizeBytes / 1024).toStringAsFixed(0)} KB',
-                                      style: TextStyle(color: Colors.grey[400], fontSize: 12),
+                                      style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 12),
                                     ),
                                     const SizedBox(width: 8),
                                     Text(
                                       '•  ${DateFormat.yMMMd().format(file.createdAt)}',
-                                      style: TextStyle(color: Colors.grey[400], fontSize: 12),
+                                      style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 12),
                                     ),
                                   ],
                                 ),
@@ -254,22 +257,22 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
 
                       // --- ACTIONS (Right) ---
                       if (isOpening)
-                        const Padding(
-                          padding: EdgeInsets.only(right: 24),
+                        Padding(
+                          padding: const EdgeInsets.only(right: 24),
                           child: SizedBox(
-                            width: 20, height: 20, 
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            width: 20, height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: cs.onSurface),
                           ),
                         )
                       else
                         PopupMenuButton(
-                          icon: const Icon(Icons.more_vert, color: Colors.grey),
+                          icon: Icon(PhosphorIcons.dotsThreeVertical(PhosphorIconsStyle.thin), color: cs.onSurface.withAlpha(120)),
                           itemBuilder: (ctx) => [
-                            const PopupMenuItem(
+                            PopupMenuItem(
                               value: 'delete',
                               child: Row(
                                 children: [
-                                  Icon(Icons.delete, color: Colors.red, size: 20),
+                                  Icon(PhosphorIcons.trash(PhosphorIconsStyle.thin), color: Colors.red, size: 20),
                                   SizedBox(width: 12),
                                   Text('Delete', style: TextStyle(color: Colors.red)),
                                 ],
@@ -339,47 +342,47 @@ class _DocumentThumbnailState extends State<_DocumentThumbnail> {
   Widget _buildFallbackIcon() {
     // robust extension parsing
     final ext = widget.file.filename.split('.').last.toLowerCase().trim();
-    
+
     IconData icon;
     Color color;
 
     switch (ext) {
-      case 'pdf': 
-        icon = Icons.picture_as_pdf; 
-        color = Colors.redAccent; 
+      case 'pdf':
+        icon = PhosphorIcons.filePdf(PhosphorIconsStyle.thin);
+        color = const Color(0xFFCC4444);
         break;
-      case 'doc': 
-      case 'docx': 
-        icon = Icons.description; 
-        color = Colors.blueAccent; 
+      case 'doc':
+      case 'docx':
+        icon = PhosphorIcons.fileText(PhosphorIconsStyle.thin);
+        color = const Color(0xFF5588CC);
         break;
-      case 'xls': 
-      case 'xlsx': 
-      case 'csv': 
-        icon = Icons.table_chart; 
-        color = Colors.greenAccent; 
+      case 'xls':
+      case 'xlsx':
+      case 'csv':
+        icon = PhosphorIcons.table(PhosphorIconsStyle.thin);
+        color = const Color(0xFF55AA77);
         break;
-      case 'ppt': 
-      case 'pptx': 
-        icon = Icons.slideshow; 
-        color = Colors.orangeAccent; 
+      case 'ppt':
+      case 'pptx':
+        icon = PhosphorIcons.presentation(PhosphorIconsStyle.thin);
+        color = const Color(0xFFCC8844);
         break;
-      case 'txt': // NEW: Added Text support
-        icon = Icons.text_snippet;
-        color = Colors.grey[400]!;
+      case 'txt':
+        icon = PhosphorIcons.textT(PhosphorIconsStyle.thin);
+        color = Colors.grey;
         break;
       case 'zip':
       case 'rar':
-        icon = Icons.folder_zip;
-        color = Colors.yellowAccent;
+        icon = PhosphorIcons.fileZip(PhosphorIconsStyle.thin);
+        color = const Color(0xFFCCCC55);
         break;
-      default: 
-        icon = Icons.insert_drive_file; 
+      default:
+        icon = PhosphorIcons.file(PhosphorIconsStyle.thin);
         color = Colors.grey;
     }
 
     return Center(
-      child: Icon(icon, color: color.withOpacity(0.8), size: 36),
+      child: Icon(icon, color: color.withAlpha(204), size: 36),
     );
   }
 
