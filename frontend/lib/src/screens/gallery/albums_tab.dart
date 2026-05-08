@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:path_provider/path_provider.dart';
-import '../../config/theme.dart';
 import '../../config/routes.dart';
 import '../../models/album_model.dart';
 import '../../models/file_model.dart';
@@ -73,23 +73,25 @@ class _AlbumsTabState extends State<AlbumsTab> {
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
 
+    final cs = Theme.of(context).colorScheme;
+
     if (_albums.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.photo_album, size: 64, color: Colors.grey),
+            Icon(PhosphorIcons.folderSimple(PhosphorIconsStyle.thin), size: 64, color: cs.onSurface.withAlpha(120)),
             const SizedBox(height: 16),
-            const Text('No albums yet',
-                style: TextStyle(color: Colors.grey)),
+            Text('No albums yet',
+                style: TextStyle(color: cs.onSurface.withAlpha(120))),
             const SizedBox(height: 16),
             ElevatedButton.icon(
               onPressed: _createAlbum,
-              icon: const Icon(Icons.add),
+              icon: Icon(PhosphorIcons.plus(PhosphorIconsStyle.thin)),
               label: const Text('Create Album'),
               style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white),
+                  backgroundColor: cs.primary,
+                  foregroundColor: cs.onPrimary),
             ),
           ],
         ),
@@ -126,22 +128,23 @@ class _AlbumsTabState extends State<AlbumsTab> {
   }
 
   Widget _buildCreateCard() {
+    final cs = Theme.of(context).colorScheme;
     return GestureDetector(
       onTap: _createAlbum,
       child: Container(
         decoration: BoxDecoration(
-          color: AppColors.surface,
+          color: cs.surface,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.white10),
+          border: Border.all(color: cs.outline),
         ),
-        child: const Center(
+        child: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.add, color: Colors.white54, size: 40),
-              SizedBox(height: 8),
+              Icon(PhosphorIcons.plus(PhosphorIconsStyle.thin), color: cs.onSurface.withAlpha(140), size: 40),
+              const SizedBox(height: 8),
               Text('Create Album',
-                  style: TextStyle(color: Colors.white54, fontSize: 13)),
+                  style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 13)),
             ],
           ),
         ),
@@ -200,13 +203,14 @@ class _AlbumCardState extends State<_AlbumCard> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return GestureDetector(
       onTap: widget.onTap,
       child: Container(
         decoration: BoxDecoration(
-          color: AppColors.surface,
+          color: cs.surface,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.white10),
+          border: Border.all(color: cs.outline),
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(
@@ -216,12 +220,12 @@ class _AlbumCardState extends State<_AlbumCard> {
               child: _coverBytes != null
                   ? Image.memory(_coverBytes!, fit: BoxFit.cover)
                   : Container(
-                      color: Colors.grey[900],
+                      color: cs.surfaceContainerHighest,
                       child: Icon(
                         widget.album.isSmart
                             ? _smartAlbumIcon(widget.album.smartQuery)
-                            : Icons.photo_album,
-                        color: Colors.white24,
+                            : PhosphorIcons.folderSimple(PhosphorIconsStyle.thin),
+                        color: cs.onSurface.withAlpha(60),
                         size: 40,
                       ),
                     ),
@@ -232,8 +236,8 @@ class _AlbumCardState extends State<_AlbumCard> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(widget.album.name,
-                      style: const TextStyle(
-                          color: Colors.white,
+                      style: TextStyle(
+                          color: cs.onSurface,
                           fontWeight: FontWeight.w600,
                           fontSize: 14),
                       maxLines: 1,
@@ -241,7 +245,7 @@ class _AlbumCardState extends State<_AlbumCard> {
                   const SizedBox(height: 2),
                   Text('${widget.album.fileCount}',
                       style:
-                          const TextStyle(color: Colors.grey, fontSize: 12)),
+                          TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 12)),
                 ],
               ),
             ),
@@ -254,15 +258,15 @@ class _AlbumCardState extends State<_AlbumCard> {
   IconData _smartAlbumIcon(String? query) {
     switch (query) {
       case 'all_images':
-        return Icons.photo_library;
+        return PhosphorIcons.images(PhosphorIconsStyle.thin);
       case 'camera':
-        return Icons.camera_alt;
+        return PhosphorIcons.camera(PhosphorIconsStyle.thin);
       case 'screenshots':
-        return Icons.screenshot;
+        return PhosphorIcons.screencast(PhosphorIconsStyle.thin);
       case 'videos':
-        return Icons.videocam;
+        return PhosphorIcons.videoCamera(PhosphorIconsStyle.thin);
       default:
-        return Icons.photo_album;
+        return PhosphorIcons.folderSimple(PhosphorIconsStyle.thin);
     }
   }
 }

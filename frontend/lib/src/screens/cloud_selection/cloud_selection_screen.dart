@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 import '../../config/routes.dart';
-import '../../config/theme.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/database_service.dart';
@@ -129,7 +129,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
             _CloudOption(
               title: 'Google Drive',
               subtitle: _isLoading ? 'Connecting...' : 'Recommended',
-              icon: Icons.cloud,
+              icon: PhosphorIcons.cloud(PhosphorIconsStyle.thin),
               enabled: !_isLoading,
               onTap: _connectDrive, // <--- Triggers the flow
             ),
@@ -142,10 +142,10 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
             ],
 
             const SizedBox(height: 16),
-            const _CloudOption(
+            _CloudOption(
               title: 'OneDrive',
               subtitle: 'Coming soon',
-              icon: Icons.cloud_queue,
+              icon: PhosphorIcons.cloud(PhosphorIconsStyle.thin),
               enabled: false,
             ),
           ],
@@ -172,21 +172,22 @@ class _CloudOption extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return InkWell(
       onTap: enabled ? onTap : null,
       borderRadius: BorderRadius.circular(16),
       child: Container(
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: enabled ? AppColors.surface : AppColors.surface.withOpacity(0.5),
+          color: enabled ? cs.surface : cs.surface.withAlpha(128),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: enabled ? AppColors.primary.withOpacity(0.5) : AppColors.divider,
+            color: enabled ? cs.primary.withAlpha(128) : cs.outline,
           ),
         ),
         child: Row(
           children: [
-            Icon(icon, size: 28, color: enabled ? AppColors.primary : AppColors.textSecondary),
+            Icon(icon, size: 28, color: enabled ? cs.primary : cs.onSurface.withAlpha(120)),
             const SizedBox(width: 16),
             Expanded(
               child: Column(

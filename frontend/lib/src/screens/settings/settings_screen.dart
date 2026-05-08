@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart'; // ENABLED
 import '../../config/routes.dart';
@@ -10,6 +11,8 @@ import '../../../services/database_backup_service.dart';
 import '../../../services/cache_manager_service.dart';
 import '../../../services/auto_sync_service.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../../config/theme.dart' show AccentTheme, AccentColors;
+import '../../config/theme_controller.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -253,10 +256,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // ... Account Section ...
           _SectionHeader(title: "Account"),
           ListTile(
-            leading: const CircleAvatar(backgroundColor: Colors.purpleAccent, child: Icon(Icons.person, color: Colors.white)),
+            leading: CircleAvatar(backgroundColor: Colors.purpleAccent, child: Icon(PhosphorIcons.user(PhosphorIconsStyle.thin), color: Colors.white)),
             title: Text(email, style: const TextStyle(color: Colors.white)),
             subtitle: const Text('Google Drive Connected', style: TextStyle(color: Colors.grey)),
-            trailing: IconButton(icon: const Icon(Icons.logout, color: Colors.redAccent), onPressed: _handleSignOut),
+            trailing: IconButton(icon: Icon(PhosphorIcons.signOut(PhosphorIconsStyle.thin), color: Colors.redAccent), onPressed: _handleSignOut),
           ),
           const Divider(color: Colors.white10),
 
@@ -365,22 +368,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
 
           ListTile(
-            leading: const Icon(Icons.cleaning_services, color: Colors.orangeAccent),
+            leading: Icon(PhosphorIcons.broom(PhosphorIconsStyle.thin), color: Colors.orangeAccent),
             title: const Text('Clear Local Cache', style: TextStyle(color: Colors.white)),
             subtitle: Text('Free up $_cacheSize on device', style: const TextStyle(color: Colors.grey)),
             onTap: _clearCache,
           ),
           ListTile(
-            leading: const Icon(Icons.backup, color: Colors.greenAccent),
+            leading: Icon(PhosphorIcons.cloudArrowUp(PhosphorIconsStyle.thin), color: Colors.greenAccent),
             title: const Text('Backup Vault Index', style: TextStyle(color: Colors.white)),
             subtitle: const Text('Encrypt and upload your vault index to the cloud', style: TextStyle(color: Colors.grey)),
             onTap: _handleBackup,
           ),
           ListTile(
-            leading: const Icon(Icons.photo_library, color: Colors.cyanAccent),
+            leading: Icon(PhosphorIcons.images(PhosphorIconsStyle.thin), color: Colors.cyanAccent),
             title: const Text('Migrate Gallery', style: TextStyle(color: Colors.white)),
             subtitle: const Text('Import existing photos into CipherNest', style: TextStyle(color: Colors.grey)),
-            trailing: const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+            trailing: Icon(PhosphorIcons.caretRight(PhosphorIconsStyle.thin), size: 16, color: Colors.grey),
             onTap: () => Navigator.pushNamed(context, AppRoutes.migration),
           ),
 
@@ -389,7 +392,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // --- AUTO-SYNC ---
           _SectionHeader(title: "Auto-Sync"),
           SwitchListTile(
-            secondary: const Icon(Icons.sync, color: Colors.cyanAccent),
+            secondary: Icon(PhosphorIcons.arrowsClockwise(PhosphorIconsStyle.thin), color: Colors.cyanAccent),
             title: const Text('Auto-Sync Gallery', style: TextStyle(color: Colors.white)),
             subtitle: Text(
               _autoSyncEnabled ? 'Last sync: $_lastSyncDisplay' : 'Automatically encrypt new photos',
@@ -404,7 +407,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               leading: const SizedBox(width: 24),
               title: const Text('Sync Now', style: TextStyle(color: Colors.cyanAccent)),
               subtitle: const Text('New photos sync automatically on app open', style: TextStyle(color: Colors.grey, fontSize: 12)),
-              trailing: const Icon(Icons.play_arrow, color: Colors.cyanAccent),
+              trailing: Icon(PhosphorIcons.play(PhosphorIconsStyle.fill), color: Colors.cyanAccent),
               onTap: _handleSyncNow,
             ),
 
@@ -413,7 +416,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // --- GALLERY ---
           _SectionHeader(title: "Gallery"),
           SwitchListTile(
-            secondary: const Icon(Icons.auto_awesome, color: Colors.amberAccent),
+            secondary: Icon(PhosphorIcons.sparkle(PhosphorIconsStyle.thin), color: Colors.amberAccent),
             title: const Text('Show Featured Content', style: TextStyle(color: Colors.white)),
             subtitle: const Text('Display stories and highlights', style: TextStyle(color: Colors.grey)),
             value: _showFeatured,
@@ -421,7 +424,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onChanged: _toggleFeatured,
           ),
           SwitchListTile(
-            secondary: const Icon(Icons.history, color: Colors.amberAccent),
+            secondary: Icon(PhosphorIcons.clockCounterClockwise(PhosphorIconsStyle.thin), color: Colors.amberAccent),
             title: const Text('A Year Ago Memories', style: TextStyle(color: Colors.white)),
             subtitle: const Text('Show photos from this day last year', style: TextStyle(color: Colors.grey)),
             value: _showYearAgo,
@@ -430,13 +433,68 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
 
           const Divider(color: Colors.white10),
+
+          // --- APPEARANCE ---
+          _SectionHeader(title: "Appearance"),
+          ListenableBuilder(
+            listenable: ThemeController(),
+            builder: (context, _) {
+              final tc = ThemeController();
+              return Column(
+                children: [
+                  SwitchListTile(
+                    secondary: Icon(
+                      tc.brightness == Brightness.dark ? PhosphorIcons.moon(PhosphorIconsStyle.thin) : PhosphorIcons.sun(PhosphorIconsStyle.thin),
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    title: Text('Light Mode', style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
+                    subtitle: Text(
+                      tc.brightness == Brightness.dark ? 'Currently dark' : 'Currently light',
+                      style: TextStyle(color: Theme.of(context).textTheme.bodyMedium!.color),
+                    ),
+                    value: tc.brightness == Brightness.light,
+                    onChanged: (_) => tc.toggleBrightness(),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Row(
+                      children: [
+                        Text('Accent Color', style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
+                        const Spacer(),
+                        for (final accent in AccentTheme.values)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 10),
+                            child: GestureDetector(
+                              onTap: () => tc.setAccent(accent),
+                              child: Container(
+                                width: 32,
+                                height: 32,
+                                decoration: BoxDecoration(
+                                  color: AccentColors.fromTheme(accent).primary,
+                                  shape: BoxShape.circle,
+                                  border: tc.accent == accent
+                                      ? Border.all(color: Theme.of(context).colorScheme.onSurface, width: 2.5)
+                                      : null,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+
+          const Divider(color: Colors.white10),
           // ... Security Section ...
           _SectionHeader(title: "Security"),
           ListTile(
-            leading: const Icon(Icons.vpn_key, color: Colors.greenAccent),
+            leading: Icon(PhosphorIcons.key(PhosphorIconsStyle.thin), color: Colors.greenAccent),
             title: const Text('Key Management', style: TextStyle(color: Colors.white)),
             subtitle: const Text('Check encryption integrity', style: TextStyle(color: Colors.grey)),
-            trailing: const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+            trailing: Icon(PhosphorIcons.caretRight(PhosphorIconsStyle.thin), size: 16, color: Colors.grey),
             onTap: () => Navigator.pushNamed(context, AppRoutes.keyManagement),
           ),
           

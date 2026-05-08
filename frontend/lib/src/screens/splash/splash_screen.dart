@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 
 import '../../config/routes.dart';
 import '../../config/theme.dart';
-import '../../../services/key_manager_service.dart'; // <--- NEW IMPORT
+import '../../widgets/ciphernest_logo.dart';
+import '../../../services/key_manager_service.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -44,19 +45,18 @@ class _SplashScreenState extends State<SplashScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Keep your existing asset
-            Image.asset('assets/images/temporary_logo.png', width: 300),
-            const SizedBox(height: 20),
-            Text(
-              'CipherNest',
-              style: Theme.of(context).textTheme.headlineLarge,
+            Image.asset(
+              Theme.of(context).brightness == Brightness.dark
+                  ? 'assets/images/ciphernest_logo_white.png'
+                  : 'assets/images/ciphernest_logo_black.png',
+              width: 220,
             ),
+            const SizedBox(height: 16),
+            const CiphernestLogo(fontSize: 36),
             const SizedBox(height: 8),
             Text(
               'Private cloud, on your terms',
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(letterSpacing: 0.2),
+              style: AppTypography.body(fontSize: 12),
             ),
           ],
         ),

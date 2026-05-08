@@ -2,9 +2,9 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../../config/theme.dart';
 import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
 import '../../../services/cloud/cloud_service.dart';
@@ -79,18 +79,20 @@ class _StoriesTabState extends State<StoriesTab> {
     final hasContent = (_showYearAgo && _yearAgoFiles.isNotEmpty) ||
         (_showFeatured && _featuredVideo != null);
 
+    final cs = Theme.of(context).colorScheme;
+
     if (!hasContent) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.auto_awesome, size: 64, color: Colors.grey),
-            SizedBox(height: 16),
+            Icon(PhosphorIcons.sparkle(PhosphorIconsStyle.thin), size: 64, color: cs.onSurface.withAlpha(120)),
+            const SizedBox(height: 16),
             Text('No stories yet',
-                style: TextStyle(color: Colors.grey, fontSize: 16)),
-            SizedBox(height: 8),
+                style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 16)),
+            const SizedBox(height: 8),
             Text('Memories will appear here over time',
-                style: TextStyle(color: Colors.grey, fontSize: 13)),
+                style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 13)),
           ],
         ),
       );
@@ -111,23 +113,24 @@ class _StoriesTabState extends State<StoriesTab> {
   }
 
   Widget _buildYearAgoCard() {
+    final cs = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: cs.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white10),
+        border: Border.all(color: cs.outline),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.history, color: Colors.amberAccent, size: 20),
-              SizedBox(width: 8),
+              Icon(PhosphorIcons.clockCounterClockwise(PhosphorIconsStyle.thin), color: cs.primary, size: 20),
+              const SizedBox(width: 8),
               Text('On this day, one year ago',
                   style: TextStyle(
-                      color: Colors.white,
+                      color: cs.onSurface,
                       fontWeight: FontWeight.w600,
                       fontSize: 15)),
             ],
@@ -167,6 +170,7 @@ class _StoriesTabState extends State<StoriesTab> {
   }
 
   Widget _buildFeaturedVideoCard() {
+    final cs = Theme.of(context).colorScheme;
     final video = _featuredVideo!;
     return GestureDetector(
       onTap: () => Navigator.push(
@@ -181,9 +185,9 @@ class _StoriesTabState extends State<StoriesTab> {
       child: Container(
         height: 200,
         decoration: BoxDecoration(
-          color: AppColors.surface,
+          color: cs.surface,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white10),
+          border: Border.all(color: cs.outline),
         ),
         clipBehavior: Clip.antiAlias,
         child: Stack(
@@ -199,9 +203,9 @@ class _StoriesTabState extends State<StoriesTab> {
                 ),
               ),
             ),
-            const Center(
+            Center(
               child:
-                  Icon(Icons.play_circle_fill, color: Colors.white, size: 56),
+                  Icon(PhosphorIcons.playCircle(PhosphorIconsStyle.fill), color: Colors.white, size: 56),
             ),
             Positioned(
               bottom: 12,
@@ -209,14 +213,14 @@ class _StoriesTabState extends State<StoriesTab> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Featured Video',
+                  Text('Featured Video',
                       style: TextStyle(
-                          color: Colors.amberAccent,
+                          color: cs.primary,
                           fontWeight: FontWeight.w600,
                           fontSize: 12)),
                   Text(video.filename,
                       style:
-                          const TextStyle(color: Colors.white70, fontSize: 13),
+                          TextStyle(color: cs.onSurface.withAlpha(180), fontSize: 13),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis),
                 ],
@@ -288,6 +292,6 @@ class _ThumbnailLoaderState extends State<_ThumbnailLoader> {
     if (_bytes != null) {
       return Image.memory(_bytes!, fit: BoxFit.cover);
     }
-    return Container(color: Colors.grey[900]);
+    return Container(color: Theme.of(context).colorScheme.surfaceContainerHighest);
   }
 }

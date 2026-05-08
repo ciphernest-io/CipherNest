@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import '../../config/routes.dart';
-import '../../config/theme.dart';
-
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
 
@@ -98,20 +96,20 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   // Secondary Action (Skip OR Restore)
                   // We use a fixed height container to prevent layout jumping
                   SizedBox(
-                    height: 48, 
+                    height: 48,
                     child: Center(
-                      child: _currentIndex == 0 
+                      child: _currentIndex == 0
                       ? TextButton(
                           onPressed: () => Navigator.pushNamed(context, AppRoutes.restore),
-                          child: const Text(
+                          child: Text(
                             'I already have an account',
-                            style: TextStyle(color: Colors.grey, decoration: TextDecoration.underline),
+                            style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(120), decoration: TextDecoration.underline),
                           ),
                         )
                       : (_currentIndex != _pages.length - 1
                         ? TextButton(
                             onPressed: _finish,
-                            child: const Text('Skip', style: TextStyle(color: Colors.grey)),
+                            child: Text('Skip', style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(120))),
                           )
                         : const SizedBox.shrink()), // Empty space on last slide
                     ),
@@ -162,6 +160,7 @@ class _Indicator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
       margin: const EdgeInsets.symmetric(horizontal: 4),
@@ -169,8 +168,8 @@ class _Indicator extends StatelessWidget {
       height: 8,
       decoration: BoxDecoration(
         color: isActive
-            ? AppColors.primary
-            : AppColors.primary.withOpacity(0.3),
+            ? cs.primary
+            : cs.primary.withAlpha(77),
         borderRadius: BorderRadius.circular(4),
       ),
     );

@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:path_provider/path_provider.dart';
-import '../../config/theme.dart';
 import '../../models/file_model.dart';
 import '../../utils/date_grouper.dart';
 import '../../../services/cloud/cloud_service.dart';
@@ -127,12 +127,12 @@ class PicturesTabState extends State<PicturesTab> {
             onRefresh: handleSync,
             child: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
-              children: const [
-                SizedBox(height: 300),
+              children: [
+                const SizedBox(height: 300),
                 Center(
                     child: Text('No encrypted photos yet.\nPull to sync.',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.grey))),
+                        style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(120)))),
               ],
             ),
           );
@@ -212,14 +212,15 @@ class _DateHeaderDelegate extends SliverPersistentHeaderDelegate {
   @override
   Widget build(
       BuildContext context, double shrinkOffset, bool overlapsContent) {
+    final cs = Theme.of(context).colorScheme;
     return Container(
-      color: AppColors.background,
+      color: Theme.of(context).scaffoldBackgroundColor,
       alignment: Alignment.centerLeft,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Text(
         label,
-        style: const TextStyle(
-          color: Colors.white70,
+        style: TextStyle(
+          color: cs.onSurface.withAlpha(180),
           fontSize: 13,
           fontWeight: FontWeight.w600,
           fontFamily: 'Inter',
@@ -307,15 +308,16 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) return Container(color: Colors.grey[900]);
+    final cs = Theme.of(context).colorScheme;
+    if (_loading) return Container(color: cs.surfaceContainerHighest);
 
     if (_imageData == null) {
       return Container(
-        color: Colors.grey[900],
+        color: cs.surfaceContainerHighest,
         child: Center(
           child: Icon(
-            _isVideo ? Icons.play_circle_outline : Icons.broken_image,
-            color: Colors.white54,
+            _isVideo ? PhosphorIcons.playCircle(PhosphorIconsStyle.thin) : PhosphorIcons.imageBroken(PhosphorIconsStyle.thin),
+            color: cs.onSurface.withAlpha(140),
             size: 40,
           ),
         ),
@@ -327,9 +329,9 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
       children: [
         Image.memory(_imageData!, fit: BoxFit.cover, cacheWidth: 200),
         if (_isVideo)
-          const Center(
+          Center(
             child:
-                Icon(Icons.play_circle_fill, color: Colors.white70, size: 40),
+                Icon(PhosphorIcons.playCircle(PhosphorIconsStyle.fill), color: cs.onSurface.withAlpha(180), size: 40),
           ),
       ],
     );

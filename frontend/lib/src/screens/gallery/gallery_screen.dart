@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../config/theme.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 import '../../config/routes.dart';
 import 'pictures_tab.dart';
 import 'albums_tab.dart';
@@ -33,17 +33,15 @@ class _GalleryScreenState extends State<GalleryScreen> {
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(
-        selectedItemColor: AppColors.primary,
-        unselectedItemColor: Colors.grey,
         type: BottomNavigationBarType.fixed,
         currentIndex: _bottomNavIndex,
         onTap: (index) => setState(() => _bottomNavIndex = index),
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.photo), label: 'Pictures'),
+        items: [
+          BottomNavigationBarItem(icon: Icon(PhosphorIcons.image(PhosphorIconsStyle.thin)), label: 'Pictures'),
           BottomNavigationBarItem(
-              icon: Icon(Icons.photo_album), label: 'Albums'),
-          BottomNavigationBarItem(icon: Icon(Icons.history), label: 'Stories'),
-          BottomNavigationBarItem(icon: Icon(Icons.menu), label: 'Menu'),
+              icon: Icon(PhosphorIcons.folderSimple(PhosphorIconsStyle.thin)), label: 'Albums'),
+          BottomNavigationBarItem(icon: Icon(PhosphorIcons.clockCounterClockwise(PhosphorIconsStyle.thin)), label: 'Stories'),
+          BottomNavigationBarItem(icon: Icon(PhosphorIcons.list(PhosphorIconsStyle.thin)), label: 'Menu'),
         ],
       ),
     );
@@ -65,50 +63,51 @@ class _GalleryScreenState extends State<GalleryScreen> {
   }
 
   Widget _buildMenuTab() {
+    final cs = Theme.of(context).colorScheme;
     return ListView(
       children: [
         const SizedBox(height: 32),
-        const CircleAvatar(
+        CircleAvatar(
           radius: 36,
-          backgroundColor: Colors.purpleAccent,
-          child: Icon(Icons.lock, color: Colors.white, size: 32),
+          backgroundColor: cs.primary,
+          child: Icon(PhosphorIcons.lock(PhosphorIconsStyle.thin), color: cs.onSurface, size: 32),
         ),
         const SizedBox(height: 16),
-        const Center(
+        Center(
           child: Text('CipherNest',
               style: TextStyle(
-                  color: Colors.white,
+                  color: cs.onSurface,
                   fontSize: 20,
                   fontWeight: FontWeight.bold)),
         ),
         const SizedBox(height: 32),
         ListTile(
-          leading: const Icon(Icons.settings, color: Colors.grey),
-          title: const Text('Settings', style: TextStyle(color: Colors.white)),
+          leading: Icon(PhosphorIcons.gear(PhosphorIconsStyle.thin), color: cs.onSurface.withAlpha(120)),
+          title: Text('Settings', style: TextStyle(color: cs.onSurface)),
           trailing:
-              const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+              Icon(PhosphorIcons.caretRight(PhosphorIconsStyle.thin), size: 16, color: cs.onSurface.withAlpha(120)),
           onTap: () => Navigator.pushNamed(context, AppRoutes.settings),
         ),
         ListTile(
-          leading: const Icon(Icons.vpn_key, color: Colors.grey),
-          title: const Text('Key Management',
-              style: TextStyle(color: Colors.white)),
+          leading: Icon(PhosphorIcons.key(PhosphorIconsStyle.thin), color: cs.onSurface.withAlpha(120)),
+          title: Text('Key Management',
+              style: TextStyle(color: cs.onSurface)),
           trailing:
-              const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+              Icon(PhosphorIcons.caretRight(PhosphorIconsStyle.thin), size: 16, color: cs.onSurface.withAlpha(120)),
           onTap: () => Navigator.pushNamed(context, AppRoutes.keyManagement),
         ),
         ListTile(
-          leading: const Icon(Icons.photo_library, color: Colors.grey),
-          title: const Text('Migrate Gallery',
-              style: TextStyle(color: Colors.white)),
+          leading: Icon(PhosphorIcons.images(PhosphorIconsStyle.thin), color: cs.onSurface.withAlpha(120)),
+          title: Text('Migrate Gallery',
+              style: TextStyle(color: cs.onSurface)),
           trailing:
-              const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+              Icon(PhosphorIcons.caretRight(PhosphorIconsStyle.thin), size: 16, color: cs.onSurface.withAlpha(120)),
           onTap: () => Navigator.pushNamed(context, AppRoutes.migration),
         ),
         const SizedBox(height: 40),
-        const Center(
+        Center(
             child: Text('CipherNest v0.5.0 Beta',
-                style: TextStyle(color: Colors.white24))),
+                style: TextStyle(color: cs.onSurface.withAlpha(60)))),
       ],
     );
   }

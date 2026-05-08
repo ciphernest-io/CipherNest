@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
@@ -228,19 +229,19 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
             Text("Details", style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: 20),
             _DetailItem(
-              icon: Icons.insert_drive_file,
+              icon: PhosphorIcons.file(PhosphorIconsStyle.thin),
               title: "Filename",
               value: _currentFiles[_currentIndex].filename,
             ),
             _DetailItem(
-              icon: Icons.calendar_today,
+              icon: PhosphorIcons.calendar(PhosphorIconsStyle.thin),
               title: "Created",
               value: _currentFiles[_currentIndex].createdAt.toString().split(
                 '.',
               )[0],
             ),
             _DetailItem(
-              icon: Icons.fingerprint,
+              icon: PhosphorIcons.fingerprint(PhosphorIconsStyle.thin),
               title: "ID",
               value: _currentFiles[_currentIndex].id,
             ),
@@ -286,16 +287,16 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                   ],
                 ),
                 leading: IconButton(
-                  icon: const Icon(Icons.arrow_back),
+                  icon: Icon(PhosphorIcons.arrowLeft(PhosphorIconsStyle.thin)),
                   onPressed: () => Navigator.pop(context, _hasDeleted),
                 ),
                 actions: [
                   IconButton(
-                    icon: const Icon(Icons.screen_rotation),
+                    icon: Icon(PhosphorIcons.arrowsCounterClockwise(PhosphorIconsStyle.thin)),
                     onPressed: () {},
                   ),
                   PopupMenuButton<String>(
-                    icon: const Icon(Icons.more_vert, color: overlayColor),
+                    icon: Icon(PhosphorIcons.dotsThreeVertical(PhosphorIconsStyle.thin), color: overlayColor),
                     itemBuilder: (context) => [
                       const PopupMenuItem(
                         value: 'copy',
@@ -445,27 +446,27 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                             children: [
                               IconButton(
-                                icon: const Icon(Icons.favorite_border),
+                                icon: Icon(PhosphorIcons.heart(PhosphorIconsStyle.thin)),
                                 onPressed: () {},
                                 color: overlayColor,
                               ),
                               IconButton(
-                                icon: const Icon(Icons.edit),
+                                icon: Icon(PhosphorIcons.pencilSimple(PhosphorIconsStyle.thin)),
                                 onPressed: () {},
                                 color: overlayColor,
                               ),
                               IconButton(
-                                icon: const Icon(Icons.info_outline),
+                                icon: Icon(PhosphorIcons.info(PhosphorIconsStyle.thin)),
                                 onPressed: _showDetailsSheet,
                                 color: overlayColor,
                               ),
                               IconButton(
-                                icon: const Icon(Icons.share),
+                                icon: Icon(PhosphorIcons.shareFat(PhosphorIconsStyle.thin)),
                                 onPressed: () {},
                                 color: overlayColor,
                               ),
                               IconButton(
-                                icon: const Icon(Icons.delete_outline),
+                                icon: Icon(PhosphorIcons.trash(PhosphorIconsStyle.thin)),
                                 onPressed: _handleDelete,
                                 color: Colors.redAccent,
                               ),
@@ -803,8 +804,8 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
                   shape: BoxShape.circle,
                   border: Border.all(color: Colors.white, width: 2),
                 ),
-                child: const Icon(
-                  Icons.play_arrow,
+                child: Icon(
+                  PhosphorIcons.play(PhosphorIconsStyle.fill),
                   size: 50,
                   color: Colors.white,
                 ),

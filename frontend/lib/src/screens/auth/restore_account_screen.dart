@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../../config/routes.dart';
-import '../../config/theme.dart';
 import '../../../services/key_manager_service.dart';
 
 class RestoreAccountScreen extends StatefulWidget {
@@ -60,15 +59,16 @@ class _RestoreAccountScreenState extends State<RestoreAccountScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(title: const Text('Restore Wallet')),
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           children: [
-            const Text(
+            Text(
               'Enter your 12-word recovery phrase to restore access to your encrypted files.',
-              style: TextStyle(color: Colors.grey),
+              style: TextStyle(color: cs.onSurface.withAlpha(120)),
             ),
             const SizedBox(height: 24),
             TextField(

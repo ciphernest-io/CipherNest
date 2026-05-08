@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:uuid/uuid.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart'; 
 import 'package:printing/printing.dart';
@@ -10,7 +11,7 @@ import 'dart:ui' as ui;
 import 'package:video_thumbnail/video_thumbnail.dart'; // NEW IMPORT
 
 import '../../config/routes.dart';
-import '../../config/theme.dart';
+
 import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
@@ -314,6 +315,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     if (_isLoadingSession) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
@@ -324,13 +327,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.cloud_off, size: 64, color: Colors.grey),
+              Icon(PhosphorIcons.cloudSlash(PhosphorIconsStyle.thin), size: 64, color: cs.onSurface.withAlpha(120)),
               const SizedBox(height: 16),
               Text(_sessionError!, style: const TextStyle(color: Colors.red)),
               const SizedBox(height: 24),
               ElevatedButton.icon(
                 onPressed: _handleReconnect,
-                icon: const Icon(Icons.login),
+                icon: Icon(PhosphorIcons.signIn(PhosphorIconsStyle.thin)),
                 label: const Text("Reconnect Google Drive"),
               )
             ],
@@ -344,7 +347,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         title: const Text('CipherNest'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.settings),
+            icon: Icon(PhosphorIcons.gear(PhosphorIconsStyle.thin)),
             onPressed: () => Navigator.pushNamed(context, AppRoutes.settings),
           ),
         ],
@@ -358,13 +361,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             if (CloudService().currentEmail != null)
               Padding(
                 padding: const EdgeInsets.only(top: 4.0),
-                child: Text(CloudService().currentEmail!, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey)),
+                child: Text(CloudService().currentEmail!, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: cs.onSurface.withAlpha(120))),
               ),
             const SizedBox(height: 24),
             _DashboardCard(
               title: 'Photos & Videos',
-              icon: Icons.photo_library,
-              color: Colors.purpleAccent,
+              icon: PhosphorIcons.images(PhosphorIconsStyle.thin),
+              color: cs.primary,
               onTap: () async {
                 await Navigator.pushNamed(context, AppRoutes.gallery);
               },
@@ -372,15 +375,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             const SizedBox(height: 16),
             _DashboardCard(
               title: 'Documents',
-              icon: Icons.description,
-              color: Colors.blueAccent,
+              icon: PhosphorIcons.fileText(PhosphorIconsStyle.thin),
+              color: cs.primary,
               onTap: () => Navigator.pushNamed(context, AppRoutes.documents),
             ),
             const SizedBox(height: 16),
             _DashboardCard(
               title: 'Other Files',
-              icon: Icons.folder,
-              color: Colors.tealAccent,
+              icon: PhosphorIcons.folder(PhosphorIconsStyle.thin),
+              color: cs.primary,
               onTap: () {},
             ),
           ],
@@ -388,35 +391,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _isUploading ? null : () => _showUploadSheet(context),
-        backgroundColor: AppColors.primary,
-        icon: _isUploading 
-          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) 
-          : const Icon(Icons.add, color: Colors.white),
+        backgroundColor: cs.primary,
+        icon: _isUploading
+          ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: cs.onPrimary, strokeWidth: 2))
+          : Icon(PhosphorIcons.plus(PhosphorIconsStyle.thin), color: cs.onPrimary),
         label: Text(_isUploading ? 'Encrypting...' : 'Add File'),
       ),
     );
   }
 
   void _showUploadSheet(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     showModalBottomSheet(
       context: context,
-      backgroundColor: AppColors.surface,
+      backgroundColor: cs.surface,
       builder: (ctx) => Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.perm_media, color: Colors.purpleAccent),
-              title: const Text('Upload Photo or Video', style: TextStyle(color: Colors.white)),
+              leading: Icon(PhosphorIcons.imageSquare(PhosphorIconsStyle.thin), color: cs.primary),
+              title: Text('Upload Photo or Video', style: TextStyle(color: cs.onSurface)),
               onTap: () {
                 Navigator.pop(ctx);
                 _handleUpload(isMedia: true);
               },
             ),
             ListTile(
-              leading: const Icon(Icons.description, color: Colors.blueAccent),
-              title: const Text('Upload Document', style: TextStyle(color: Colors.white)),
+              leading: Icon(PhosphorIcons.fileText(PhosphorIconsStyle.thin), color: cs.primary),
+              title: Text('Upload Document', style: TextStyle(color: cs.onSurface)),
               onTap: () {
                 Navigator.pop(ctx);
                 _handleUpload(isMedia: false);
@@ -444,15 +448,16 @@ class _DashboardCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
       child: Container(
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: AppColors.surface,
+          color: cs.surface,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.divider),
+          border: Border.all(color: cs.outline),
         ),
         child: Row(
           children: [
@@ -467,7 +472,7 @@ class _DashboardCard extends StatelessWidget {
             const SizedBox(width: 16),
             Text(title, style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600, fontSize: 18)),
             const Spacer(),
-            const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+            Icon(PhosphorIcons.caretRight(PhosphorIconsStyle.thin), size: 16, color: cs.onSurface.withAlpha(120)),
           ],
         ),
       ),
