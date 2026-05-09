@@ -15,10 +15,13 @@ class OneDriveProvider implements CloudProvider {
   // ---- IMPORTANT: replace with your Azure AD App's "Application (client) ID" ----
   // Register at https://portal.azure.com -> Microsoft Entra ID -> App registrations.
   // See plan file for exact registration steps.
-  static const String _clientId = 'REPLACE_WITH_AZURE_AD_CLIENT_ID';
+  static const String _clientId = '6bd09a94-1c3b-4d09-9d35-4a684f285638';
   static const String _redirectUri = 'ciphernest://oauth-callback';
+  // /common/ routes any user (personal or work/school) to the right tenant
+  // based on their account. /consumers/ would only work for personal-only
+  // app registrations, but our app is multi-tenant + personal accounts.
   static const String _authority =
-      'https://login.microsoftonline.com/consumers/oauth2/v2.0';
+      'https://login.microsoftonline.com/common/oauth2/v2.0';
   static const String _graphBase = 'https://graph.microsoft.com/v1.0';
   static const String _scopes =
       'Files.ReadWrite.AppFolder User.Read offline_access';
@@ -163,6 +166,25 @@ class OneDriveProvider implements CloudProvider {
   Future<Map<String, String>> _authHeaders() async {
     final token = await _getAccessToken();
     return {'Authorization': 'Bearer $token'};
+  }
+
+  /// Retries a network call up to 3 times with backoff.
+  /// Handles "connection abort" errors that happen when Android kills
+  /// in-flight HTTP requests during OAuth browser → app transitions.
+  Future<T> _withRetry<T>(Future<T> Function() op) async {
+    Object? lastError;
+    for (int attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await op();
+      } catch (e) {
+        lastError = e;
+        debugPrint('OneDrive call attempt ${attempt + 1} failed: $e');
+        if (attempt < 2) {
+          await Future.delayed(Duration(milliseconds: 500 * (attempt + 1)));
+        }
+      }
+    }
+    throw lastError ?? Exception('Unknown error');
   }
 
   // -------------------------------------------------------------------------
@@ -392,41 +414,46 @@ class OneDriveProvider implements CloudProvider {
 
   @override
   Future<Uint8List> downloadFile(String cloudId) async {
-    final headers = await _authHeaders();
-    final resp = await http.get(
-      Uri.parse('$_graphBase/me/drive/items/$cloudId/content'),
-      headers: headers,
-    );
-    if (resp.statusCode != 200 && resp.statusCode != 302) {
-      throw Exception('OneDrive download failed (${resp.statusCode})');
-    }
-    return resp.bodyBytes;
+    return _withRetry(() async {
+      final headers = await _authHeaders();
+      final resp = await http.get(
+        Uri.parse('$_graphBase/me/drive/items/$cloudId/content'),
+        headers: headers,
+      );
+      if (resp.statusCode != 200 && resp.statusCode != 302) {
+        throw Exception('OneDrive download failed (${resp.statusCode})');
+      }
+      return resp.bodyBytes;
+    });
   }
 
   @override
   Future<void> deleteFile(String cloudId) async {
-    final headers = await _authHeaders();
-    final resp = await http.delete(
-      Uri.parse('$_graphBase/me/drive/items/$cloudId'),
-      headers: headers,
-    );
-    if (resp.statusCode != 204 && resp.statusCode != 404) {
-      throw Exception('OneDrive delete failed (${resp.statusCode}): ${resp.body}');
-    }
+    return _withRetry(() async {
+      final headers = await _authHeaders();
+      final resp = await http.delete(
+        Uri.parse('$_graphBase/me/drive/items/$cloudId'),
+        headers: headers,
+      );
+      if (resp.statusCode != 204 && resp.statusCode != 404) {
+        throw Exception('OneDrive delete failed (${resp.statusCode}): ${resp.body}');
+      }
+    });
   }
 
   @override
   Future<List<Map<String, dynamic>>> listCloudFiles() async {
-    final headers = await _authHeaders();
-    final results = <Map<String, dynamic>>[];
-    String url =
-        '$_graphBase/me/drive/special/approot/children?\$top=200&\$select=id,name,size,createdDateTime';
+    return _withRetry(() async {
+      final headers = await _authHeaders();
+      final results = <Map<String, dynamic>>[];
+      String url =
+          '$_graphBase/me/drive/special/approot/children?\$top=200&\$select=id,name,size,createdDateTime';
 
-    while (true) {
-      final resp = await http.get(Uri.parse(url), headers: headers);
-      if (resp.statusCode != 200) {
-        throw Exception('OneDrive list failed (${resp.statusCode}): ${resp.body}');
-      }
+      while (true) {
+        final resp = await http.get(Uri.parse(url), headers: headers);
+        if (resp.statusCode != 200) {
+          throw Exception('OneDrive list failed (${resp.statusCode}): ${resp.body}');
+        }
       final json = jsonDecode(resp.body) as Map<String, dynamic>;
       final items = (json['value'] as List?) ?? [];
 
@@ -456,27 +483,29 @@ class OneDriveProvider implements CloudProvider {
         });
       }
 
-      final next = json['@odata.nextLink'] as String?;
-      if (next == null) break;
-      url = next;
-    }
-    return results;
+        final next = json['@odata.nextLink'] as String?;
+        if (next == null) break;
+        url = next;
+      }
+      return results;
+    });
   }
 
   @override
   Future<String?> findFileByName(String name) async {
-    // For DB backup file (special, unencoded name), use direct path lookup.
-    final headers = await _authHeaders();
-    final encodedName = Uri.encodeComponent(name);
-    final resp = await http.get(
-      Uri.parse('$_graphBase/me/drive/special/approot:/$encodedName'),
-      headers: headers,
-    );
-    if (resp.statusCode == 200) {
-      final j = jsonDecode(resp.body) as Map<String, dynamic>;
-      return j['id'] as String?;
-    }
-    return null;
+    return _withRetry(() async {
+      final headers = await _authHeaders();
+      final encodedName = Uri.encodeComponent(name);
+      final resp = await http.get(
+        Uri.parse('$_graphBase/me/drive/special/approot:/$encodedName'),
+        headers: headers,
+      );
+      if (resp.statusCode == 200) {
+        final j = jsonDecode(resp.body) as Map<String, dynamic>;
+        return j['id'] as String?;
+      }
+      return null;
+    });
   }
 
   @override
