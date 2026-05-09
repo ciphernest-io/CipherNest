@@ -42,29 +42,21 @@ class DatabaseService {
 
     final db = await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE files(
-            id TEXT PRIMARY KEY,
-            cloud_id TEXT,
-            thumbnail_cloud_id TEXT,
-            provider INTEGER DEFAULT 0,
-            account_id TEXT,
-            filename TEXT NOT NULL,
-            size_bytes INTEGER,
-            created_at INTEGER,
-            is_uploaded INTEGER,
-            local_path TEXT,
-            type INTEGER
-          )
-        ''');
-        await _createAlbumTables(db);
+        await _createSchema(db);
         await _seedSmartAlbums(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
-        if (oldVersion < 2) {
-          await _createAlbumTables(db);
+        // v2 added albums tables; v3 changes account_id semantics from
+        // bare email to composite ${provider}_${email}. The data model
+        // shift is incompatible with old rows, so we wipe everything and
+        // let users re-link/sync from cloud.
+        if (oldVersion < 3) {
+          await db.execute('DROP TABLE IF EXISTS album_files');
+          await db.execute('DROP TABLE IF EXISTS albums');
+          await db.execute('DROP TABLE IF EXISTS files');
+          await _createSchema(db);
           await _seedSmartAlbums(db);
         }
       },
@@ -73,7 +65,22 @@ class DatabaseService {
     return db;
   }
 
-  static Future<void> _createAlbumTables(Database db) async {
+  static Future<void> _createSchema(Database db) async {
+    await db.execute('''
+      CREATE TABLE files(
+        id TEXT PRIMARY KEY,
+        cloud_id TEXT,
+        thumbnail_cloud_id TEXT,
+        provider INTEGER DEFAULT 0,
+        account_id TEXT,
+        filename TEXT NOT NULL,
+        size_bytes INTEGER,
+        created_at INTEGER,
+        is_uploaded INTEGER,
+        local_path TEXT,
+        type INTEGER
+      )
+    ''');
     await db.execute('''
       CREATE TABLE albums(
         id TEXT PRIMARY KEY,
@@ -318,10 +325,12 @@ class DatabaseService {
 
   Future<Map<String, String>> getCloudToLocalIdMap() async {
     final db = await database;
+    if (_currentAccountId == null) return {};
     final rows = await db.query(
       'files',
       columns: ['id', 'cloud_id', 'thumbnail_cloud_id'],
-      where: 'is_uploaded = 1',
+      where: 'is_uploaded = 1 AND account_id = ?',
+      whereArgs: [_currentAccountId],
     );
     final map = <String, String>{};
     for (final row in rows) {

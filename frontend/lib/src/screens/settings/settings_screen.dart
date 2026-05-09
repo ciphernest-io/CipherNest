@@ -258,7 +258,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (wasActive) {
       final newActive = AccountRegistry().activeAccount;
       if (newActive != null) {
-        DatabaseService().setCurrentAccount(newActive.email);
+        DatabaseService().setCurrentAccount(newActive.id);
       } else if (mounted) {
         // No accounts left — back to cloud selection (clean slate)
         Navigator.pushNamedAndRemoveUntil(

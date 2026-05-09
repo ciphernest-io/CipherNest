@@ -42,7 +42,7 @@ class AccountSwitcher extends StatelessWidget {
     await AccountRegistry().setActive(value);
     final newActive = AccountRegistry().activeAccount;
     if (newActive != null) {
-      DatabaseService().setCurrentAccount(newActive.email);
+      DatabaseService().setCurrentAccount(newActive.id);
       CloudService().reset();
       // Trigger a sync to load that account's files
       SyncService().syncNow(force: true);

@@ -73,6 +73,8 @@ class CloudService {
   }
 
   Future<Uint8List> downloadFile(String id) => _getProvider().downloadFile(id);
+  Future<Uint8List> downloadRange(String id, int start, int endInclusive) =>
+      _getProvider().downloadRange(id, start, endInclusive);
   Future<void> deleteFile(String id) => _getProvider().deleteFile(id);
   Future<List<Map<String, dynamic>>> listCloudFiles() =>
       _getProvider().listCloudFiles();

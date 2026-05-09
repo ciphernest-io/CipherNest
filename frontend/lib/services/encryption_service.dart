@@ -47,11 +47,70 @@ class EncryptionService {
 
   // --- STREAMING METHODS (For Video) ---
 
+  /// The size of the on-disk header: 4-byte length prefix + encrypted file key.
+  /// Encrypted file key = 12 (nonce) + 32 (AES-256 key bytes) + 16 (MAC) = 60 bytes.
+  static const int headerSize = 4 + 60;
+
+  /// Source plaintext chunk size (exposed for streaming server math).
+  static const int plaintextChunkSize = _chunkSize;
+
+  /// Encrypted chunk size on disk = plaintext + 12-byte nonce + 16-byte MAC.
+  /// Last chunk may be smaller (only the plaintext portion shrinks).
+  static const int encryptedChunkSize = _encryptedChunkSize;
+
   static int calculateEncryptedSize(int originalSize) {
-    const headerSize = 4 + 60; 
     final numChunks = (originalSize / _chunkSize).ceil();
     final totalOverhead = numChunks * _chunkOverhead;
     return headerSize + originalSize + totalOverhead;
+  }
+
+  /// Decrypts the encrypted file key from the on-disk header bytes.
+  /// [headerBytes] must be at least [headerSize] long.
+  /// Returns the file's per-file SecretKey for chunk decryption.
+  static Future<SecretKey> decryptFileKeyFromHeader(Uint8List headerBytes) async {
+    final masterKey = KeyManagerService().masterKey;
+    final headerLen = ByteData.sublistView(headerBytes.sublist(0, 4))
+        .getUint32(0, Endian.big);
+    if (headerBytes.length < 4 + headerLen) {
+      throw Exception('Header bytes too short');
+    }
+    final encryptedFileKey = headerBytes.sublist(4, 4 + headerLen);
+    final fileKeyBytes = await _cipher.decrypt(encryptedFileKey, masterKey);
+    return SecretKey(fileKeyBytes);
+  }
+
+  /// Decrypts a contiguous run of encrypted chunks given an already-recovered
+  /// [fileKey]. [encryptedChunks] is the raw byte slice covering N full chunks
+  /// followed by an optional final partial chunk.
+  ///
+  /// [chunkCount]: how many chunks are present in the slice.
+  /// [lastChunkEncryptedSize]: if the last chunk is shorter than the standard
+  ///   524316 bytes (i.e. it's the file's tail), pass its actual encrypted
+  ///   size here. Otherwise pass null (all chunks are full-sized).
+  ///
+  /// Returns the concatenated plaintext for the chunks.
+  static Future<Uint8List> decryptChunkRange(
+    Uint8List encryptedChunks,
+    SecretKey fileKey,
+    int chunkCount, {
+    int? lastChunkEncryptedSize,
+  }) async {
+    final out = BytesBuilder(copy: false);
+    int offset = 0;
+    for (int i = 0; i < chunkCount; i++) {
+      final isLast = i == chunkCount - 1;
+      final size = (isLast && lastChunkEncryptedSize != null)
+          ? lastChunkEncryptedSize
+          : _encryptedChunkSize;
+      if (offset + size > encryptedChunks.length) {
+        throw Exception('Chunk slice underflow at chunk $i');
+      }
+      final chunk = encryptedChunks.sublist(offset, offset + size);
+      final plain = await _cipher.decrypt(chunk, fileKey);
+      out.add(plain);
+      offset += size;
+    }
+    return out.takeBytes();
   }
 
   static Stream<List<int>> encryptStream(Stream<List<int>> source) async* {
