@@ -54,7 +54,10 @@ class AppRoutes {
         return MaterialPageRoute(builder: (_) => const RestoreAccountScreen());
 
       case cloudSelection:
-        return MaterialPageRoute(builder: (_) => const CloudSelectionScreen());
+        final addAnother = (routeSettings.arguments as bool?) ?? false;
+        return MaterialPageRoute(
+          builder: (_) => CloudSelectionScreen(isAddAnother: addAnother),
+        );
 
       case home:
         return MaterialPageRoute(builder: (_) => const HomeScreen());

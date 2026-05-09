@@ -5,6 +5,7 @@ import '../../config/routes.dart';
 import '../../config/theme.dart';
 import '../../widgets/ciphernest_logo.dart';
 import '../../../services/key_manager_service.dart';
+import '../../../services/cloud/account_registry.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -24,7 +25,10 @@ class _SplashScreenState extends State<SplashScreen> {
     // 1. Branding delay (Keep the logo visible for a moment)
     await Future.delayed(const Duration(milliseconds: 1500));
 
-    // 2. Check if the Master Key exists in storage
+    // 2. Restore the cloud account registry from secure storage
+    await AccountRegistry().load();
+
+    // 3. Check if the Master Key exists in storage
     final hasAccount = await KeyManagerService().hasAccount();
 
     if (mounted) {

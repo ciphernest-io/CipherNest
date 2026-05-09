@@ -3,6 +3,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import '../src/models/file_model.dart';
 import '../src/models/album_model.dart';
+import 'cloud/account_registry.dart';
 import 'cloud/cloud_service.dart';
 
 class DatabaseService {
@@ -129,8 +130,8 @@ class DatabaseService {
       isUploaded: file.isUploaded,
       cloudId: file.cloudId,
       thumbnailCloudId: file.thumbnailCloudId,
-      provider: 0, 
-      accountId: _currentAccountId, 
+      provider: AccountRegistry().activeAccount?.providerType ?? 0,
+      accountId: _currentAccountId,
     );
 
     await db.insert(
@@ -247,8 +248,8 @@ class DatabaseService {
         {
           'id': localId,
           'cloud_id': file['id'],
-          'provider': 0,
-          'account_id': _currentAccountId, 
+          'provider': AccountRegistry().activeAccount?.providerType ?? 0,
+          'account_id': _currentAccountId,
           'filename': realFilename, 
           'size_bytes': size,
           'created_at': file['created'] != null 

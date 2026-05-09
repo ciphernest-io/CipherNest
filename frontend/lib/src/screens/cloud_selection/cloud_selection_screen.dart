@@ -1,13 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 import '../../config/routes.dart';
+import '../../../services/cloud/account_registry.dart';
+import '../../../services/cloud/cloud_account.dart';
 import '../../../services/cloud/cloud_service.dart';
+import '../../../services/cloud/google_drive_provider.dart';
+import '../../../services/cloud/onedrive_provider.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/database_service.dart';
 import '../../models/file_model.dart';
 
 class CloudSelectionScreen extends StatefulWidget {
-  const CloudSelectionScreen({super.key});
+  /// When true, navigation pops back instead of pushing home
+  /// (used by "Add another account" flow from the home screen).
+  final bool isAddAnother;
+
+  const CloudSelectionScreen({super.key, this.isAddAnother = false});
 
   @override
   State<CloudSelectionScreen> createState() => _CloudSelectionScreenState();
@@ -15,56 +23,91 @@ class CloudSelectionScreen extends StatefulWidget {
 
 class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
   bool _isLoading = false;
+  String _statusMsg = '';
 
-  Future<void> _connectDrive() async {
-    setState(() => _isLoading = true);
+  Future<void> _connectProvider(int providerType) async {
+    setState(() {
+      _isLoading = true;
+      _statusMsg = 'Authenticating...';
+    });
+
     try {
-      // 1. Run Canary Test (Connects, Auth, Checks File Headers)
-      final isValid = await CloudService().canaryTest();
+      // 1. OAuth flow → returns a CloudAccount with tokens
+      CloudAccount? newAccount;
+      if (providerType == CloudAccount.providerGoogle) {
+        newAccount = await GoogleDriveProvider.signInNewAccount();
+      } else if (providerType == CloudAccount.providerOneDrive) {
+        newAccount = await OneDriveProvider.signInNewAccount();
+      } else {
+        throw Exception('Unsupported provider');
+      }
 
-      if (!isValid) {
-        if (mounted) {
-          _showErrorDialog(
-            'Verification Failed', 
-            'The files on this Drive Account cannot be unlocked with your Recovery Phrase.\n\nAre you using the wrong Google Account or the wrong Phrase?'
-          );
-        }
+      if (newAccount == null) {
+        // User cancelled
+        if (mounted) setState(() => _isLoading = false);
         return;
       }
 
-      // 2. Set the Active Account in DB
-      final email = CloudService().currentEmail;
-      if (email != null) {
-        DatabaseService().setCurrentAccount(email);
+      // 2. Register the account and make it active
+      await AccountRegistry().addAccount(newAccount);
+      await AccountRegistry().setActive(newAccount.id);
+      CloudService().reset(); // rebuild provider for the new active account
+
+      // 3. Canary test
+      setState(() => _statusMsg = 'Verifying encryption keys...');
+      final isValid = await CloudService().canaryTest();
+      if (!isValid) {
+        if (mounted) {
+          _showErrorDialog(
+            'Verification Failed',
+            'The files on this account cannot be unlocked with your Recovery Phrase.\n\nAre you using the wrong account or the wrong Phrase?',
+          );
+        }
+        // Roll back the registration
+        await AccountRegistry().removeAccount(newAccount.id);
+        return;
       }
 
-      // 3. Check for and restore cloud DB backup
-      final hasBackup = await DatabaseBackupService().hasCloudBackup();
-      if (hasBackup) {
-        final localImages = await DatabaseService().getFilesByType(CnestFileType.image);
-        final localDocs = await DatabaseService().getFilesByType(CnestFileType.document);
-        final localIsEmpty = localImages.isEmpty && localDocs.isEmpty;
+      // 4. Set DB current account
+      DatabaseService().setCurrentAccount(newAccount.email);
 
-        bool shouldRestore = localIsEmpty;
-        if (!localIsEmpty && mounted) {
-          shouldRestore = await _showRestoreDialog() ?? false;
-        }
+      // 5. Restore DB backup if available (skip in add-another mode)
+      if (!widget.isAddAnother) {
+        setState(() => _statusMsg = 'Checking for backup...');
+        final hasBackup = await DatabaseBackupService().hasCloudBackup();
+        if (hasBackup) {
+          final localImages =
+              await DatabaseService().getFilesByType(CnestFileType.image);
+          final localDocs =
+              await DatabaseService().getFilesByType(CnestFileType.document);
+          final localIsEmpty = localImages.isEmpty && localDocs.isEmpty;
 
-        if (shouldRestore) {
-          final restored = await DatabaseBackupService().restoreDatabase();
-          if (restored && email != null) {
-            DatabaseService().setCurrentAccount(email);
+          bool shouldRestore = localIsEmpty;
+          if (!localIsEmpty && mounted) {
+            shouldRestore = await _showRestoreDialog() ?? false;
+          }
+
+          if (shouldRestore) {
+            final restored = await DatabaseBackupService().restoreDatabase();
+            if (restored) {
+              DatabaseService().setCurrentAccount(newAccount.email);
+            }
           }
         }
       }
 
-      // 4. Trigger Initial Sync Logic (Background)
+      // 6. Initial sync
+      setState(() => _statusMsg = 'Loading your files...');
       final files = await CloudService().listCloudFiles();
       await DatabaseService().reconcile(files.cast<Map<String, dynamic>>());
 
-      // 4. Go Home
+      // 7. Navigate
       if (mounted) {
-        Navigator.pushReplacementNamed(context, AppRoutes.home);
+        if (widget.isAddAnother) {
+          Navigator.pop(context);
+        } else {
+          Navigator.pushReplacementNamed(context, AppRoutes.home);
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -86,14 +129,8 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
           'Restore it? This replaces your current local index.',
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Skip'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Restore'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Skip')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Restore')),
         ],
       ),
     );
@@ -105,49 +142,55 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       builder: (ctx) => AlertDialog(
         title: Text(title, style: const TextStyle(color: Colors.red)),
         content: Text(content),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
-        ],
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final headerText = widget.isAddAnother ? 'Add another account' : 'Choose your storage';
     return Scaffold(
-      appBar: AppBar(title: const Text('Choose storage'), centerTitle: true),
+      appBar: AppBar(
+        title: Text(widget.isAddAnother ? 'Add Account' : 'Choose Storage'),
+        centerTitle: true,
+      ),
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           children: [
             Text(
-              'Link your cloud provider',
+              headerText,
               style: Theme.of(context).textTheme.headlineMedium,
             ),
             const SizedBox(height: 32),
-
             _CloudOption(
               title: 'Google Drive',
-              subtitle: _isLoading ? 'Connecting...' : 'Recommended',
-              icon: PhosphorIcons.cloud(PhosphorIconsStyle.thin),
+              subtitle: 'Sign in with Google',
+              icon: PhosphorIcons.googleLogo(PhosphorIconsStyle.thin),
               enabled: !_isLoading,
-              onTap: _connectDrive, // <--- Triggers the flow
+              onTap: () => _connectProvider(CloudAccount.providerGoogle),
             ),
-            
-            if (_isLoading) ...[
-              const SizedBox(height: 32),
-              const CircularProgressIndicator(),
-              const SizedBox(height: 16),
-              const Text('Verifying encryption keys...'),
-            ],
-
             const SizedBox(height: 16),
             _CloudOption(
               title: 'OneDrive',
               subtitle: 'Coming soon',
-              icon: PhosphorIcons.cloud(PhosphorIconsStyle.thin),
+              icon: PhosphorIcons.microsoftOutlookLogo(PhosphorIconsStyle.thin),
               enabled: false,
             ),
+            const SizedBox(height: 16),
+            _CloudOption(
+              title: 'Dropbox',
+              subtitle: 'Coming soon',
+              icon: PhosphorIcons.dropboxLogo(PhosphorIconsStyle.thin),
+              enabled: false,
+            ),
+            if (_isLoading) ...[
+              const SizedBox(height: 32),
+              const CircularProgressIndicator(),
+              const SizedBox(height: 16),
+              Text(_statusMsg),
+            ],
           ],
         ),
       ),

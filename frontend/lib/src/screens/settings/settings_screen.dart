@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart'; // ENABLED
 import '../../config/routes.dart';
 import '../../config/theme.dart';
 import '../../../services/cloud/cloud_service.dart';
+import '../../../services/cloud/account_registry.dart';
+import '../../../services/cloud/cloud_account.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/cache_manager_service.dart';
@@ -217,33 +219,56 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() => _showYearAgo = val);
   }
 
-  Future<void> _handleSignOut() async {
+  IconData _providerIcon(int providerType) {
+    switch (providerType) {
+      case CloudAccount.providerGoogle:
+        return PhosphorIcons.googleLogo(PhosphorIconsStyle.thin);
+      case CloudAccount.providerOneDrive:
+        return PhosphorIcons.microsoftOutlookLogo(PhosphorIconsStyle.thin);
+      case CloudAccount.providerDropbox:
+        return PhosphorIcons.dropboxLogo(PhosphorIconsStyle.thin);
+      default:
+        return PhosphorIcons.cloud(PhosphorIconsStyle.thin);
+    }
+  }
+
+  Future<void> _handleRemoveAccount(String accountId) async {
+    final accounts = AccountRegistry().accounts;
+    final account = accounts.firstWhere((a) => a.id == accountId);
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Sign Out?'),
-        content: const Text('You will need to reconnect your Google Drive to access your files.'),
+        title: Text('Sign out of ${account.email}?'),
+        content: Text('Files on ${account.providerName} stay there. You can sign back in anytime.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           TextButton(
-            onPressed: () => Navigator.pop(ctx, true), 
-            child: const Text('Sign Out', style: TextStyle(color: Colors.red))
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Sign Out', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
     );
+    if (confirm != true) return;
 
-    if (confirm == true) {
-      await CloudService().signOut();
-      if (mounted) {
-        Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false);
+    final wasActive = AccountRegistry().activeAccount?.id == accountId;
+    await AccountRegistry().removeAccount(accountId);
+    CloudService().reset();
+
+    if (wasActive) {
+      final newActive = AccountRegistry().activeAccount;
+      if (newActive != null) {
+        DatabaseService().setCurrentAccount(newActive.email);
+      } else if (mounted) {
+        // No accounts left — back to cloud selection (clean slate)
+        Navigator.pushNamedAndRemoveUntil(
+            context, AppRoutes.cloudSelection, (r) => false);
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final email = CloudService().currentEmail ?? 'Not Connected';
     final totalBytes = _imageBytes + _docBytes;
     final totalForBar = totalBytes == 0 ? 1 : totalBytes; 
     final imageFlex = (_imageBytes / totalForBar * 100).round();
@@ -253,13 +278,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
         children: [
-          // ... Account Section ...
-          _SectionHeader(title: "Account"),
-          ListTile(
-            leading: CircleAvatar(backgroundColor: Colors.purpleAccent, child: Icon(PhosphorIcons.user(PhosphorIconsStyle.thin), color: Colors.white)),
-            title: Text(email, style: const TextStyle(color: Colors.white)),
-            subtitle: const Text('Google Drive Connected', style: TextStyle(color: Colors.grey)),
-            trailing: IconButton(icon: Icon(PhosphorIcons.signOut(PhosphorIconsStyle.thin), color: Colors.redAccent), onPressed: _handleSignOut),
+          // --- ACCOUNTS (multi-account) ---
+          _SectionHeader(title: "Accounts"),
+          ListenableBuilder(
+            listenable: AccountRegistry(),
+            builder: (context, _) {
+              final cs = Theme.of(context).colorScheme;
+              final accounts = AccountRegistry().accounts;
+              final active = AccountRegistry().activeAccount;
+              return Column(
+                children: [
+                  for (final a in accounts)
+                    ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: cs.primary.withAlpha(60),
+                        child: Icon(_providerIcon(a.providerType), color: cs.primary, size: 20),
+                      ),
+                      title: Text(a.email, style: TextStyle(color: cs.onSurface)),
+                      subtitle: Text(
+                        active?.id == a.id ? '${a.providerName} • Active' : a.providerName,
+                        style: TextStyle(color: cs.onSurface.withAlpha(140)),
+                      ),
+                      trailing: IconButton(
+                        icon: Icon(PhosphorIcons.signOut(PhosphorIconsStyle.thin), color: Colors.redAccent),
+                        onPressed: () => _handleRemoveAccount(a.id),
+                      ),
+                    ),
+                  ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: cs.primary.withAlpha(60),
+                      child: Icon(PhosphorIcons.plus(PhosphorIconsStyle.thin), color: cs.primary, size: 20),
+                    ),
+                    title: Text('Add account', style: TextStyle(color: cs.primary)),
+                    onTap: () => Navigator.pushNamed(context, AppRoutes.cloudSelection, arguments: true),
+                  ),
+                ],
+              );
+            },
           ),
           const Divider(color: Colors.white10),
 
