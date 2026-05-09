@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../src/models/file_model.dart';
+import 'cloud/account_registry.dart';
 import 'cloud/cloud_service.dart';
 import 'database_backup_service.dart';
 import 'database_service.dart';
@@ -43,10 +44,15 @@ class AutoSyncService {
       }
 
       // Ensure cloud session is active
-      final email = CloudService().currentEmail ??
-          await CloudService().restoreSession();
-      if (email == null) return AutoSyncResult(synced: 0, failed: 0, skipped: 0);
-      DatabaseService().setCurrentAccount(email);
+      final active = AccountRegistry().activeAccount;
+      if (active == null) {
+        final email = await CloudService().restoreSession();
+        if (email == null) return AutoSyncResult(synced: 0, failed: 0, skipped: 0);
+      }
+      final account = AccountRegistry().activeAccount;
+      if (account == null) return AutoSyncResult(synced: 0, failed: 0, skipped: 0);
+      DatabaseService().setCurrentAccount(account.id);
+      final email = account.email;
 
       // Get unsynced assets
       final assets = await getUnsyncedAssets();

@@ -18,6 +18,7 @@ import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/cloud/cloud_service.dart';
+import '../../../services/cloud/account_registry.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/sync_service.dart';
 
@@ -60,12 +61,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
 
     try {
-      String? email = CloudService().currentEmail;
-      email ??= await CloudService().restoreSession();
+      final active = AccountRegistry().activeAccount;
+      String? email = active?.email;
+      if (email == null) {
+        email = await CloudService().restoreSession();
+      }
 
       if (mounted) {
-        if (email != null) {
-          DatabaseService().setCurrentAccount(email);
+        if (active != null) {
+          DatabaseService().setCurrentAccount(active.id);
+          setState(() => _isLoadingSession = false);
+          SyncService().syncNow();
+        } else if (email != null) {
+          // Legacy/edge case — no active account but a session exists
           setState(() => _isLoadingSession = false);
           SyncService().syncNow();
         } else {
@@ -361,11 +369,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Your Vault', style: Theme.of(context).textTheme.headlineMedium),
-            if (CloudService().currentEmail != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 4.0),
-                child: Text(CloudService().currentEmail!, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: cs.onSurface.withAlpha(120))),
-              ),
+            ListenableBuilder(
+              listenable: AccountRegistry(),
+              builder: (context, _) {
+                final active = AccountRegistry().activeAccount;
+                if (active == null) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 4.0),
+                  child: Text(
+                    '${active.email} · ${active.providerName}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: cs.onSurface.withAlpha(120)),
+                  ),
+                );
+              },
+            ),
             const SizedBox(height: 24),
             _DashboardCard(
               title: 'Photos & Videos',

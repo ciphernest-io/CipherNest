@@ -13,6 +13,7 @@ import '../../../services/encryption_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/auto_sync_service.dart';
+import '../../../services/video_streaming_server.dart';
 
 class ImageViewerScreen extends StatefulWidget {
   final List<CnestFile> files;
@@ -569,6 +570,8 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     _chewieController = null;
     _videoController = null;
     _isPlayingVideo = false;
+    // Drop cached file key + session metadata
+    VideoStreamingServer().endSession(widget.file.id);
   }
 
   void _checkFileType() {
@@ -694,56 +697,57 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     setState(() => _isBufferingVideo = true);
 
     try {
-      final tempDir = await getTemporaryDirectory();
-      final videoFile = File('${tempDir.path}/${widget.file.id}_decrypted.mp4');
-
-      // Check cache first
-      if (!await videoFile.exists()) {
-        if (widget.file.cloudId == null) throw Exception("No cloud ID");
-
-        // Download & Decrypt to File Stream
-        final encryptedBytes = await CloudService().downloadFile(
-          widget.file.cloudId!,
-        );
-        final decryptStream = EncryptionService.decryptToStream(encryptedBytes);
-
-        final sink = videoFile.openWrite();
-        await sink.addStream(decryptStream);
-        await sink.close();
+      // LOCAL-FIRST: if the original is on device, play it directly.
+      // Zero network, zero decryption.
+      if (widget.file.localPath != null) {
+        final localFile = File(widget.file.localPath!);
+        if (await localFile.exists()) {
+          _videoController = VideoPlayerController.file(localFile);
+          await _videoController!.initialize();
+          _setupChewie();
+          return;
+        }
       }
 
+      // CLOUD STREAMING: spin up local proxy server, point player at it.
+      // Player issues HTTP range requests; server fetches encrypted chunks
+      // on demand, decrypts only what's needed, returns plaintext slices.
+      if (widget.file.cloudId == null) throw Exception('No cloud ID');
+
+      final url = await VideoStreamingServer().beginSession(widget.file);
       if (!mounted) return;
 
-      _videoController = VideoPlayerController.file(videoFile);
+      _videoController = VideoPlayerController.networkUrl(Uri.parse(url));
       await _videoController!.initialize();
-
-      _chewieController = ChewieController(
-        videoPlayerController: _videoController!,
-        autoPlay: true,
-        looping: false,
-        aspectRatio: _videoController!.value.aspectRatio,
-        // Make it look seamless (hide full UI if you prefer, or keep it)
-        showControls: true,
-        materialProgressColors: ChewieProgressColors(
-          playedColor: Colors.white,
-          handleColor: Colors.white,
-          backgroundColor: Colors.grey,
-          bufferedColor: Colors.white38,
-        ),
-      );
-
-      setState(() {
-        _isPlayingVideo = true;
-        _isBufferingVideo = false;
-      });
+      _setupChewie();
     } catch (e) {
       if (mounted) {
         setState(() => _isBufferingVideo = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Video Error: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Video Error: $e')));
       }
     }
+  }
+
+  void _setupChewie() {
+    if (!mounted || _videoController == null) return;
+    _chewieController = ChewieController(
+      videoPlayerController: _videoController!,
+      autoPlay: true,
+      looping: false,
+      aspectRatio: _videoController!.value.aspectRatio,
+      showControls: true,
+      materialProgressColors: ChewieProgressColors(
+        playedColor: Colors.white,
+        handleColor: Colors.white,
+        backgroundColor: Colors.grey,
+        bufferedColor: Colors.white38,
+      ),
+    );
+    setState(() {
+      _isPlayingVideo = true;
+      _isBufferingVideo = false;
+    });
   }
 
   @override

@@ -428,6 +428,22 @@ class OneDriveProvider implements CloudProvider {
   }
 
   @override
+  Future<Uint8List> downloadRange(String cloudId, int start, int endInclusive) async {
+    return _withRetry(() async {
+      final headers = await _authHeaders();
+      headers['Range'] = 'bytes=$start-$endInclusive';
+      final resp = await http.get(
+        Uri.parse('$_graphBase/me/drive/items/$cloudId/content'),
+        headers: headers,
+      );
+      if (resp.statusCode != 206 && resp.statusCode != 200) {
+        throw Exception('OneDrive range download failed: ${resp.statusCode}');
+      }
+      return resp.bodyBytes;
+    });
+  }
+
+  @override
   Future<void> deleteFile(String cloudId) async {
     return _withRetry(() async {
       final headers = await _authHeaders();

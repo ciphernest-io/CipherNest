@@ -35,6 +35,11 @@ abstract class CloudProvider {
   });
 
   Future<Uint8List> downloadFile(String cloudId);
+
+  /// Downloads a byte range [start, endInclusive] of the cloud blob.
+  /// Used by the local video streaming server for chunked playback.
+  Future<Uint8List> downloadRange(String cloudId, int start, int endInclusive);
+
   Future<void> deleteFile(String cloudId);
 
   // Returns generic Maps so we don't depend on provider-specific types.

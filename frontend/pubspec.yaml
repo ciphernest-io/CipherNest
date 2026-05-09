@@ -63,6 +63,7 @@ dependencies:
   google_fonts: ^6.2.1
   phosphor_flutter: ^2.1.0
   flutter_web_auth_2: ^4.1.0
+  shelf: ^1.4.1
 
 dev_dependencies:
   flutter_test:

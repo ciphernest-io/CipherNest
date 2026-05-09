@@ -69,7 +69,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       }
 
       // 4. Set DB current account
-      DatabaseService().setCurrentAccount(newAccount.email);
+      DatabaseService().setCurrentAccount(newAccount.id);
 
       // 5. Restore DB backup if available (skip in add-another mode)
       if (!widget.isAddAnother) {
@@ -90,7 +90,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
           if (shouldRestore) {
             final restored = await DatabaseBackupService().restoreDatabase();
             if (restored) {
-              DatabaseService().setCurrentAccount(newAccount.email);
+              DatabaseService().setCurrentAccount(newAccount.id);
             }
           }
         }

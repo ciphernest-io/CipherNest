@@ -151,6 +151,20 @@ class GoogleDriveProvider implements CloudProvider {
   }
 
   @override
+  Future<Uint8List> downloadRange(String cloudId, int start, int endInclusive) async {
+    // Force auth refresh
+    await _getApi();
+    final headers = Map<String, String>.from(_authHeaders!);
+    headers['Range'] = 'bytes=$start-$endInclusive';
+    final url = 'https://www.googleapis.com/drive/v3/files/$cloudId?alt=media';
+    final resp = await http.get(Uri.parse(url), headers: headers);
+    if (resp.statusCode != 206 && resp.statusCode != 200) {
+      throw Exception('Google range download failed: ${resp.statusCode}');
+    }
+    return resp.bodyBytes;
+  }
+
+  @override
   Future<void> deleteFile(String cloudId) async {
     final api = await _getApi();
     await api.files.delete(cloudId);
