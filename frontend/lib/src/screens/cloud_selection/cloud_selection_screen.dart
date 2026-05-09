@@ -174,9 +174,10 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
             const SizedBox(height: 16),
             _CloudOption(
               title: 'OneDrive',
-              subtitle: 'Coming soon',
+              subtitle: 'Sign in with Microsoft',
               icon: PhosphorIcons.microsoftOutlookLogo(PhosphorIconsStyle.thin),
-              enabled: false,
+              enabled: !_isLoading,
+              onTap: () => _connectProvider(CloudAccount.providerOneDrive),
             ),
             const SizedBox(height: 16),
             _CloudOption(
