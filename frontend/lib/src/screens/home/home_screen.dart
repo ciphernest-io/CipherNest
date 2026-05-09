@@ -11,6 +11,8 @@ import 'dart:ui' as ui;
 import 'package:video_thumbnail/video_thumbnail.dart'; // NEW IMPORT
 
 import '../../config/routes.dart';
+import '../../widgets/account_switcher.dart';
+import '../../widgets/ciphernest_logo.dart';
 
 import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
@@ -86,8 +88,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _handleReconnect() async {
     setState(() => _isLoadingSession = true);
     try {
-      await CloudService().signIn(); 
-      await _initSession(); 
+      await Navigator.pushNamed(context, AppRoutes.cloudSelection);
+      await _initSession();
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -344,8 +346,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('CipherNest'),
+        title: const CiphernestLogo(fontSize: 22),
         actions: [
+          const AccountSwitcher(),
           IconButton(
             icon: Icon(PhosphorIcons.gear(PhosphorIconsStyle.thin)),
             onPressed: () => Navigator.pushNamed(context, AppRoutes.settings),

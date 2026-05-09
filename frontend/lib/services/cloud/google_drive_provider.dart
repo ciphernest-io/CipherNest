@@ -4,27 +4,51 @@ import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import '../../services/encryption_service.dart';
+import 'cloud_account.dart';
 import 'cloud_provider.dart';
 
 class GoogleDriveProvider implements CloudProvider {
-  final GoogleSignIn _googleSignIn = GoogleSignIn(
+  @override
+  CloudAccount account;
+
+  GoogleDriveProvider({required this.account});
+
+  static final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: [
       drive.DriveApi.driveAppdataScope,
       drive.DriveApi.driveFileScope,
     ],
   );
-  
+
   GoogleSignInAccount? _currentUserAccount;
   Map<String, String>? _authHeaders;
 
   @override
-  String? get currentUser => _currentUserAccount?.email;
+  String? get currentUser => _currentUserAccount?.email ?? account.email;
+
+  /// Static helper for the cloud-selection screen to add a brand-new Google
+  /// account. Returns a CloudAccount ready to register, or null if the user
+  /// cancels the sign-in flow.
+  static Future<CloudAccount?> signInNewAccount() async {
+    try {
+      // Disconnect any prior sign-in so the account picker is shown
+      await _googleSignIn.signOut();
+      final acct = await _googleSignIn.signIn();
+      if (acct == null) return null;
+      return CloudAccount(
+        providerType: CloudAccount.providerGoogle,
+        email: acct.email,
+      );
+    } catch (e) {
+      debugPrint('Google sign-in error: $e');
+      rethrow;
+    }
+  }
 
   Future<drive.DriveApi> _getApi() async {
-    _authHeaders ??= await _currentUserAccount?.authHeaders;
     if (_authHeaders == null) {
-       await restoreSession();
-       if (_authHeaders == null) throw Exception("Not authenticated");
+      await restoreSession();
+      if (_authHeaders == null) throw Exception('Not authenticated');
     }
     final client = GoogleAuthClient(_authHeaders!);
     return drive.DriveApi(client);
@@ -32,15 +56,15 @@ class GoogleDriveProvider implements CloudProvider {
 
   @override
   Future<void> signIn() async {
-    try {
-      final account = await _googleSignIn.signIn();
-      if (account != null) {
-        _currentUserAccount = account;
-        _authHeaders = await account.authHeaders;
+    // Re-validate this account by silently signing in
+    final email = await restoreSession();
+    if (email == null) {
+      // Fall back to interactive sign-in if silent fails
+      final acct = await _googleSignIn.signIn();
+      if (acct != null) {
+        _currentUserAccount = acct;
+        _authHeaders = await acct.authHeaders;
       }
-    } catch (e) {
-      debugPrint("Sign In Error: $e");
-      rethrow;
     }
   }
 
@@ -54,13 +78,13 @@ class GoogleDriveProvider implements CloudProvider {
   @override
   Future<String?> restoreSession() async {
     try {
-      final account = await _googleSignIn.signInSilently();
-      if (account != null) {
-        _currentUserAccount = account;
-        _authHeaders = await account.authHeaders;
-        return account.email;
+      final acct = await _googleSignIn.signInSilently();
+      if (acct != null) {
+        _currentUserAccount = acct;
+        _authHeaders = await acct.authHeaders;
+        return acct.email;
       }
-    } catch (e) {
+    } catch (_) {
       // Silent fail allowed
     }
     return null;
@@ -88,7 +112,6 @@ class GoogleDriveProvider implements CloudProvider {
 
     drive.Media? media;
 
-    // LOGIC: Choose between RAM (bytes) or STREAM (video)
     if (fileBytes != null) {
       media = drive.Media(
         Future.value(fileBytes).asStream().asBroadcastStream(),
@@ -97,20 +120,17 @@ class GoogleDriveProvider implements CloudProvider {
     } else if (fileStream != null && fileSize != null) {
       media = drive.Media(fileStream, fileSize);
     } else {
-      throw Exception("No data provided for upload");
+      throw Exception('No data provided for upload');
     }
 
-    final result = await api.files.create(
-      driveFile,
-      uploadMedia: media,
-    );
+    final result = await api.files.create(driveFile, uploadMedia: media);
     return result.id;
   }
 
   @override
   Future<Uint8List> downloadFile(String cloudId) async {
     final api = await _getApi();
-    
+
     final metadata = await api.files.get(cloudId, $fields: 'size') as drive.File;
     final expectedSize = int.parse(metadata.size ?? '0');
 
@@ -126,7 +146,7 @@ class GoogleDriveProvider implements CloudProvider {
 
     final data = builder.takeBytes();
     if (data.length != expectedSize) throw Exception('Download incomplete');
-    
+
     return data;
   }
 
@@ -139,22 +159,23 @@ class GoogleDriveProvider implements CloudProvider {
   @override
   Future<List<Map<String, dynamic>>> listCloudFiles() async {
     final api = await _getApi();
-    
+
     final fileList = await api.files.list(
       q: "trashed = false and name contains '.cnest'",
       spaces: 'appDataFolder',
       $fields: 'files(id, name, size, createdTime, appProperties)',
-      pageSize: 1000, 
+      pageSize: 1000,
     );
 
     return fileList.files?.map((f) => {
-      'id': f.id,
-      'name': f.name,
-      'size': f.size,
-      'created': f.createdTime?.toIso8601String(),
-      'type': f.appProperties?['type'],
-      'original_name': f.appProperties?['original_name'],
-    }).toList() ?? [];
+          'id': f.id,
+          'name': f.name,
+          'size': f.size,
+          'created': f.createdTime?.toIso8601String(),
+          'type': f.appProperties?['type'],
+          'original_name': f.appProperties?['original_name'],
+        }).toList() ??
+        [];
   }
 
   @override
@@ -175,23 +196,26 @@ class GoogleDriveProvider implements CloudProvider {
   @override
   Future<bool> checkIntegrity() async {
     try {
-      if (_currentUserAccount == null) await signIn();
-      
+      if (_authHeaders == null) {
+        final email = await restoreSession();
+        if (email == null) return false;
+      }
+
       final list = await listCloudFiles();
       if (list.isEmpty) return true;
 
       final fileId = list.first['id'];
       final api = await _getApi();
       final media = await api.files.get(
-        fileId, 
-        downloadOptions: drive.DownloadOptions.fullMedia
+        fileId,
+        downloadOptions: drive.DownloadOptions.fullMedia,
       ) as drive.Media;
-      
+
       final chunk = await media.stream.first;
       await EncryptionService.verifyKey(Uint8List.fromList(chunk));
       return true;
     } catch (e) {
-      debugPrint("Integrity Check Failed: $e");
+      debugPrint('Integrity Check Failed: $e');
       return false;
     }
   }

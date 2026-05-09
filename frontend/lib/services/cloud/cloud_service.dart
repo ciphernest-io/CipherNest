@@ -1,27 +1,59 @@
 import 'dart:typed_data';
+import 'account_registry.dart';
+import 'cloud_account.dart';
 import 'cloud_provider.dart';
 import 'google_drive_provider.dart';
+import 'onedrive_provider.dart';
 
+/// Facade over the active CloudProvider. The provider is selected based on
+/// whichever account is currently active in [AccountRegistry].
+/// When the active account changes, the provider is re-instantiated.
 class CloudService {
   static final CloudService _instance = CloudService._internal();
   factory CloudService() => _instance;
   CloudService._internal();
 
-  final CloudProvider _provider = GoogleDriveProvider();
+  CloudProvider? _provider;
+  String? _providerForAccountId;
 
-  // --- IDENTITY ---
-  String? get currentEmail => _provider.currentUser;
+  CloudProvider _getProvider() {
+    final active = AccountRegistry().activeAccount;
+    if (active == null) {
+      throw Exception('No active cloud account. Sign in first.');
+    }
+    if (_providerForAccountId == active.id && _provider != null) {
+      return _provider!;
+    }
+    _provider = _buildProvider(active);
+    _providerForAccountId = active.id;
+    return _provider!;
+  }
+
+  CloudProvider _buildProvider(CloudAccount account) {
+    switch (account.providerType) {
+      case CloudAccount.providerGoogle:
+        return GoogleDriveProvider(account: account);
+      case CloudAccount.providerOneDrive:
+        return OneDriveProvider(account: account);
+      default:
+        throw Exception('Unsupported provider type: ${account.providerType}');
+    }
+  }
+
+  /// Convenience getter for screens that need to display the active email.
+  String? get currentEmail => AccountRegistry().activeAccount?.email;
+
+  int get activeProviderType =>
+      AccountRegistry().activeAccount?.providerType ?? 0;
 
   // --- AUTH METHODS ---
-  Future<void> signIn() => _provider.signIn();
-  Future<void> signOut() => _provider.signOut();
-  Future<String?> restoreSession() => _provider.restoreSession();
+  Future<void> signOut() => _getProvider().signOut();
+  Future<String?> restoreSession() => _getProvider().restoreSession();
 
   // --- INTEGRITY ---
-  Future<bool> canaryTest() => _provider.checkIntegrity();
+  Future<bool> canaryTest() => _getProvider().checkIntegrity();
 
   // --- FILE OPS ---
-  // UPDATED: Now supports both bytes (images) and streams (videos)
   Future<String?> uploadEncryptedFile({
     required String filename,
     required bool isImage,
@@ -30,7 +62,7 @@ class CloudService {
     Stream<List<int>>? stream,
     int? size,
   }) {
-    return _provider.uploadEncryptedFile(
+    return _getProvider().uploadEncryptedFile(
       filename: filename,
       isImage: isImage,
       originalName: originalName,
@@ -40,12 +72,19 @@ class CloudService {
     );
   }
 
-  Future<Uint8List> downloadFile(String id) => _provider.downloadFile(id);
-  Future<void> deleteFile(String id) => _provider.deleteFile(id);
+  Future<Uint8List> downloadFile(String id) => _getProvider().downloadFile(id);
+  Future<void> deleteFile(String id) => _getProvider().deleteFile(id);
   Future<List<Map<String, dynamic>>> listCloudFiles() =>
-      _provider.listCloudFiles();
+      _getProvider().listCloudFiles();
 
   // --- LOOKUP ---
   Future<String?> findFileByName(String name) =>
-      _provider.findFileByName(name);
+      _getProvider().findFileByName(name);
+
+  /// Resets the cached provider. Call this if the active account changes
+  /// outside of AccountRegistry's normal flow (rare).
+  void reset() {
+    _provider = null;
+    _providerForAccountId = null;
+  }
 }
