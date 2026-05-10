@@ -233,6 +233,86 @@ class GoogleDriveProvider implements CloudProvider {
       return false;
     }
   }
+
+  // ---- PUBLIC SHARE (uploads to user's regular Drive, anyone-with-link) ----
+
+  static const String _sharesFolderName = 'CipherNest Shares';
+  String? _cachedSharesFolderId;
+
+  Future<String> _ensureSharesFolder() async {
+    if (_cachedSharesFolderId != null) return _cachedSharesFolderId!;
+    final api = await _getApi();
+    // Look for existing folder
+    final lookup = await api.files.list(
+      q: "mimeType = 'application/vnd.google-apps.folder' "
+          "and name = '$_sharesFolderName' "
+          "and trashed = false "
+          "and 'root' in parents",
+      $fields: 'files(id)',
+      pageSize: 1,
+    );
+    if (lookup.files != null && lookup.files!.isNotEmpty) {
+      _cachedSharesFolderId = lookup.files!.first.id;
+      return _cachedSharesFolderId!;
+    }
+    // Create it
+    final folderMeta = drive.File()
+      ..name = _sharesFolderName
+      ..mimeType = 'application/vnd.google-apps.folder'
+      ..parents = ['root'];
+    final created = await api.files.create(folderMeta);
+    _cachedSharesFolderId = created.id!;
+    return _cachedSharesFolderId!;
+  }
+
+  @override
+  Future<({String cloudId, String downloadUrl})> uploadPublicShare({
+    required String filename,
+    required Uint8List bytes,
+  }) async {
+    final api = await _getApi();
+    final folderId = await _ensureSharesFolder();
+
+    final driveFile = drive.File()
+      ..name = filename
+      ..parents = [folderId]
+      ..mimeType = 'application/octet-stream';
+
+    final media = drive.Media(
+      Future.value(bytes).asStream().asBroadcastStream(),
+      bytes.length,
+    );
+
+    final created = await api.files.create(driveFile, uploadMedia: media);
+    final fileId = created.id!;
+
+    // Make it readable by anyone with the link
+    await api.permissions.create(
+      drive.Permission()
+        ..type = 'anyone'
+        ..role = 'reader',
+      fileId,
+    );
+
+    // Public, no-auth URL pattern. Works without API key for anyone with link.
+    // drive.usercontent.google.com is Google's direct-content host. Going
+    // through it with `confirm=t` skips the "Drive can't scan this file"
+    // HTML interstitial that the older drive.google.com/uc URL serves for
+    // anonymous downloads of binary blobs.
+    final downloadUrl =
+        'https://drive.usercontent.google.com/download?id=$fileId&export=download&authuser=0&confirm=t';
+    return (cloudId: fileId, downloadUrl: downloadUrl);
+  }
+
+  @override
+  Future<void> deletePublicShare(String cloudId) async {
+    final api = await _getApi();
+    try {
+      await api.files.delete(cloudId);
+    } catch (e) {
+      debugPrint('deletePublicShare error: $e');
+    }
+  }
 }
 
 class GoogleAuthClient extends http.BaseClient {

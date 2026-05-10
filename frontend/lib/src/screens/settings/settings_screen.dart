@@ -435,6 +435,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: _handleBackup,
           ),
           ListTile(
+            leading: Icon(PhosphorIcons.linkSimple(PhosphorIconsStyle.thin), color: Colors.cyanAccent),
+            title: const Text('Active Shares', style: TextStyle(color: Colors.white)),
+            subtitle: const Text('Manage and revoke share links', style: TextStyle(color: Colors.grey)),
+            trailing: Icon(PhosphorIcons.caretRight(PhosphorIconsStyle.thin), size: 16, color: Colors.grey),
+            onTap: () => Navigator.pushNamed(context, AppRoutes.activeShares),
+          ),
+          ListTile(
             leading: Icon(PhosphorIcons.images(PhosphorIconsStyle.thin), color: Colors.cyanAccent),
             title: const Text('Migrate Gallery', style: TextStyle(color: Colors.white)),
             subtitle: const Text('Import existing photos into CipherNest', style: TextStyle(color: Colors.grey)),

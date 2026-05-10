@@ -83,6 +83,16 @@ class CloudService {
   Future<String?> findFileByName(String name) =>
       _getProvider().findFileByName(name);
 
+  // --- PUBLIC SHARE ---
+  Future<({String cloudId, String downloadUrl})> uploadPublicShare({
+    required String filename,
+    required Uint8List bytes,
+  }) =>
+      _getProvider().uploadPublicShare(filename: filename, bytes: bytes);
+
+  Future<void> deletePublicShare(String cloudId) =>
+      _getProvider().deletePublicShare(cloudId);
+
   /// Resets the cached provider. Call this if the active account changes
   /// outside of AccountRegistry's normal flow (rare).
   void reset() {
