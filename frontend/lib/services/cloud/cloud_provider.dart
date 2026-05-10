@@ -50,4 +50,17 @@ abstract class CloudProvider {
 
   // The replacement for "canaryTest"
   Future<bool> checkIntegrity();
+
+  /// Uploads a share blob to a publicly readable location and returns
+  /// `(cloudId, downloadUrl)`. Used by ShareService to generate magic links.
+  /// Implementations decide where the public location lives (Google: a
+  /// "CipherNest Shares" folder in regular Drive; OneDrive: approot with
+  /// createLink for anonymous access).
+  Future<({String cloudId, String downloadUrl})> uploadPublicShare({
+    required String filename,
+    required Uint8List bytes,
+  });
+
+  /// Deletes a previously created share blob by its cloud id (revoke).
+  Future<void> deletePublicShare(String cloudId);
 }

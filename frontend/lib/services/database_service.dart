@@ -3,6 +3,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import '../src/models/file_model.dart';
 import '../src/models/album_model.dart';
+import '../src/models/share_model.dart';
 import 'cloud/account_registry.dart';
 import 'cloud/cloud_service.dart';
 
@@ -42,7 +43,7 @@ class DatabaseService {
 
     final db = await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: (db, version) async {
         await _createSchema(db);
         await _seedSmartAlbums(db);
@@ -59,11 +60,30 @@ class DatabaseService {
           await _createSchema(db);
           await _seedSmartAlbums(db);
         }
+        // v4 adds the `shares` table for outbound share tracking.
+        if (oldVersion < 4) {
+          await db.execute(_createSharesTableSql);
+        }
       },
     );
     await db.execute('PRAGMA foreign_keys = ON');
     return db;
   }
+
+  static const String _createSharesTableSql = '''
+      CREATE TABLE shares(
+        id TEXT PRIMARY KEY,
+        file_id TEXT NOT NULL,
+        cloud_id TEXT NOT NULL,
+        download_url TEXT NOT NULL,
+        share_url TEXT NOT NULL,
+        has_password INTEGER NOT NULL,
+        expires_at INTEGER,
+        created_at INTEGER NOT NULL,
+        account_id TEXT NOT NULL,
+        FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+      )
+    ''';
 
   static Future<void> _createSchema(Database db) async {
     await db.execute('''
@@ -102,6 +122,7 @@ class DatabaseService {
         FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
       )
     ''');
+    await db.execute(_createSharesTableSql);
   }
 
   static Future<void> _seedSmartAlbums(Database db) async {
@@ -533,5 +554,42 @@ class DatabaseService {
       orderBy: 'created_at DESC',
     );
     return maps.map((m) => CnestFile.fromMap(m)).toList();
+  }
+
+  // --- SHARE OPERATIONS ---
+
+  Future<void> addShare(CnestShare share) async {
+    final db = await database;
+    await db.insert('shares', share.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<List<CnestShare>> getShares() async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final rows = await db.query(
+      'shares',
+      where: 'account_id = ?',
+      whereArgs: [_currentAccountId],
+      orderBy: 'created_at DESC',
+    );
+    return rows.map((r) => CnestShare.fromMap(r)).toList();
+  }
+
+  Future<CnestShare?> getShareById(String id) async {
+    final db = await database;
+    final rows = await db.query(
+      'shares',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return CnestShare.fromMap(rows.first);
+  }
+
+  Future<void> deleteShare(String id) async {
+    final db = await database;
+    await db.delete('shares', where: 'id = ?', whereArgs: [id]);
   }
 }

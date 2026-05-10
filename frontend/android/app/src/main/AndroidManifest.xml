@@ -29,6 +29,19 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- CipherNest share App Link.
+                 autoVerify="true" tells Android to look up
+                 https://ciphernest.pages.dev/.well-known/assetlinks.json so the
+                 app opens directly. Without that file the user just sees a
+                 one-time "Open with" chooser. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https"
+                      android:host="ciphernest.pages.dev"
+                      android:pathPrefix="/s/"/>
+            </intent-filter>
         </activity>
         <!-- OAuth2 redirect callback for flutter_web_auth_2 -->
         <activity

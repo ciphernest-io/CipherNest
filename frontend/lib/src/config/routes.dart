@@ -14,6 +14,9 @@ import '../screens/settings/settings_screen.dart';
 import '../screens/settings/key_management_screen.dart';
 import '../screens/migration/migration_screen.dart';
 import '../screens/gallery/album_detail_screen.dart';
+import '../screens/audio/audio_screen.dart';
+import '../screens/settings/active_shares_screen.dart';
+import '../screens/share/shared_viewer_screen.dart';
 import '../models/album_model.dart';
 
 class AppRoutes {
@@ -31,6 +34,9 @@ class AppRoutes {
   static const String keyManagement = '/key-management';
   static const String migration = '/migration';
   static const String albumDetail = '/album-detail';
+  static const String audio = '/audio';
+  static const String activeShares = '/active-shares';
+  static const String sharedViewer = '/shared-viewer';
 
   // CHANGED argument name to 'routeSettings' to avoid conflict
   static Route<dynamic> generateRoute(RouteSettings routeSettings) {
@@ -81,6 +87,18 @@ class AppRoutes {
         final album = routeSettings.arguments as CnestAlbum;
         return MaterialPageRoute(
           builder: (_) => AlbumDetailScreen(album: album),
+        );
+
+      case audio:
+        return MaterialPageRoute(builder: (_) => const AudioScreen());
+
+      case activeShares:
+        return MaterialPageRoute(builder: (_) => const ActiveSharesScreen());
+
+      case sharedViewer:
+        final uri = routeSettings.arguments as Uri;
+        return MaterialPageRoute(
+          builder: (_) => SharedViewerScreen(shareUri: uri),
         );
 
       default:

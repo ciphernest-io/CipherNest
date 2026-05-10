@@ -14,6 +14,7 @@ import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/auto_sync_service.dart';
 import '../../../services/video_streaming_server.dart';
+import '../share/share_dialog.dart';
 
 class ImageViewerScreen extends StatefulWidget {
   final List<CnestFile> files;
@@ -463,7 +464,8 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                               ),
                               IconButton(
                                 icon: Icon(PhosphorIcons.shareFat(PhosphorIconsStyle.thin)),
-                                onPressed: () {},
+                                onPressed: () => ShareDialog.show(
+                                    context, _currentFiles[_currentIndex]),
                                 color: overlayColor,
                               ),
                               IconButton(
