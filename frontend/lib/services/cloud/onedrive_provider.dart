@@ -549,4 +549,66 @@ class OneDriveProvider implements CloudProvider {
       return false;
     }
   }
+
+  // ---- PUBLIC SHARE (uploads to approot, anonymous createLink) ----
+
+  @override
+  Future<({String cloudId, String downloadUrl})> uploadPublicShare({
+    required String filename,
+    required Uint8List bytes,
+  }) async {
+    return _withRetry(() async {
+      final headers = await _authHeaders();
+      final encodedName = Uri.encodeComponent(filename);
+
+      // 1. Upload to approot (small uploads only — share blobs are typically
+      //    small images/audio/docs; large videos won't realistically be shared)
+      final uploadResp = await http.put(
+        Uri.parse(
+            '$_graphBase/me/drive/special/approot:/$encodedName:/content'),
+        headers: {
+          ...headers,
+          'Content-Type': 'application/octet-stream',
+        },
+        body: bytes,
+      );
+      if (uploadResp.statusCode != 200 && uploadResp.statusCode != 201) {
+        throw Exception(
+            'OneDrive share upload failed (${uploadResp.statusCode}): ${uploadResp.body}');
+      }
+      final uploaded = jsonDecode(uploadResp.body) as Map<String, dynamic>;
+      final cloudId = uploaded['id'] as String;
+
+      // 2. Create anonymous view link
+      final linkResp = await http.post(
+        Uri.parse('$_graphBase/me/drive/items/$cloudId/createLink'),
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'type': 'view', 'scope': 'anonymous'}),
+      );
+      if (linkResp.statusCode != 200 && linkResp.statusCode != 201) {
+        throw Exception(
+            'OneDrive createLink failed (${linkResp.statusCode}): ${linkResp.body}');
+      }
+      final linkJson = jsonDecode(linkResp.body) as Map<String, dynamic>;
+      final link = linkJson['link'] as Map<String, dynamic>;
+      // The webUrl is the share URL (e.g. https://1drv.ms/...).
+      // For direct-binary download we transform it to the OneDrive-recommended
+      // pattern by appending '?download=1' — works for anonymous share URLs.
+      final shareUrl = link['webUrl'] as String;
+      final downloadUrl = '$shareUrl?download=1';
+      return (cloudId: cloudId, downloadUrl: downloadUrl);
+    });
+  }
+
+  @override
+  Future<void> deletePublicShare(String cloudId) async {
+    try {
+      await deleteFile(cloudId);
+    } catch (e) {
+      debugPrint('deletePublicShare error: $e');
+    }
+  }
 }

@@ -22,6 +22,8 @@ import '../../../services/cloud/account_registry.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/sync_service.dart';
 
+enum _UploadCategory { media, document, audio }
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -147,23 +149,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _handleUpload({required bool isMedia}) async {
+  Future<void> _handleUpload({required _UploadCategory category}) async {
+    final isMedia = category == _UploadCategory.media;
+    final isAudio = category == _UploadCategory.audio;
+
     Uint8List? fileBytes;
     Stream<List<int>>? fileStream;
     int? fileSize;
-    String filename = ''; 
+    String filename = '';
     Uint8List? thumbnailBytes;
     bool isVideo = false;
-    String? pickedPath; 
+    String? pickedPath;
 
     try {
       // --- 1. UNIFIED PICKER (FilePicker Only) ---
+      List<String> exts;
+      if (isMedia) {
+        exts = ['jpg', 'jpeg', 'png', 'heic', 'webp', 'mp4', 'mov', 'avi', 'mkv'];
+      } else if (isAudio) {
+        exts = ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'opus', 'wma'];
+      } else {
+        exts = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt'];
+      }
       FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: isMedia 
-            ? ['jpg', 'jpeg', 'png', 'heic', 'webp', 'mp4', 'mov', 'avi', 'mkv']
-            : ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt'],
-        withData: false, // Don't load into RAM
+        allowedExtensions: exts,
+        withData: false,
         allowMultiple: false,
       );
 
@@ -221,7 +232,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       // --- 4. DATABASE ENTRY ---
       final fileId = const Uuid().v4();
-      final type = (isVideo || isMedia) ? CnestFileType.image : CnestFileType.document;
+      CnestFileType type;
+      if (isVideo || isMedia) {
+        type = CnestFileType.image;
+      } else if (isAudio) {
+        type = CnestFileType.audio;
+      } else {
+        type = CnestFileType.document;
+      }
       final currentEmail = CloudService().currentEmail;
 
       if (currentEmail == null) throw Exception('No active account.');
@@ -401,6 +419,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
             const SizedBox(height: 16),
             _DashboardCard(
+              title: 'Audio',
+              icon: PhosphorIcons.musicNote(PhosphorIconsStyle.thin),
+              color: cs.primary,
+              onTap: () => Navigator.pushNamed(context, AppRoutes.audio),
+            ),
+            const SizedBox(height: 16),
+            _DashboardCard(
               title: 'Other Files',
               icon: PhosphorIcons.folder(PhosphorIconsStyle.thin),
               color: cs.primary,
@@ -435,7 +460,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               title: Text('Upload Photo or Video', style: TextStyle(color: cs.onSurface)),
               onTap: () {
                 Navigator.pop(ctx);
-                _handleUpload(isMedia: true);
+                _handleUpload(category: _UploadCategory.media);
               },
             ),
             ListTile(
@@ -443,7 +468,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               title: Text('Upload Document', style: TextStyle(color: cs.onSurface)),
               onTap: () {
                 Navigator.pop(ctx);
-                _handleUpload(isMedia: false);
+                _handleUpload(category: _UploadCategory.document);
+              },
+            ),
+            ListTile(
+              leading: Icon(PhosphorIcons.musicNote(PhosphorIconsStyle.thin), color: cs.primary),
+              title: Text('Upload Audio', style: TextStyle(color: cs.onSurface)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _handleUpload(category: _UploadCategory.audio);
               },
             ),
           ],

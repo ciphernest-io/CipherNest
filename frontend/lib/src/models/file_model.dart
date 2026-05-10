@@ -1,4 +1,6 @@
-enum CnestFileType { image, document, other }
+/// Append-only enum: existing rows in the DB store the integer index, so new
+/// values must be added at the END to preserve backward compatibility.
+enum CnestFileType { image, document, other, audio }
 
 class CnestFile {
   final String id;

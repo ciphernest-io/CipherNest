@@ -14,6 +14,7 @@ import '../../../services/auto_sync_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/sync_service.dart';
+import '../share/share_dialog.dart';
 
 class DocumentsScreen extends StatefulWidget {
   const DocumentsScreen({super.key});
@@ -268,6 +269,10 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                         PopupMenuButton(
                           icon: Icon(PhosphorIcons.dotsThreeVertical(PhosphorIconsStyle.thin), color: cs.onSurface.withAlpha(120)),
                           itemBuilder: (ctx) => [
+                            const PopupMenuItem(
+                              value: 'share',
+                              child: Text('Share'),
+                            ),
                             PopupMenuItem(
                               value: 'delete',
                               child: Row(
@@ -280,6 +285,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                             ),
                           ],
                           onSelected: (value) {
+                            if (value == 'share') ShareDialog.show(context, file);
                             if (value == 'delete') _handleDelete(file);
                           },
                         ),

@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import '../crypto/aes_gcm.dart';
@@ -78,6 +79,64 @@ class EncryptionService {
     final fileKeyBytes = await _cipher.decrypt(encryptedFileKey, masterKey);
     return SecretKey(fileKeyBytes);
   }
+
+  // ---------------------------------------------------------------------------
+  // SHARING HELPERS
+  // ---------------------------------------------------------------------------
+
+  /// Generates a random 256-bit share key. Caller is responsible for sending
+  /// it to the recipient out-of-band (URL fragment, password derivation).
+  static Future<SecretKey> generateShareKey() async {
+    final algorithm = AesGcm.with256bits();
+    return algorithm.newSecretKey();
+  }
+
+  /// Re-wraps the original file's key with [shareKey] so the share blob can
+  /// reuse the same encrypted body with only a different header.
+  ///
+  /// Returns the new 64-byte header bytes: 4-byte length prefix + encrypted
+  /// file key (encrypted with [shareKey] instead of master key).
+  static Future<Uint8List> wrapFileKeyForShare(
+    SecretKey fileKey,
+    SecretKey shareKey,
+  ) async {
+    final fileKeyBytes = await fileKey.extractBytes();
+    final wrapped = await _cipher.encrypt(
+      Uint8List.fromList(fileKeyBytes),
+      shareKey,
+    );
+    final lenHeader = ByteData(4)..setUint32(0, wrapped.length, Endian.big);
+    return Uint8List.fromList(lenHeader.buffer.asUint8List() + wrapped);
+  }
+
+  /// Derives a 256-bit symmetric key from a user-chosen password.
+  /// Uses the same Argon2id parameters as the master-key flow for consistency.
+  /// Caller must persist [salt] alongside the share blob (recipient will need
+  /// it to derive the same key from the same password).
+  static Future<SecretKey> derivePasswordKey(
+    String password,
+    Uint8List salt,
+  ) async {
+    final argon2 = Argon2id(
+      parallelism: 1,
+      memory: 65536, // 64 MB
+      iterations: 2,
+      hashLength: 32,
+    );
+    return argon2.deriveKeyFromPassword(password: password, nonce: salt);
+  }
+
+  /// Generates a fresh 16-byte random salt for password-protected shares.
+  static Uint8List generatePasswordSalt() {
+    final rnd = Random.secure();
+    return Uint8List.fromList(
+      List<int>.generate(16, (_) => rnd.nextInt(256)),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // RANGE DECRYPTION (used by VideoStreamingServer)
+  // ---------------------------------------------------------------------------
 
   /// Decrypts a contiguous run of encrypted chunks given an already-recovered
   /// [fileKey]. [encryptedChunks] is the raw byte slice covering N full chunks

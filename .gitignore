@@ -1,0 +1,3 @@
+# Build artefacts produced when packaging the static web viewer for upload.
+# The source lives in web-viewer/ — the zip is generated on demand.
+web-viewer.zip
