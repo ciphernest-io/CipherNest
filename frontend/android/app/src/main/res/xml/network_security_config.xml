@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext HTTP is blocked by default on Android 9+. The chunked video
+  streaming server (VideoStreamingServer in lib/services/video_streaming_server.dart)
+  binds to 127.0.0.1 and serves decrypted plaintext slices to ExoPlayer over
+  plain HTTP. We whitelist ONLY loopback here so the rest of the app's network
+  traffic stays HTTPS-only.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>
