@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import '../../src/models/file_model.dart';
 import 'account_registry.dart';
 import 'cloud_account.dart';
 import 'cloud_provider.dart';
@@ -56,7 +57,7 @@ class CloudService {
   // --- FILE OPS ---
   Future<String?> uploadEncryptedFile({
     required String filename,
-    required bool isImage,
+    required CnestFileType type,
     String? originalName,
     Uint8List? bytes,
     Stream<List<int>>? stream,
@@ -64,7 +65,7 @@ class CloudService {
   }) {
     return _getProvider().uploadEncryptedFile(
       filename: filename,
-      isImage: isImage,
+      type: type,
       originalName: originalName,
       fileBytes: bytes,
       fileStream: stream,

@@ -9,6 +9,20 @@ class CacheManagerService {
   factory CacheManagerService() => _instance;
   CacheManagerService._internal();
 
+  /// Eviction priority for a cache file path:
+  /// - 1 = full-size decrypted plaintext (`*_decrypted.jpg`, `*_decrypted.mp4`):
+  ///       large, easy to regenerate on next view. Evict these first.
+  /// - 0 = everything else, including `thumb_*.jpg`: small, expensive
+  ///       (decrypt cost) to regenerate, and what keeps the gallery smooth.
+  ///       Evict last.
+  int _evictionPriority(String path) {
+    final name = path.split(Platform.pathSeparator).last;
+    if (name.endsWith('_decrypted.jpg') || name.endsWith('_decrypted.mp4')) {
+      return 1;
+    }
+    return 0;
+  }
+
   /// The Main Function: Checks limits and deletes old files if necessary.
   Future<void> enforceCacheLimit() async {
     try {
@@ -21,17 +35,20 @@ class CacheManagerService {
       final tempDir = await getTemporaryDirectory();
       if (!await tempDir.exists()) return;
 
-      // 3. List & Sort Files (Oldest First)
-      // We explicitly check for File type to ignore subdirectories
-      List<FileSystemEntity> files = tempDir.listSync();
-      
-      // Filter only files (not directories)
-      List<File> cacheFiles = files.whereType<File>().toList();
+      // 3. List & sort files by (priority desc, mtime asc) — evict bulky
+      //    full-image plaintext first; only touch the small thumbnails once
+      //    no full-image plaintext remains, since they're expensive to
+      //    regenerate (cloud download + decrypt) and the thing that keeps
+      //    the gallery smooth.
+      List<File> cacheFiles =
+          tempDir.listSync().whereType<File>().toList();
 
       if (cacheFiles.isEmpty) return;
 
-      // Sort: Oldest "Last Modified" at the start of the list
       cacheFiles.sort((a, b) {
+        final pa = _evictionPriority(a.path);
+        final pb = _evictionPriority(b.path);
+        if (pa != pb) return pb.compareTo(pa); // higher priority first
         return a.lastModifiedSync().compareTo(b.lastModifiedSync());
       });
 
@@ -43,19 +60,19 @@ class CacheManagerService {
 
       debugPrint("Cache Manager: Usage ${(currentUsage / 1024 / 1024).toStringAsFixed(2)} MB / Limit ${(limitBytes / 1024 / 1024).toStringAsFixed(2)} MB");
 
-      // 5. Purge Loop
-      // While we are over the limit, delete the oldest file (index 0)
+      // 5. Purge loop — evict from the front of the sorted list (highest
+      //    priority + oldest) until we're under budget.
       int deletedCount = 0;
       while (currentUsage > limitBytes && cacheFiles.isNotEmpty) {
-        final oldestFile = cacheFiles.removeAt(0); // Remove from list
-        final size = await oldestFile.length();
-        
+        final victim = cacheFiles.removeAt(0);
+        final size = await victim.length();
+
         try {
-          await oldestFile.delete();
-          currentUsage -= size; // Update our running total
+          await victim.delete();
+          currentUsage -= size;
           deletedCount++;
         } catch (e) {
-          debugPrint("Could not delete ${oldestFile.path}: $e");
+          debugPrint("Could not delete ${victim.path}: $e");
         }
       }
 

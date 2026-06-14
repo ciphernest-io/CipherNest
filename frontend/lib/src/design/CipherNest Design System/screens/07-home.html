@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Screens" name="Home Dashboard" subtitle="Your Vault + 4 category cards" viewport="412x915" -->
+<html data-theme="binary" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Home · CipherNest</title>
+<link rel="stylesheet" href="../themes.css">
+<link rel="stylesheet" href="../app.css">
+<link rel="stylesheet" href="../motion.css">
+<link rel="stylesheet" href="../fonts/material.css">
+<style>
+  html,body{background:var(--bg);margin:0;display:flex;justify-content:center;}
+  .acct-chip{ display:inline-flex; align-items:center; gap:8px; padding:6px 12px 6px 6px; border-radius:999px; background:var(--surface); border:1px solid var(--hairline); font:500 13px/1 var(--font); cursor:pointer; }
+  .acct-chip .av{ width:24px;height:24px;border-radius:999px;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600; }
+  .vcard{ display:flex; align-items:center; gap:16px; padding:18px; cursor:pointer; transition:background .15s ease, transform .12s ease; }
+  .vcard:active{ transform:scale(0.99); }
+  .vcard:hover{ background:var(--surface-2); }
+  .vcard-ic{ width:54px;height:54px;border-radius:15px;display:flex;align-items:center;justify-content:center;font-size:28px;flex:0 0 auto; }
+  .vcard-main{ flex:1; }
+  .vcard-t{ font:600 17px/1.2 var(--font); }
+  .vcard-s{ color:var(--fg-muted); font-size:13px; margin-top:4px; }
+  .minithumbs{ display:flex; gap:3px; }
+  .minithumbs img{ width:38px;height:38px;border-radius:8px;object-fit:cover; }
+  .storagebar{ margin:4px 20px 0; padding:16px; border-radius:var(--r-card); background:var(--surface); border:1px solid var(--hairline); }
+  .storagebar .top{ display:flex; justify-content:space-between; align-items:center; font-size:13px; }
+  .meter{ height:7px; border-radius:999px; background:var(--surface-2); margin-top:11px; overflow:hidden; display:flex; }
+  .meter i{ display:block; height:100%; }
+</style>
+</head>
+<body>
+<div class="phone" data-screen-label="Home Dashboard">
+  <div class="statusbar"><span>9:41</span><span class="sb-right"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div class="appbar large" style="display:flex;align-items:center;justify-content:space-between;padding-top:10px;">
+    <div>
+      <div style="font:700 30px/1.1 var(--font);letter-spacing:-0.022em;white-space:nowrap;">Your Vault</div>
+    </div>
+    <button class="iconbtn"><span class="mi">search</span></button>
+  </div>
+  <div class="hpad" style="margin-bottom:6px;"><span class="acct-chip"><span class="av">M</span> maya@protonmail.com · Drive <span class="mi" style="font-size:13px;color:var(--fg-muted);">expand_more</span></span></div>
+  <div class="screen-body" style="padding-bottom:96px;">
+    <div class="storagebar">
+      <div class="top"><span style="color:var(--fg-2);"><span class="mi" style="vertical-align:-2px;">database</span> 38.4 GB encrypted</span><span class="muted">of 200 GB</span></div>
+      <div class="meter"><i style="width:9%;background:var(--accent);"></i><i style="width:7%;background:#5C8CFF;"></i><i style="width:3%;background:var(--success);"></i></div>
+    </div>
+    <div class="hpad" style="margin-top:18px;display:flex;flex-direction:column;gap:12px;">
+      <div class="card" style="overflow:hidden;">
+        <div class="vcard">
+          <div class="vcard-ic" style="background:var(--accent-soft);color:var(--accent);"><span class="mi">image</span></div>
+          <div class="vcard-main"><div class="vcard-t">Photos &amp; Videos</div><div class="vcard-s">2,431 items · 31.2 GB</div></div>
+          <div class="minithumbs">
+            <img src="https://picsum.photos/seed/cn7a/80/80"><img src="https://picsum.photos/seed/cn7b/80/80"><img src="https://picsum.photos/seed/cn7c/80/80">
+          </div>
+        </div>
+      </div>
+      <div class="card"><div class="vcard">
+        <div class="vcard-ic" style="background:rgba(92,140,255,0.14);color:#5C8CFF;"><span class="mi">description</span></div>
+        <div class="vcard-main"><div class="vcard-t">Documents</div><div class="vcard-s">184 files · 4.1 GB</div></div>
+        <span class="mi row-chevron">chevron_right</span>
+      </div></div>
+      <div class="card"><div class="vcard">
+        <div class="vcard-ic" style="background:rgba(47,191,143,0.14);color:var(--success);"><span class="mi">music_note</span></div>
+        <div class="vcard-main"><div class="vcard-t">Audio</div><div class="vcard-s">96 tracks · 2.3 GB</div></div>
+        <span class="mi row-chevron">chevron_right</span>
+      </div></div>
+      <div class="card"><div class="vcard">
+        <div class="vcard-ic" style="background:rgba(255,178,62,0.14);color:var(--warning);"><span class="mi">folder</span></div>
+        <div class="vcard-main"><div class="vcard-t">Other Files</div><div class="vcard-s">312 files · 0.8 GB</div></div>
+        <span class="mi row-chevron">chevron_right</span>
+      </div></div>
+    </div>
+  </div>
+  <button class="fab"><span class="mi">add</span></button>
+  <div class="tabbar">
+    <div class="tab active"><span class="mi fill">encrypted</span>Vault</div>
+    <div class="tab"><span class="mi">history</span>Activity</div>
+    <div class="tab"><span class="mi">settings</span>Settings</div>
+  </div>
+</div>
+<script src="../theme-switch.js"></script>
+</body>
+</html>

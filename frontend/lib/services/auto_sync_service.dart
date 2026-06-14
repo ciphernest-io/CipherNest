@@ -216,7 +216,9 @@ class AutoSyncService {
       }
     }
 
-    // Create DB record — store gallery path for local-first loading
+    // Create DB record — store gallery path for local-first loading and the
+    // AssetEntity id so the grid can pull Android's MediaStore thumbnail
+    // straight from Samsung Gallery's cache.
     final newFile = CnestFile(
       id: fileId,
       filename: filename,
@@ -224,6 +226,7 @@ class AutoSyncService {
       createdAt: asset.createDateTime,
       isUploaded: false,
       localPath: file.path,
+      assetId: asset.id,
       type: isImage ? CnestFileType.image : CnestFileType.document,
       provider: 0,
       accountId: email,
@@ -239,7 +242,7 @@ class AutoSyncService {
       final encryptedStream = EncryptionService.encryptStream(file.openRead());
       mainCloudId = await CloudService().uploadEncryptedFile(
         filename: mainCloudFilename,
-        isImage: false,
+        type: CnestFileType.image,
         originalName: filename,
         stream: encryptedStream,
         size: encryptedSize,
@@ -249,7 +252,7 @@ class AutoSyncService {
       final encrypted = await EncryptionService.encryptFile(fileBytes);
       mainCloudId = await CloudService().uploadEncryptedFile(
         filename: mainCloudFilename,
-        isImage: isImage,
+        type: isImage ? CnestFileType.image : CnestFileType.document,
         originalName: filename,
         bytes: encrypted,
       );
@@ -263,7 +266,7 @@ class AutoSyncService {
       final encryptedThumb = await EncryptionService.encryptFile(thumbnailBytes);
       thumbCloudId = await CloudService().uploadEncryptedFile(
         filename: '${fileId}_thumb.cnest',
-        isImage: true,
+        type: CnestFileType.image,
         bytes: encryptedThumb,
       );
     }

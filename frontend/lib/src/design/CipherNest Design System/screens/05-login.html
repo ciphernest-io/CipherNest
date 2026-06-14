@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Screens" name="Login" subtitle="Biometric unlock" viewport="412x915" -->
+<html data-theme="binary" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Login · CipherNest</title>
+<link rel="stylesheet" href="../themes.css">
+<link rel="stylesheet" href="../app.css">
+<link rel="stylesheet" href="../motion.css">
+<link rel="stylesheet" href="../fonts/material.css">
+<style>
+  html,body{background:var(--bg);margin:0;display:flex;justify-content:center;}
+  .login{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:0 32px; gap:0; }
+  .bio{ width:128px; height:128px; border-radius:50%; display:flex; align-items:center; justify-content:center; cursor:pointer; position:relative; background:var(--accent-soft); }
+  .bio::after{ content:""; position:absolute; inset:-10px; border-radius:50%; border:1.5px solid var(--accent-faint); }
+  .bio i{ font-size:66px; color:var(--accent); }
+  .login .acct{ display:flex; align-items:center; gap:8px; margin-top:34px; color:var(--fg); font-size:15px; font-weight:500; }
+  .login .prompt{ color:var(--fg-muted); font-size:14px; margin-top:8px; }
+  .login .foot{ position:absolute; bottom:42px; left:0; right:0; display:flex; flex-direction:column; align-items:center; gap:20px; padding:0 32px; }
+  .txtlink{ color:var(--accent); font:600 14px/1 var(--font); background:none; border:none; cursor:pointer; }
+</style>
+</head>
+<body>
+<div class="phone" data-screen-label="Login">
+  <div class="statusbar"><span>9:41</span><span class="sb-right"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div class="login">
+    <img src="../assets/logo_mark_brass.png" style="width:46px;position:absolute;top:64px;opacity:0.9;">
+    <div class="bio"><span class="mi">fingerprint</span></div>
+    <div class="acct"><span class="row-thumb accent" style="width:26px;height:26px;border-radius:8px;font-size:13px;">M</span> maya@protonmail.com</div>
+    <div class="prompt">Touch the sensor to unlock your vault</div>
+  </div>
+  <div class="foot">
+    <button class="btn btn-secondary btn-block"><span class="mi">password</span> Use password instead</button>
+    <button class="txtlink">Restore with recovery phrase</button>
+  </div>
+</div>
+<script src="../theme-switch.js"></script>
+</body>
+</html>

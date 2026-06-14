@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 import 'package:uuid/uuid.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart'; 
 import 'package:printing/printing.dart';
@@ -11,6 +11,7 @@ import 'dart:ui' as ui;
 import 'package:video_thumbnail/video_thumbnail.dart'; // NEW IMPORT
 
 import '../../config/routes.dart';
+import '../../config/theme_controller.dart';
 import '../../widgets/account_switcher.dart';
 import '../../widgets/ciphernest_logo.dart';
 
@@ -22,7 +23,7 @@ import '../../../services/cloud/account_registry.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/sync_service.dart';
 
-enum _UploadCategory { media, document, audio }
+enum _UploadCategory { media, document, audio, other }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -35,16 +36,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isUploading = false;
   bool _isLoadingSession = true;
   String? _sessionError;
+  Map<String, int>? _vaultStats;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initSession();
+    SyncService().syncNotifier.addListener(_refreshStats);
   }
 
   @override
   void dispose() {
+    SyncService().syncNotifier.removeListener(_refreshStats);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -56,6 +60,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _refreshStats() async {
+    final stats = await DatabaseService().getStorageStats();
+    if (mounted) setState(() => _vaultStats = stats);
+  }
+
   Future<void> _initSession() async {
     setState(() {
       _isLoadingSession = true;
@@ -65,18 +74,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       final active = AccountRegistry().activeAccount;
       String? email = active?.email;
-      if (email == null) {
-        email = await CloudService().restoreSession();
-      }
+      email ??= await CloudService().restoreSession();
 
       if (mounted) {
         if (active != null) {
           DatabaseService().setCurrentAccount(active.id);
           setState(() => _isLoadingSession = false);
+          _refreshStats();
           SyncService().syncNow();
         } else if (email != null) {
           // Legacy/edge case — no active account but a session exists
           setState(() => _isLoadingSession = false);
+          _refreshStats();
           SyncService().syncNow();
         } else {
           setState(() {
@@ -152,6 +161,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _handleUpload({required _UploadCategory category}) async {
     final isMedia = category == _UploadCategory.media;
     final isAudio = category == _UploadCategory.audio;
+    final isOther = category == _UploadCategory.other;
 
     Uint8List? fileBytes;
     Stream<List<int>>? fileStream;
@@ -163,16 +173,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     try {
       // --- 1. UNIFIED PICKER (FilePicker Only) ---
-      List<String> exts;
+      // "Other" deliberately opens the unrestricted system picker so users
+      // can bring in zips, code files, ipynbs — anything they want vaulted.
+      List<String>? exts;
       if (isMedia) {
         exts = ['jpg', 'jpeg', 'png', 'heic', 'webp', 'mp4', 'mov', 'avi', 'mkv'];
       } else if (isAudio) {
         exts = ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'opus', 'wma'];
+      } else if (isOther) {
+        exts = null;
       } else {
         exts = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt'];
       }
       FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
+        type: exts == null ? FileType.any : FileType.custom,
         allowedExtensions: exts,
         withData: false,
         allowMultiple: false,
@@ -237,6 +251,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         type = CnestFileType.image;
       } else if (isAudio) {
         type = CnestFileType.audio;
+      } else if (isOther) {
+        // Best-effort classify by extension so a music file the user picked
+        // through "Other Files" still lands in the Audio tab, etc.
+        type = CnestFileTypeWire.fromFilename(filename);
       } else {
         type = CnestFileType.document;
       }
@@ -271,7 +289,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
         mainUploadFuture = CloudService().uploadEncryptedFile(
           filename: mainCloudFilename,
-          isImage: false,
+          type: type,
           originalName: filename,
           stream: encryptedStream,
           size: encryptedSize,
@@ -281,7 +299,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final encryptedMainBytes = await EncryptionService.encryptFile(fileBytes);
         mainUploadFuture = CloudService().uploadEncryptedFile(
           filename: mainCloudFilename,
-          isImage: isMedia,
+          type: type,
           originalName: filename,
           bytes: encryptedMainBytes,
         );
@@ -298,7 +316,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         thumbUploadFuture = CloudService().uploadEncryptedFile(
           bytes: encryptedThumbBytes,
           filename: thumbCloudFilename,
-          isImage: true, 
+          type: CnestFileType.image,
         );
       }
 
@@ -355,13 +373,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(PhosphorIcons.cloudSlash(PhosphorIconsStyle.thin), size: 64, color: cs.onSurface.withAlpha(120)),
+              ThemeIcon('cloudSlash', size: 64, color: cs.onSurface.withAlpha(120)),
               const SizedBox(height: 16),
               Text(_sessionError!, style: const TextStyle(color: Colors.red)),
               const SizedBox(height: 24),
               ElevatedButton.icon(
                 onPressed: _handleReconnect,
-                icon: Icon(PhosphorIcons.signIn(PhosphorIconsStyle.thin)),
+                icon: ThemeIcon('signIn'),
                 label: const Text("Reconnect Google Drive"),
               )
             ],
@@ -370,18 +388,48 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
     }
 
+    final cards = <Widget>[
+      _DashboardCard(
+        title: 'Photos & Videos',
+        icon: themeIconData('images'),
+        color: cs.primary,
+        showCardArt: true,
+        onTap: () async {
+          await Navigator.pushNamed(context, AppRoutes.gallery);
+        },
+      ),
+      _DashboardCard(
+        title: 'Documents',
+        icon: themeIconData('fileText'),
+        color: cs.primary,
+        onTap: () => Navigator.pushNamed(context, AppRoutes.documents),
+      ),
+      _DashboardCard(
+        title: 'Audio',
+        icon: themeIconData('musicNote'),
+        color: cs.primary,
+        onTap: () => Navigator.pushNamed(context, AppRoutes.audio),
+      ),
+      _DashboardCard(
+        title: 'Other Files',
+        icon: themeIconData('folder'),
+        color: cs.primary,
+        onTap: () => Navigator.pushNamed(context, AppRoutes.otherFiles),
+      ),
+    ];
+
     return Scaffold(
       appBar: AppBar(
         title: const CiphernestLogo(fontSize: 22),
         actions: [
           const AccountSwitcher(),
           IconButton(
-            icon: Icon(PhosphorIcons.gear(PhosphorIconsStyle.thin)),
+            icon: ThemeIcon('gear'),
             onPressed: () => Navigator.pushNamed(context, AppRoutes.settings),
           ),
         ],
       ),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -401,35 +449,47 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 );
               },
             ),
-            const SizedBox(height: 24),
-            _DashboardCard(
-              title: 'Photos & Videos',
-              icon: PhosphorIcons.images(PhosphorIconsStyle.thin),
-              color: cs.primary,
-              onTap: () async {
-                await Navigator.pushNamed(context, AppRoutes.gallery);
+            const SizedBox(height: 20),
+            _VaultUsageCard(stats: _vaultStats),
+            const SizedBox(height: 16),
+            // Landscape: pack the four category cards into a 2x2 grid so the
+            // user doesn't have to scroll past their full vertical stack on a
+            // short canvas.
+            OrientationBuilder(
+              builder: (context, orientation) {
+                if (orientation == Orientation.landscape) {
+                  return Column(
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(child: cards[0]),
+                          const SizedBox(width: 16),
+                          Expanded(child: cards[1]),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(child: cards[2]),
+                          const SizedBox(width: 16),
+                          Expanded(child: cards[3]),
+                        ],
+                      ),
+                    ],
+                  );
+                }
+                return Column(
+                  children: [
+                    cards[0],
+                    const SizedBox(height: 16),
+                    cards[1],
+                    const SizedBox(height: 16),
+                    cards[2],
+                    const SizedBox(height: 16),
+                    cards[3],
+                  ],
+                );
               },
-            ),
-            const SizedBox(height: 16),
-            _DashboardCard(
-              title: 'Documents',
-              icon: PhosphorIcons.fileText(PhosphorIconsStyle.thin),
-              color: cs.primary,
-              onTap: () => Navigator.pushNamed(context, AppRoutes.documents),
-            ),
-            const SizedBox(height: 16),
-            _DashboardCard(
-              title: 'Audio',
-              icon: PhosphorIcons.musicNote(PhosphorIconsStyle.thin),
-              color: cs.primary,
-              onTap: () => Navigator.pushNamed(context, AppRoutes.audio),
-            ),
-            const SizedBox(height: 16),
-            _DashboardCard(
-              title: 'Other Files',
-              icon: PhosphorIcons.folder(PhosphorIconsStyle.thin),
-              color: cs.primary,
-              onTap: () {},
             ),
           ],
         ),
@@ -439,7 +499,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         backgroundColor: cs.primary,
         icon: _isUploading
           ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: cs.onPrimary, strokeWidth: 2))
-          : Icon(PhosphorIcons.plus(PhosphorIconsStyle.thin), color: cs.onPrimary),
+          : ThemeIcon('plus', color: cs.onPrimary),
         label: Text(_isUploading ? 'Encrypting...' : 'Add File'),
       ),
     );
@@ -456,7 +516,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: Icon(PhosphorIcons.imageSquare(PhosphorIconsStyle.thin), color: cs.primary),
+              leading: ThemeIcon('imageSquare', color: cs.primary),
               title: Text('Upload Photo or Video', style: TextStyle(color: cs.onSurface)),
               onTap: () {
                 Navigator.pop(ctx);
@@ -464,7 +524,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               },
             ),
             ListTile(
-              leading: Icon(PhosphorIcons.fileText(PhosphorIconsStyle.thin), color: cs.primary),
+              leading: ThemeIcon('fileText', color: cs.primary),
               title: Text('Upload Document', style: TextStyle(color: cs.onSurface)),
               onTap: () {
                 Navigator.pop(ctx);
@@ -472,11 +532,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               },
             ),
             ListTile(
-              leading: Icon(PhosphorIcons.musicNote(PhosphorIconsStyle.thin), color: cs.primary),
+              leading: ThemeIcon('musicNote', color: cs.primary),
               title: Text('Upload Audio', style: TextStyle(color: cs.onSurface)),
               onTap: () {
                 Navigator.pop(ctx);
                 _handleUpload(category: _UploadCategory.audio);
+              },
+            ),
+            ListTile(
+              leading: ThemeIcon('folder', color: cs.primary),
+              title: Text('Upload Other File', style: TextStyle(color: cs.onSurface)),
+              subtitle: Text('zip, ipynb, py, anything',
+                  style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 11)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _handleUpload(category: _UploadCategory.other);
               },
             ),
           ],
@@ -491,44 +561,216 @@ class _DashboardCard extends StatelessWidget {
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
+  /// If true, render the active theme pack's `cardArtAsset` behind the card
+  /// content. Reserved for the Photos & Videos tile per the design system.
+  final bool showCardArt;
 
   const _DashboardCard({
     required this.title,
     required this.icon,
     required this.color,
     required this.onTap,
+    this.showCardArt = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final tokens = ThemeController().tokens;
+    final radius = BorderRadius.circular(tokens.rCard);
+
+    final foreground = Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(tokens.rIc),
+          ),
+          child: Icon(icon, color: color, size: 28),
+        ),
+        const SizedBox(width: 16),
+        Text(title, style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600, fontSize: 18)),
+        const Spacer(),
+        ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(120)),
+      ],
+    );
+
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: radius,
       child: Container(
-        padding: const EdgeInsets.all(20),
+        clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           color: cs.surface,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: radius,
           border: Border.all(color: cs.outline),
         ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(12),
+        child: showCardArt
+            ? Stack(
+                children: [
+                  // Theme pack's signature card art (binary digits, soil,
+                  // skyline, UFO, newsprint, marble, code rain) tinted into
+                  // the card surface at a low alpha so the icon + label stay
+                  // readable.
+                  Positioned.fill(
+                    child: Opacity(
+                      opacity: 0.22,
+                      child: Image.asset(
+                        tokens.cardArtAsset,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.all(tokens.pad),
+                    child: foreground,
+                  ),
+                ],
+              )
+            : Padding(
+                padding: EdgeInsets.all(tokens.pad),
+                child: foreground,
               ),
-              child: Icon(icon, color: color, size: 28),
-            ),
-            const SizedBox(width: 16),
-            Text(title, style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600, fontSize: 18)),
-            const Spacer(),
-            Icon(PhosphorIcons.caretRight(PhosphorIconsStyle.thin), size: 16, color: cs.onSurface.withAlpha(120)),
-          ],
-        ),
       ),
     );
   }
+}
+
+class _VaultUsageCard extends StatelessWidget {
+  final Map<String, int>? stats;
+  const _VaultUsageCard({required this.stats});
+
+  String _fmt(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
+    }
+    return '${(bytes / 1024 / 1024 / 1024).toStringAsFixed(2)} GB';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final images = stats?['images'] ?? 0;
+    final docs = stats?['docs'] ?? 0;
+    final audio = stats?['audio'] ?? 0;
+    final other = stats?['other'] ?? 0;
+    final total = images + docs + audio + other;
+    final count = stats?['total_count'] ?? 0;
+
+    final segments = <_UsageSegment>[
+      _UsageSegment('Photos & Videos', images, cs.primary),
+      _UsageSegment('Documents', docs, Colors.amber.shade400),
+      _UsageSegment('Audio', audio, Colors.tealAccent.shade400),
+      _UsageSegment('Other', other, Colors.pinkAccent.shade100),
+    ].where((s) => s.bytes > 0).toList();
+    final tokens = ThemeController().tokens;
+
+    return Container(
+      padding: EdgeInsets.all(tokens.pad),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(tokens.rCard),
+        border: Border.all(color: cs.outline),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                themeIconData('cloudCheck'),
+                color: cs.primary,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Vault usage',
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 15,
+                      ),
+                ),
+              ),
+              Text(
+                stats == null ? '—' : _fmt(total),
+                style: TextStyle(
+                  color: cs.onSurface,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            stats == null
+                ? 'Loading…'
+                : '$count file${count == 1 ? '' : 's'} encrypted on this account',
+            style: TextStyle(
+              color: cs.onSurface.withAlpha(140),
+              fontSize: 12,
+            ),
+          ),
+          if (segments.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: SizedBox(
+                height: 6,
+                child: Row(
+                  children: segments
+                      .map(
+                        (s) => Expanded(
+                          flex: s.bytes,
+                          child: Container(color: s.color),
+                        ),
+                      )
+                      .toList(),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 14,
+              runSpacing: 6,
+              children: segments.map((s) {
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: s.color,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '${s.label} · ${_fmt(s.bytes)}',
+                      style: TextStyle(
+                        color: cs.onSurface.withAlpha(180),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                );
+              }).toList(),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _UsageSegment {
+  final String label;
+  final int bytes;
+  final Color color;
+  _UsageSegment(this.label, this.bytes, this.color);
 }

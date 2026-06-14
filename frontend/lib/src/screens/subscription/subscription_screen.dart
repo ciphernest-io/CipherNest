@@ -1,6 +1,6 @@
 import 'dart:io'; // <--- Added for exit(0)
 import 'package:flutter/material.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 
 import '../../config/routes.dart';
 
@@ -151,7 +151,7 @@ class _FeatureItem extends StatelessWidget {
       child: Row(
         children: [
           Icon(
-            PhosphorIcons.checkCircle(PhosphorIconsStyle.fill),
+            themeIconData('checkCircle', selected: true),
             color: cs.primary,
             size: 18,
           ),

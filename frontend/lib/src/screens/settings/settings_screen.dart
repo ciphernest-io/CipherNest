@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart'; // ENABLED
 import '../../config/routes.dart';
@@ -13,7 +13,7 @@ import '../../../services/database_backup_service.dart';
 import '../../../services/cache_manager_service.dart';
 import '../../../services/auto_sync_service.dart';
 import 'package:permission_handler/permission_handler.dart';
-import '../../config/theme.dart' show AccentTheme, AccentColors;
+import '../../config/theme_packs.dart';
 import '../../config/theme_controller.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -28,10 +28,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   double _cacheLimitGB = 0.5;    // The value the slider shows NOW
   double _originalLimitGB = 0.5; // The value saved on DISK
   
-  // Storage Stats
-  int _totalFileCount = 0;
-  int _imageBytes = 0;
-  int _docBytes = 0;
   bool _isLoading = true;
   bool get _hasChanges => _cacheLimitGB != _originalLimitGB;
 
@@ -104,14 +100,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       debugPrint("Cache error: $e");
     }
 
-    final stats = await DatabaseService().getStorageStats();
-
     if (mounted) {
       setState(() {
         _cacheSize = _formatBytes(cacheBytes);
-        _imageBytes = stats['images'] ?? 0;
-        _docBytes = stats['docs'] ?? 0;
-        _totalFileCount = stats['total_count'] ?? 0;
         _isLoading = false;
       });
     }
@@ -222,13 +213,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   IconData _providerIcon(int providerType) {
     switch (providerType) {
       case CloudAccount.providerGoogle:
-        return PhosphorIcons.googleLogo(PhosphorIconsStyle.thin);
+        return themeIconData('googleLogo');
       case CloudAccount.providerOneDrive:
-        return PhosphorIcons.microsoftOutlookLogo(PhosphorIconsStyle.thin);
+        return themeIconData('microsoftOutlookLogo');
       case CloudAccount.providerDropbox:
-        return PhosphorIcons.dropboxLogo(PhosphorIconsStyle.thin);
+        return themeIconData('dropboxLogo');
       default:
-        return PhosphorIcons.cloud(PhosphorIconsStyle.thin);
+        return themeIconData('cloud');
     }
   }
 
@@ -269,11 +260,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final totalBytes = _imageBytes + _docBytes;
-    final totalForBar = totalBytes == 0 ? 1 : totalBytes; 
-    final imageFlex = (_imageBytes / totalForBar * 100).round();
-    final docFlex = (_docBytes / totalForBar * 100).round();
-
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
@@ -300,14 +286,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         style: TextStyle(color: cs.onSurface.withAlpha(140)),
                       ),
                       trailing: IconButton(
-                        icon: Icon(PhosphorIcons.signOut(PhosphorIconsStyle.thin), color: Colors.redAccent),
+                        icon: ThemeIcon('signOut', color: Colors.redAccent),
                         onPressed: () => _handleRemoveAccount(a.id),
                       ),
                     ),
                   ListTile(
                     leading: CircleAvatar(
                       backgroundColor: cs.primary.withAlpha(60),
-                      child: Icon(PhosphorIcons.plus(PhosphorIconsStyle.thin), color: cs.primary, size: 20),
+                      child: ThemeIcon('plus', color: cs.primary, size: 20),
                     ),
                     title: Text('Add account', style: TextStyle(color: cs.primary)),
                     onTap: () => Navigator.pushNamed(context, AppRoutes.cloudSelection, arguments: true),
@@ -317,48 +303,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
           ),
           const Divider(color: Colors.white10),
-
-          // ... Storage Bar Section ...
-          _SectionHeader(title: "Vault Usage"),
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 16),
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white10)),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(_formatBytes(totalBytes), style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
-                    Text("$_totalFileCount Files", style: const TextStyle(color: Colors.grey)),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: SizedBox(
-                    height: 12,
-                    child: Row(
-                      children: [
-                        if (totalBytes > 0) ...[
-                          Flexible(flex: imageFlex, child: Container(color: Colors.purpleAccent)),
-                          Flexible(flex: docFlex, child: Container(color: Colors.blueAccent)),
-                        ] else 
-                          Flexible(flex: 1, child: Container(color: Colors.grey[800])),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(children: [
-                  _LegendItem(color: Colors.purpleAccent, label: "Photos", size: _imageBytes),
-                  const SizedBox(width: 24),
-                  _LegendItem(color: Colors.blueAccent, label: "Documents", size: _docBytes),
-                ]),
-              ],
-            ),
-          ),
 
           // --- DATA MANAGEMENT ---
           _SectionHeader(title: "Data Management"),
@@ -423,30 +367,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
 
           ListTile(
-            leading: Icon(PhosphorIcons.broom(PhosphorIconsStyle.thin), color: Colors.orangeAccent),
+            leading: ThemeIcon('broom', color: Colors.orangeAccent),
             title: const Text('Clear Local Cache', style: TextStyle(color: Colors.white)),
             subtitle: Text('Free up $_cacheSize on device', style: const TextStyle(color: Colors.grey)),
             onTap: _clearCache,
           ),
           ListTile(
-            leading: Icon(PhosphorIcons.cloudArrowUp(PhosphorIconsStyle.thin), color: Colors.greenAccent),
+            leading: ThemeIcon('cloudArrowUp', color: Colors.greenAccent),
             title: const Text('Backup Vault Index', style: TextStyle(color: Colors.white)),
             subtitle: const Text('Encrypt and upload your vault index to the cloud', style: TextStyle(color: Colors.grey)),
             onTap: _handleBackup,
           ),
           ListTile(
-            leading: Icon(PhosphorIcons.linkSimple(PhosphorIconsStyle.thin), color: Colors.cyanAccent),
+            leading: ThemeIcon('linkSimple', color: Colors.cyanAccent),
             title: const Text('Active Shares', style: TextStyle(color: Colors.white)),
             subtitle: const Text('Manage and revoke share links', style: TextStyle(color: Colors.grey)),
-            trailing: Icon(PhosphorIcons.caretRight(PhosphorIconsStyle.thin), size: 16, color: Colors.grey),
+            trailing: ThemeIcon('caretRight', size: 16, color: Colors.grey),
             onTap: () => Navigator.pushNamed(context, AppRoutes.activeShares),
           ),
           ListTile(
-            leading: Icon(PhosphorIcons.images(PhosphorIconsStyle.thin), color: Colors.cyanAccent),
+            leading: ThemeIcon('images', color: Colors.cyanAccent),
             title: const Text('Migrate Gallery', style: TextStyle(color: Colors.white)),
             subtitle: const Text('Import existing photos into CipherNest', style: TextStyle(color: Colors.grey)),
-            trailing: Icon(PhosphorIcons.caretRight(PhosphorIconsStyle.thin), size: 16, color: Colors.grey),
+            trailing: ThemeIcon('caretRight', size: 16, color: Colors.grey),
             onTap: () => Navigator.pushNamed(context, AppRoutes.migration),
+          ),
+          ListTile(
+            leading: ThemeIcon('trash', color: Colors.redAccent),
+            title: const Text('Recycle Bin', style: TextStyle(color: Colors.white)),
+            subtitle: const Text('Restore or permanently delete recent items', style: TextStyle(color: Colors.grey)),
+            trailing: ThemeIcon('caretRight', size: 16, color: Colors.grey),
+            onTap: () => Navigator.pushNamed(context, AppRoutes.recycleBin),
           ),
 
           const Divider(color: Colors.white10),
@@ -454,14 +405,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // --- AUTO-SYNC ---
           _SectionHeader(title: "Auto-Sync"),
           SwitchListTile(
-            secondary: Icon(PhosphorIcons.arrowsClockwise(PhosphorIconsStyle.thin), color: Colors.cyanAccent),
+            secondary: ThemeIcon('arrowsClockwise', color: Colors.cyanAccent),
             title: const Text('Auto-Sync Gallery', style: TextStyle(color: Colors.white)),
             subtitle: Text(
               _autoSyncEnabled ? 'Last sync: $_lastSyncDisplay' : 'Automatically encrypt new photos',
               style: const TextStyle(color: Colors.grey),
             ),
             value: _autoSyncEnabled,
-            activeColor: Colors.cyanAccent,
+            activeThumbColor: Colors.cyanAccent,
             onChanged: _toggleAutoSync,
           ),
           if (_autoSyncEnabled)
@@ -469,7 +420,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               leading: const SizedBox(width: 24),
               title: const Text('Sync Now', style: TextStyle(color: Colors.cyanAccent)),
               subtitle: const Text('New photos sync automatically on app open', style: TextStyle(color: Colors.grey, fontSize: 12)),
-              trailing: Icon(PhosphorIcons.play(PhosphorIconsStyle.fill), color: Colors.cyanAccent),
+              trailing: ThemeIcon('play', selected: true, color: Colors.cyanAccent),
               onTap: _handleSyncNow,
             ),
 
@@ -478,19 +429,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // --- GALLERY ---
           _SectionHeader(title: "Gallery"),
           SwitchListTile(
-            secondary: Icon(PhosphorIcons.sparkle(PhosphorIconsStyle.thin), color: Colors.amberAccent),
+            secondary: ThemeIcon('sparkle', color: Colors.amberAccent),
             title: const Text('Show Featured Content', style: TextStyle(color: Colors.white)),
             subtitle: const Text('Display stories and highlights', style: TextStyle(color: Colors.grey)),
             value: _showFeatured,
-            activeColor: Colors.amberAccent,
+            activeThumbColor: Colors.amberAccent,
             onChanged: _toggleFeatured,
           ),
           SwitchListTile(
-            secondary: Icon(PhosphorIcons.clockCounterClockwise(PhosphorIconsStyle.thin), color: Colors.amberAccent),
+            secondary: ThemeIcon('clockCounterClockwise', color: Colors.amberAccent),
             title: const Text('A Year Ago Memories', style: TextStyle(color: Colors.white)),
             subtitle: const Text('Show photos from this day last year', style: TextStyle(color: Colors.grey)),
             value: _showYearAgo,
-            activeColor: Colors.amberAccent,
+            activeThumbColor: Colors.amberAccent,
             onChanged: _toggleYearAgo,
           ),
 
@@ -506,7 +457,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   SwitchListTile(
                     secondary: Icon(
-                      tc.brightness == Brightness.dark ? PhosphorIcons.moon(PhosphorIconsStyle.thin) : PhosphorIcons.sun(PhosphorIconsStyle.thin),
+                      tc.brightness == Brightness.dark ? themeIconData('moon') : themeIconData('sun'),
                       color: Theme.of(context).colorScheme.primary,
                     ),
                     title: Text('Light Mode', style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
@@ -518,28 +469,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onChanged: (_) => tc.toggleBrightness(),
                   ),
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Row(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                    child: Text(
+                      'Theme',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurface,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    child: Column(
                       children: [
-                        Text('Accent Color', style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
-                        const Spacer(),
-                        for (final accent in AccentTheme.values)
-                          Padding(
-                            padding: const EdgeInsets.only(left: 10),
-                            child: GestureDetector(
-                              onTap: () => tc.setAccent(accent),
-                              child: Container(
-                                width: 32,
-                                height: 32,
-                                decoration: BoxDecoration(
-                                  color: AccentColors.fromTheme(accent).primary,
-                                  shape: BoxShape.circle,
-                                  border: tc.accent == accent
-                                      ? Border.all(color: Theme.of(context).colorScheme.onSurface, width: 2.5)
-                                      : null,
-                                ),
-                              ),
-                            ),
+                        for (final pack in ThemePack.values)
+                          _ThemePackTile(
+                            pack: pack,
+                            selected: tc.pack == pack,
+                            onTap: () => tc.setPack(pack),
                           ),
                       ],
                     ),
@@ -553,10 +500,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // ... Security Section ...
           _SectionHeader(title: "Security"),
           ListTile(
-            leading: Icon(PhosphorIcons.key(PhosphorIconsStyle.thin), color: Colors.greenAccent),
+            leading: ThemeIcon('key', color: Colors.greenAccent),
             title: const Text('Key Management', style: TextStyle(color: Colors.white)),
             subtitle: const Text('Check encryption integrity', style: TextStyle(color: Colors.grey)),
-            trailing: Icon(PhosphorIcons.caretRight(PhosphorIconsStyle.thin), size: 16, color: Colors.grey),
+            trailing: ThemeIcon('caretRight', size: 16, color: Colors.grey),
             onTap: () => Navigator.pushNamed(context, AppRoutes.keyManagement),
           ),
           
@@ -564,37 +511,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const Center(child: Text('CipherNest v0.5.0 Beta', style: TextStyle(color: Colors.white24))),
         ],
       ),
-    );
-  }
-}
-
-class _LegendItem extends StatelessWidget {
-  final Color color;
-  final String label;
-  final int size;
-
-  const _LegendItem({required this.color, required this.label, required this.size});
-
-  String _formatBytes(int bytes) {
-    if (bytes < 1024) return "$bytes B";
-    if (bytes < 1024 * 1024) return "${(bytes / 1024).toStringAsFixed(1)} KB";
-    return "${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB";
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Container(width: 12, height: 12, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-        const SizedBox(width: 8),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-            Text(_formatBytes(size), style: TextStyle(color: Colors.grey[400], fontSize: 10)),
-          ],
-        )
-      ],
     );
   }
 }
@@ -609,13 +525,130 @@ class _SectionHeader extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
       child: Text(
         title.toUpperCase(),
-        style: const TextStyle(
+        style: TextStyle(
           color: AppColors.primary,
           fontSize: 12,
           fontWeight: FontWeight.bold,
           letterSpacing: 1.2,
         ),
       ),
+    );
+  }
+}
+
+/// One row in the theme-pack picker. Shows the pack name, a one-line tagline,
+/// and a swatch trio (bg / surface / accent) so the user can preview the
+/// palette before tapping. Tap commits via [onTap].
+class _ThemePackTile extends StatelessWidget {
+  final ThemePack pack;
+  final bool selected;
+  final VoidCallback onTap;
+  const _ThemePackTile({
+    required this.pack,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    // Preview swatches use the pack's DARK tokens since dark is the design
+    // system's default — the user can flip the brightness switch above.
+    final t = ThemePackTokens.forPackMode(pack, Brightness.dark);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: selected ? cs.surfaceContainerHigh : cs.surfaceContainer,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: selected ? cs.primary : cs.outline,
+              width: selected ? 2 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              _SwatchTrio(bg: t.bg, surface: t.surface, accent: t.accent),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      pack.label,
+                      style: TextStyle(
+                        color: cs.onSurface,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 15,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      pack.tagline,
+                      style: TextStyle(
+                        color: cs.onSurface.withAlpha(140),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (selected)
+                Icon(Icons.check_circle, color: cs.primary, size: 22),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SwatchTrio extends StatelessWidget {
+  final Color bg;
+  final Color surface;
+  final Color accent;
+  const _SwatchTrio({
+    required this.bg,
+    required this.surface,
+    required this.accent,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 56,
+      height: 36,
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _Dot(color: surface),
+          const SizedBox(width: 4),
+          _Dot(color: accent),
+        ],
+      ),
+    );
+  }
+}
+
+class _Dot extends StatelessWidget {
+  final Color color;
+  const _Dot({required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 14,
+      height: 14,
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
     );
   }
 }

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html data-theme="binary" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Other Files · CipherNest</title>
+<link rel="stylesheet" href="../themes.css">
+<link rel="stylesheet" href="../app.css">
+<link rel="stylesheet" href="../motion.css">
+<link rel="stylesheet" href="../fonts/material.css">
+<style>
+  html,body{background:var(--bg);margin:0;display:flex;justify-content:center;}
+  .of{ display:flex; align-items:center; gap:14px; height:88px; padding:0 16px; cursor:pointer; }
+  .of + .of{ border-top:1px solid var(--hairline); }
+  .of:hover{ background:var(--surface); }
+  .of-ic{ width:46px;height:46px;border-radius:12px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;font-size:23px; }
+  .of-main{ flex:1; min-width:0; }
+  .of-name{ font:500 15px/1.3 var(--font); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-family:var(--font-mono); letter-spacing:-0.02em; }
+  .of-meta{ display:flex; align-items:center; gap:8px; margin-top:6px; color:var(--fg-muted); font-size:12px; }
+</style>
+</head>
+<body>
+<div class="phone" data-screen-label="Other Files">
+  <div class="statusbar"><span>9:41</span><span class="sb-right"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div class="appbar"><button class="iconbtn"><span class="mi">arrow_back</span></button><span class="appbar-title">Other Files</span><div class="appbar-trailing"><button class="iconbtn"><span class="mi">search</span></button><button class="iconbtn"><span class="mi">sort</span></button></div></div>
+  <div class="screen-body">
+    <div style="padding:10px 16px 6px;color:var(--fg-muted);font-size:13px;">312 files · 0.8 GB encrypted</div>
+    <div class="of">
+      <div class="of-ic" style="background:rgba(255,178,62,0.14);color:var(--warning);"><span class="mi fill">folder_zip</span></div>
+      <div class="of-main"><div class="of-name">project-backup.zip</div><div class="of-meta"><span class="pill ext">ZIP</span><span>248 MB</span><span>·</span><span>May 19</span></div></div>
+      <button class="row-kebab"><span class="mi">more_vert</span></button>
+    </div>
+    <div class="of">
+      <div class="of-ic" style="background:rgba(255,92,138,0.14);color:#FF5C8A;"><span class="mi fill">menu_book</span></div>
+      <div class="of-main"><div class="of-name">analysis.ipynb</div><div class="of-meta"><span class="pill ext">IPYNB</span><span>1.2 MB</span><span>·</span><span>May 17</span></div></div>
+      <button class="row-kebab"><span class="mi">more_vert</span></button>
+    </div>
+    <div class="of">
+      <div class="of-ic" style="background:rgba(92,140,255,0.14);color:#5C8CFF;"><span class="mi fill">code</span></div>
+      <div class="of-main"><div class="of-name">scrape_keys.py</div><div class="of-meta"><span class="pill ext">PY</span><span>14 KB</span><span>·</span><span>May 15</span></div></div>
+      <button class="row-kebab"><span class="mi">more_vert</span></button>
+    </div>
+    <div class="of">
+      <div class="of-ic" style="background:rgba(47,191,143,0.14);color:var(--success);"><span class="mi fill">csv</span></div>
+      <div class="of-main"><div class="of-name">export_2026.csv</div><div class="of-meta"><span class="pill ext">CSV</span><span>3.8 MB</span><span>·</span><span>May 11</span></div></div>
+      <button class="row-kebab"><span class="mi">more_vert</span></button>
+    </div>
+    <div class="of">
+      <div class="of-ic" style="background:rgba(194,161,90,0.16);color:var(--accent);"><span class="mi fill">database</span></div>
+      <div class="of-main"><div class="of-name">vault_index.db</div><div class="of-meta"><span class="pill ext">DB</span><span>620 KB</span><span>·</span><span>May 6</span></div></div>
+      <button class="row-kebab"><span class="mi">more_vert</span></button>
+    </div>
+    <div class="of">
+      <div class="of-ic" style="background:var(--surface-2);color:var(--fg-2);"><span class="mi fill">code</span></div>
+      <div class="of-main"><div class="of-name">config.yaml</div><div class="of-meta"><span class="pill ext">YAML</span><span>2 KB</span><span>·</span><span>Apr 29</span></div></div>
+      <button class="row-kebab"><span class="mi">more_vert</span></button>
+    </div>
+  </div>
+</div>
+<script src="../theme-switch.js"></script>
+</body>
+</html>

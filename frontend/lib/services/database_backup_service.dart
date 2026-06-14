@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import '../src/models/file_model.dart';
 import 'cloud/cloud_service.dart';
 import 'database_service.dart';
 import 'encryption_service.dart';
@@ -40,7 +41,7 @@ class DatabaseBackupService {
 
       await CloudService().uploadEncryptedFile(
         filename: backupFileName,
-        isImage: false,
+        type: CnestFileType.other,
         bytes: encrypted,
       );
     } catch (e) {

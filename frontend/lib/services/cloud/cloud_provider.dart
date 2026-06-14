@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import '../../src/models/file_model.dart';
 import 'cloud_account.dart';
 
 /// Abstract base for cloud storage providers (Google Drive, OneDrive, Dropbox).
@@ -25,9 +26,12 @@ abstract class CloudProvider {
   /// Uploads a file.
   /// Provide [fileBytes] for small files (images).
   /// Provide [fileStream] and [fileSize] for large files (videos).
+  /// [type] is round-tripped via provider-specific metadata (Drive
+  /// `appProperties`, OneDrive filename-encoding) so reconcile can restore the
+  /// right vault tab when re-listing.
   Future<String?> uploadEncryptedFile({
     required String filename,
-    required bool isImage,
+    required CnestFileType type,
     String? originalName,
     Uint8List? fileBytes,
     Stream<List<int>>? fileStream,

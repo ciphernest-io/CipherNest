@@ -29,6 +29,26 @@ subprojects {
     val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
     project.layout.buildDirectory.value(newSubprojectBuildDir)
 }
+// AGP 8.x requires every Android library to declare a `namespace` in its
+// build.gradle. Older Flutter plugins (e.g. async_wallpaper 1.0.1) still rely
+// on the deprecated `package` attribute in their AndroidManifest. Without this
+// shim the build fails with "Namespace not specified". We backfill the
+// namespace from the plugin's `group`, which conventionally matches the old
+// manifest `package` value. Registered BEFORE the evaluationDependsOn block
+// below — that block forces :app to evaluate, so afterEvaluate hooks have to
+// be in place before it runs.
+subprojects {
+    afterEvaluate {
+        if (project.hasProperty("android")) {
+            val androidExt = project.extensions.findByName("android")
+                    as? com.android.build.gradle.BaseExtension
+            if (androidExt != null && androidExt.namespace == null) {
+                androidExt.namespace = project.group.toString()
+            }
+        }
+    }
+}
+
 subprojects {
     project.evaluationDependsOn(":app")
 }

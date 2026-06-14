@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 import '../../config/routes.dart';
 import '../../../services/cloud/account_registry.dart';
 import '../../../services/cloud/cloud_account.dart';
@@ -167,7 +167,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
             _CloudOption(
               title: 'Google Drive',
               subtitle: 'Sign in with Google',
-              icon: PhosphorIcons.googleLogo(PhosphorIconsStyle.thin),
+              icon: themeIconData('googleLogo'),
               enabled: !_isLoading,
               onTap: () => _connectProvider(CloudAccount.providerGoogle),
             ),
@@ -175,7 +175,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
             _CloudOption(
               title: 'OneDrive',
               subtitle: 'Sign in with Microsoft',
-              icon: PhosphorIcons.microsoftOutlookLogo(PhosphorIconsStyle.thin),
+              icon: themeIconData('microsoftOutlookLogo'),
               enabled: !_isLoading,
               onTap: () => _connectProvider(CloudAccount.providerOneDrive),
             ),
@@ -183,7 +183,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
             _CloudOption(
               title: 'Dropbox',
               subtitle: 'Coming soon',
-              icon: PhosphorIcons.dropboxLogo(PhosphorIconsStyle.thin),
+              icon: themeIconData('dropboxLogo'),
               enabled: false,
             ),
             if (_isLoading) ...[

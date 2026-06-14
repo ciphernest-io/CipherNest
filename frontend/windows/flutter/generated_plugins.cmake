@@ -5,9 +5,11 @@
 list(APPEND FLUTTER_PLUGIN_LIST
   app_links
   desktop_webview_window
+  emoji_picker_flutter
   file_selector_windows
   flutter_secure_storage_windows
   local_auth_windows
+  pasteboard
   permission_handler_windows
   printing
   share_plus

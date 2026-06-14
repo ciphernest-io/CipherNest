@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 
+import '../services/recycle_bin_service.dart';
 import 'config/constants.dart';
 import 'config/routes.dart';
 import 'config/theme_controller.dart';
@@ -53,6 +54,11 @@ class _AppState extends State<App> {
       (uri) => _handleIncomingUri(uri, isColdStart: false),
       onError: (Object e) => debugPrint('App: uriLinkStream error: $e'),
     );
+    // Fire-and-forget: purge soft-deleted rows whose 30-day TTL has lapsed.
+    // Runs after the deep-link listener is up so it never blocks an incoming
+    // share. The DB query is account-scoped and falls through quickly when
+    // no account has been bound yet.
+    unawaited(RecycleBinService().sweepRecycleBin());
   }
 
   void _handleIncomingUri(Uri uri, {required bool isColdStart}) {
@@ -91,6 +97,8 @@ class _AppState extends State<App> {
 
   @override
   Widget build(BuildContext context) {
+    final tokens = _themeController.tokens;
+    final appTex = tokens.appTexAsset;
     return MaterialApp(
       title: 'CipherNest',
       debugShowCheckedModeBanner: false,
@@ -98,6 +106,27 @@ class _AppState extends State<App> {
       theme: _themeController.themeData,
       initialRoute: AppRoutes.splash,
       onGenerateRoute: AppRoutes.generateRoute,
+      // App-wide texture (currently only Hackerman's code-rain). Painted
+      // behind every route, beneath route content, at low opacity so screens
+      // remain legible. Builder runs once per route push and re-runs when
+      // ThemeController notifies, so switching themes swaps the texture.
+      builder: appTex == null
+          ? null
+          : (context, child) => Stack(
+                children: [
+                  Positioned.fill(
+                    child: Opacity(
+                      opacity: 0.35,
+                      child: Image.asset(
+                        appTex,
+                        fit: BoxFit.cover,
+                        repeat: ImageRepeat.repeat,
+                      ),
+                    ),
+                  ),
+                  if (child != null) child,
+                ],
+              ),
     );
   }
 }

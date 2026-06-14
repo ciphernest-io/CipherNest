@@ -48,6 +48,7 @@ dependencies:
   open_file: ^3.3.2
   intl: ^0.19.0
   printing: ^5.13.0
+  pdf: ^3.11.0
   
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -67,6 +68,14 @@ dependencies:
   just_audio: ^0.9.40
   share_plus: ^10.0.0
   app_links: ^6.3.2
+  pasteboard: ^0.4.0
+  async_wallpaper: ^1.0.0
+  pro_image_editor: ^7.6.0
+  material_symbols_icons: ^4.2719.3
+  # Pinned: emoji_picker_flutter 4.4.0 added a required positional parameter
+  # to EmojiViewState that pro_image_editor 7.6.5 doesn't pass, so the build
+  # fails. Keep this below 4.4 until pro_image_editor catches up.
+  emoji_picker_flutter: ">=4.3.0 <4.4.0"
 
 dev_dependencies:
   flutter_test:
@@ -93,6 +102,7 @@ flutter:
   # To add assets to your application, add an assets section, like this:
   assets:
     - assets/images/
+    - assets/images/themes/
     - assets/icons/
 
   fonts:

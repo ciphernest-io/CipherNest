@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../models/file_model.dart';
@@ -84,7 +84,7 @@ class _ShareDialogState extends State<ShareDialog> {
           children: [
             Row(
               children: [
-                Icon(PhosphorIcons.shareFat(PhosphorIconsStyle.thin),
+                ThemeIcon('shareFat',
                     color: cs.primary),
                 const SizedBox(width: 12),
                 Expanded(
@@ -170,7 +170,7 @@ class _ShareDialogState extends State<ShareDialog> {
                 child: CircularProgressIndicator(
                     strokeWidth: 2, color: cs.onPrimary),
               )
-            : Icon(PhosphorIcons.linkSimple(PhosphorIconsStyle.thin)),
+            : ThemeIcon('linkSimple'),
         label: Text(_creating ? 'Creating share…' : 'Create link'),
       ),
     ];
@@ -227,7 +227,7 @@ class _ShareDialogState extends State<ShareDialog> {
                   );
                 }
               },
-              icon: Icon(PhosphorIcons.copy(PhosphorIconsStyle.thin)),
+              icon: ThemeIcon('copy'),
               label: const Text('Copy'),
             ),
           ),
@@ -239,7 +239,7 @@ class _ShareDialogState extends State<ShareDialog> {
                   'View encrypted file via CipherNest:\n$url',
                 );
               },
-              icon: Icon(PhosphorIcons.shareFat(PhosphorIconsStyle.thin)),
+              icon: ThemeIcon('shareFat'),
               label: const Text('Share'),
             ),
           ),

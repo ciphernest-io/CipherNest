@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html data-theme="binary" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Color & Type Reference · CipherNest</title>
+<link rel="stylesheet" href="themes.css">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="fonts/material.css">
+<style>
+  html,body{background:var(--bg);margin:0;}
+  .doc{ max-width:920px; margin:0 auto; padding:56px 48px 80px; font-family:var(--font); color:var(--fg); }
+  .dochead{ display:flex; align-items:center; gap:16px; margin-bottom:8px; }
+  .dochead img{ width:44px; }
+  .dochead h1{ font:700 30px/1 var(--font); letter-spacing:-0.025em; margin:0; white-space:nowrap; }
+  .docsub{ color:var(--fg-muted); font-size:15px; margin:0 0 48px; max-width:620px; line-height:1.55; }
+  .sec-h{ font:600 13px/1 var(--font); letter-spacing:0.1em; text-transform:uppercase; color:var(--fg-muted); margin:48px 0 18px; padding-bottom:12px; border-bottom:1px solid var(--hairline); }
+  .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:14px; }
+  .sw .box{ height:78px; border-radius:12px; border:1px solid var(--hairline); }
+  .sw .nm{ font:600 13px/1.2 var(--font); margin-top:9px; }
+  .sw .hex{ font:400 12px/1.2 var(--font-mono); color:var(--fg-muted); margin-top:3px; }
+  .typerow{ display:flex; align-items:baseline; justify-content:space-between; padding:16px 0; border-bottom:1px solid var(--hairline); gap:20px; }
+  .typerow .meta{ font:400 12px/1 var(--font-mono); color:var(--fg-muted); white-space:nowrap; }
+  .accentbar{ display:flex; gap:10px; margin-top:6px; }
+  .accentbar .a{ flex:1; height:64px; border-radius:12px; display:flex; align-items:flex-end; padding:10px; font:600 12px/1 var(--font); }
+</style>
+</head>
+<body>
+<div class="doc" data-screen-label="Color & Type Reference">
+  <div class="dochead"><img src="assets/logo_mark_brass.png"><h1>Color &amp; Type</h1></div>
+  <p class="docsub">CipherNest foundation — dark-first <b>warm ink</b> with bone-white text and a single antique-brass accent. Type is <b>Hanken Grotesk</b> with <b>IBM Plex Mono</b> for cryptographic moments; the wordmark is set in <b>Bungee Hairline</b>.</p>
+
+  <div class="sec-h">Dark surfaces — warm ink</div>
+  <div class="grid">
+    <div class="sw"><div class="box" style="background:#110F0A"></div><div class="nm">Background</div><div class="hex">#110F0A</div></div>
+    <div class="sw"><div class="box" style="background:#1A1711"></div><div class="nm">Panel</div><div class="hex">#1A1711</div></div>
+    <div class="sw"><div class="box" style="background:#221F17"></div><div class="nm">Surface</div><div class="hex">#221F17</div></div>
+    <div class="sw"><div class="box" style="background:#2B271D"></div><div class="nm">Surface 2</div><div class="hex">#2B271D</div></div>
+    <div class="sw"><div class="box" style="background:#332F23"></div><div class="nm">Hairline</div><div class="hex">#332F23</div></div>
+  </div>
+
+  <div class="sec-h">Text — warm bone</div>
+  <div class="grid">
+    <div class="sw"><div class="box" style="background:var(--surface);display:flex;align-items:center;justify-content:center;color:#F3F0E6;font:600 24px/1 var(--font)">Aa</div><div class="nm">Primary</div><div class="hex">#F3F0E6</div></div>
+    <div class="sw"><div class="box" style="background:var(--surface);display:flex;align-items:center;justify-content:center;color:#C4C0B1;font:600 24px/1 var(--font)">Aa</div><div class="nm">Secondary</div><div class="hex">#C4C0B1</div></div>
+    <div class="sw"><div class="box" style="background:var(--surface);display:flex;align-items:center;justify-content:center;color:#908B7B;font:600 24px/1 var(--font)">Aa</div><div class="nm">Muted</div><div class="hex">#908B7B</div></div>
+    <div class="sw"><div class="box" style="background:var(--surface);display:flex;align-items:center;justify-content:center;color:#615C4D;font:600 24px/1 var(--font)">Aa</div><div class="nm">Faint</div><div class="hex">#615C4D</div></div>
+  </div>
+
+  <div class="sec-h">Accent — user selectable · brass is default</div>
+  <div class="accentbar">
+    <div class="a" style="background:#C2A15A;color:#1A1809">Brass</div>
+    <div class="a" style="background:#5BA086;color:#06130D">Jade</div>
+    <div class="a" style="background:#C2734C;color:#16100B">Clay</div>
+    <div class="a" style="background:#6E8FBE;color:#080C12">Slate</div>
+    <div class="a" style="background:#A06E92;color:#120A10">Plum</div>
+    <div class="a" style="background:#C25C44;color:#fff">Rust</div>
+  </div>
+
+  <div class="sec-h">Semantic</div>
+  <div class="grid">
+    <div class="sw"><div class="box" style="background:#5AA67E"></div><div class="nm">Success</div><div class="hex">#5AA67E</div></div>
+    <div class="sw"><div class="box" style="background:#E0A33C"></div><div class="nm">Warning</div><div class="hex">#E0A33C</div></div>
+    <div class="sw"><div class="box" style="background:#D8665E"></div><div class="nm">Danger</div><div class="hex">#D8665E</div></div>
+    <div class="sw"><div class="box" style="background:#6E94C4"></div><div class="nm">Info</div><div class="hex">#6E94C4</div></div>
+  </div>
+
+  <div class="sec-h">Light theme — warm bone paper</div>
+  <div class="grid">
+    <div class="sw"><div class="box" style="background:#F6F4EC"></div><div class="nm">Background</div><div class="hex">#F6F4EC</div></div>
+    <div class="sw"><div class="box" style="background:#ECEADF"></div><div class="nm">Panel</div><div class="hex">#ECEADF</div></div>
+    <div class="sw"><div class="box" style="background:#FCFBF5"></div><div class="nm">Surface</div><div class="hex">#FCFBF5</div></div>
+    <div class="sw"><div class="box" style="background:#E1DECF"></div><div class="nm">Hairline</div><div class="hex">#E1DECF</div></div>
+    <div class="sw"><div class="box" style="background:#1B1A12"></div><div class="nm">Text</div><div class="hex">#1B1A12</div></div>
+  </div>
+
+  <div class="sec-h">Type scale — Hanken Grotesk + IBM Plex Mono</div>
+  <div>
+    <div class="typerow"><span style="font:700 32px/1 var(--font);letter-spacing:-0.02em;">Private cloud, on your terms</span><span class="meta">Display · 32 / 700</span></div>
+    <div class="typerow"><span style="font:700 28px/1 var(--font);letter-spacing:-0.018em;">Your Vault</span><span class="meta">Title · 28 / 700</span></div>
+    <div class="typerow"><span style="font:600 22px/1 var(--font);">Photos &amp; Videos</span><span class="meta">H2 · 22 / 600</span></div>
+    <div class="typerow"><span style="font:600 17px/1 var(--font);">Lease Agreement.pdf</span><span class="meta">H3 · 17 / 600</span></div>
+    <div class="typerow"><span style="font:400 15px/1.5 var(--font);max-width:520px;">Every photo and file is sealed with AES-256 on your phone. The cloud only ever sees ciphertext.</span><span class="meta">Body · 15 / 400</span></div>
+    <div class="typerow"><span style="font:600 11px/1 var(--font);letter-spacing:0.12em;text-transform:uppercase;color:var(--fg-muted)">May 2026</span><span class="meta">Overline · 11 / 600</span></div>
+    <div class="typerow"><span style="font:500 14px/1 var(--font-mono);color:var(--accent)">harbor · violet · cinder · meadow</span><span class="meta">Mono · recovery phrase</span></div>
+    <div class="typerow"><span style="font:400 13px/1 var(--font-mono);color:var(--fg-2)">ciphernest.pages.dev/s/9fA2-kQ7x</span><span class="meta">Mono · share link</span></div>
+  </div>
+
+  <div class="sec-h">Wordmark — Bungee Hairline</div>
+  <div style="display:flex;align-items:center;gap:30px;flex-wrap:wrap;">
+    <span class="wordmark-font" style="font-size:38px;">Cipher<b>Nest</b></span>
+    <span style="color:var(--fg-muted);font-size:13px;font-family:var(--font-mono);">hairline display · logotype only · echoes the thin Phosphor icons</span>
+  </div>
+</div>
+</body>
+</html>

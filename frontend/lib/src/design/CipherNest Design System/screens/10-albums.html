@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html data-theme="binary" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Albums · CipherNest</title>
+<link rel="stylesheet" href="../themes.css">
+<link rel="stylesheet" href="../app.css">
+<link rel="stylesheet" href="../motion.css">
+<link rel="stylesheet" href="../fonts/material.css">
+<style>
+  html,body{background:var(--bg);margin:0;display:flex;justify-content:center;}
+  .alb{ position:relative; border-radius:16px; overflow:hidden; aspect-ratio:1; cursor:pointer; }
+  .alb img{ width:100%;height:100%;object-fit:cover;display:block; transition:transform .3s ease; }
+  .alb:hover img{ transform:scale(1.04); }
+  .alb .ov{ position:absolute; inset:0; background:linear-gradient(to top, rgba(0,0,0,0.72) 0%, transparent 52%); }
+  .alb .meta{ position:absolute; left:13px; bottom:11px; right:13px; }
+  .alb .nm{ font:600 15px/1.2 var(--font); color:#fff; }
+  .alb .ct{ font:500 12px/1 var(--font); color:rgba(255,255,255,0.72); margin-top:3px; }
+  .alb .lockbadge{ position:absolute; top:10px; right:10px; width:26px;height:26px;border-radius:999px;background:rgba(0,0,0,0.4);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px; }
+</style>
+</head>
+<body>
+<div class="phone" data-screen-label="Albums">
+  <div class="statusbar"><span>9:41</span><span class="sb-right"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div class="appbar"><span class="appbar-title" style="font-size:22px;font-weight:700;letter-spacing:-0.02em;">Albums</span><div class="appbar-trailing"><button class="iconbtn"><span class="mi">add</span></button><button class="iconbtn"><span class="mi">more_vert</span></button></div></div>
+  <div class="screen-body hpad" style="padding-top:6px;padding-bottom:80px;">
+    <div class="grid2">
+      <div class="alb"><img src="https://picsum.photos/seed/albA/400/400"><div class="ov"></div><div class="meta"><div class="nm">Camera Roll</div><div class="ct">2,431 items</div></div></div>
+      <div class="alb"><img src="https://picsum.photos/seed/albB/400/400"><div class="ov"></div><span class="lockbadge"><span class="mi fill">lock</span></span><div class="meta"><div class="nm">Private</div><div class="ct">48 items</div></div></div>
+      <div class="alb"><img src="https://picsum.photos/seed/albC/400/400"><div class="ov"></div><div class="meta"><div class="nm">Lisbon 2026</div><div class="ct">164 items</div></div></div>
+      <div class="alb"><img src="https://picsum.photos/seed/albD/400/400"><div class="ov"></div><div class="meta"><div class="nm">Screenshots</div><div class="ct">390 items</div></div></div>
+      <div class="alb"><img src="https://picsum.photos/seed/albE/400/400"><div class="ov"></div><div class="meta"><div class="nm">Family</div><div class="ct">512 items</div></div></div>
+      <div class="alb"><img src="https://picsum.photos/seed/albF/400/400"><div class="ov"></div><div class="meta"><div class="nm">Receipts</div><div class="ct">73 items</div></div></div>
+    </div>
+  </div>
+  <div class="tabbar">
+    <div class="tab"><span class="mi">image</span>Pictures</div>
+    <div class="tab active"><span class="mi fill">grid_view</span>Albums</div>
+    <div class="tab"><span class="mi">auto_awesome</span>Stories</div>
+  </div>
+</div>
+<script src="../theme-switch.js"></script>
+</body>
+</html>

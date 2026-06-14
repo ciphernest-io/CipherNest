@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Screens" name="Recovery Phrase" subtitle="Ceremonial 12-word reveal" viewport="412x915" -->
+<html data-theme="binary" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Recovery Phrase · CipherNest</title>
+<link rel="stylesheet" href="../themes.css">
+<link rel="stylesheet" href="../app.css">
+<link rel="stylesheet" href="../motion.css">
+<link rel="stylesheet" href="../fonts/material.css">
+<style>
+  html,body{background:var(--bg);margin:0;display:flex;justify-content:center;}
+  .mn-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+  .word{ display:flex; align-items:center; gap:9px; background:var(--surface); border:1px solid var(--hairline); border-radius:10px; padding:11px 12px; }
+  .word .n{ font:600 11px/1 var(--font); color:var(--fg-faint); min-width:14px; font-feature-settings:"tnum"; }
+  .word .w{ font:500 14px/1 var(--font-mono); color:var(--fg); letter-spacing:-0.01em; }
+  .ceremony{ display:flex; align-items:center; gap:8px; color:var(--accent); font:600 12px/1 var(--font); letter-spacing:0.06em; text-transform:uppercase; margin-bottom:14px; }
+  .ack{ display:flex; align-items:center; gap:13px; padding:16px; background:var(--surface); border:1px solid var(--hairline); border-radius:var(--r-card); margin-top:20px; }
+  .ack .t{ flex:1; font:500 14px/1.4 var(--font); }
+  .toolbtns{ display:flex; gap:10px; margin-top:16px; }
+  .toolbtns .btn{ flex:1; height:46px; font-size:14px; }
+</style>
+</head>
+<body>
+<div class="phone" data-screen-label="Mnemonic Reveal">
+  <div class="statusbar"><span>9:41</span><span class="sb-right"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div class="appbar"><button class="iconbtn"><span class="mi">arrow_back</span></button><span class="appbar-title">Step 2 of 2</span></div>
+  <div class="screen-body hpad" style="padding-bottom:24px;">
+    <div class="ceremony"><span class="mi fill">verified</span> Recovery phrase</div>
+    <h1 style="font:700 27px/1.18 var(--font);letter-spacing:-0.02em;margin:0 0 10px;">Write down these 12 words</h1>
+    <p style="color:var(--fg-muted);font-size:14px;line-height:1.55;margin:0 0 22px;">This is the only way to recover your vault if you forget your password. Keep it offline and private — anyone with these words can decrypt your files.</p>
+    <div class="mn-grid">
+      <div class="word"><span class="n">1</span><span class="w">harbor</span></div>
+      <div class="word"><span class="n">2</span><span class="w">violet</span></div>
+      <div class="word"><span class="n">3</span><span class="w">cinder</span></div>
+      <div class="word"><span class="n">4</span><span class="w">meadow</span></div>
+      <div class="word"><span class="n">5</span><span class="w">orbit</span></div>
+      <div class="word"><span class="n">6</span><span class="w">tundra</span></div>
+      <div class="word"><span class="n">7</span><span class="w">lantern</span></div>
+      <div class="word"><span class="n">8</span><span class="w">pebble</span></div>
+      <div class="word"><span class="n">9</span><span class="w">quartz</span></div>
+      <div class="word"><span class="n">10</span><span class="w">summit</span></div>
+      <div class="word"><span class="n">11</span><span class="w">willow</span></div>
+      <div class="word"><span class="n">12</span><span class="w">cobalt</span></div>
+    </div>
+    <div class="toolbtns">
+      <button class="btn btn-secondary"><span class="mi">content_copy</span> Copy</button>
+      <button class="btn btn-secondary"><span class="mi">print</span> Print</button>
+    </div>
+    <div class="ack">
+      <span class="mi" style="font-size:24px;color:var(--warning);">warning</span>
+      <div class="t">I've written down my recovery phrase</div>
+      <label class="switch"><input type="checkbox" checked><span class="track"></span><span class="knob"></span></label>
+    </div>
+  </div>
+  <div class="hpad" style="padding:14px 20px calc(20px + env(safe-area-inset-bottom));border-top:1px solid var(--hairline);">
+    <button class="btn btn-primary btn-block btn-lg">Continue to my vault</button>
+  </div>
+</div>
+<script src="../theme-switch.js"></script>
+</body>
+</html>

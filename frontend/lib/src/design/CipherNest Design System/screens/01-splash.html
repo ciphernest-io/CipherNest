@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Screens" name="Splash" subtitle="Wordmark + tagline" viewport="412x915" -->
+<html data-theme="binary" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Splash · CipherNest</title>
+<link rel="stylesheet" href="../themes.css">
+<link rel="stylesheet" href="../app.css">
+<link rel="stylesheet" href="../motion.css">
+<link rel="stylesheet" href="../fonts/material.css">
+<style>
+  html,body{background:var(--bg);margin:0;display:flex;justify-content:center;}
+  .splash{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:26px; }
+  .splash .mark{ width:108px; height:auto; filter: drop-shadow(0 8px 30px rgba(194,161,90,0.28)); }
+  .splash .wordmark{ font:400 38px/1 var(--font-wordmark); letter-spacing:0.04em; color:var(--fg); }
+  .splash .wordmark b{ color:var(--accent); font-weight:400; }
+  .splash .tagline{ color:var(--fg-muted); font-size:15px; letter-spacing:0.01em; }
+  .splash .footer{ position:absolute; bottom:40px; display:flex; align-items:center; gap:8px; color:var(--fg-faint); font-size:12px; }
+  .splash .footer i{ font-size:15px; }
+  .ringpulse{ position:relative; }
+</style>
+</head>
+<body>
+<div class="phone" data-screen-label="Splash">
+  <div class="statusbar"><span>9:41</span><span class="sb-right"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div class="splash">
+    <img class="mark" src="../assets/logo_mark_brass.png" alt="CipherNest">
+    <div style="text-align:center;display:flex;flex-direction:column;gap:12px;align-items:center;">
+      <div class="wordmark">Cipher<b>Nest</b></div>
+      <div class="tagline">Private cloud, on your terms.</div>
+    </div>
+    <div class="footer"><span class="mi">verified_user</span><span>Zero-knowledge · AES-256-GCM</span></div>
+  </div>
+</div>
+<script src="../theme-switch.js"></script>
+</body>
+</html>

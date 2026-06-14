@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Screens" name="Share Dialog" subtitle="Configure + created states" viewport="860x915" -->
+<html data-theme="binary" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Share Dialog · CipherNest</title>
+<link rel="stylesheet" href="../themes.css">
+<link rel="stylesheet" href="../app.css">
+<link rel="stylesheet" href="../motion.css">
+<link rel="stylesheet" href="../fonts/material.css">
+<style>
+  html,body{background:var(--bg);margin:0;display:flex;justify-content:center;}
+  .sel{ display:flex; align-items:center; justify-content:space-between; height:52px; padding:0 16px; background:var(--surface); border:1px solid var(--hairline); border-radius:var(--r-input); color:var(--fg); font:500 15px/1 var(--font); cursor:pointer; }
+  .opt-row{ display:flex; align-items:center; gap:13px; padding:14px 0; }
+  .opt-row + .opt-row{ border-top:1px solid var(--hairline); }
+  .opt-main{ flex:1; }
+  .opt-t{ font:500 15px/1.2 var(--font); }
+  .opt-s{ color:var(--fg-muted); font-size:12px; margin-top:3px; }
+  .helper{ display:flex; gap:9px; align-items:flex-start; color:var(--fg-muted); font-size:12px; line-height:1.5; margin-top:6px; }
+  .linkpanel{ display:flex; align-items:center; gap:10px; background:var(--bg); border:1px solid var(--hairline); border-radius:var(--r-input); padding:13px 14px; font-family:var(--font-mono); font-size:12.5px; color:var(--accent); }
+  .linkpanel .u{ flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+</style>
+</head>
+<body style="display:flex;gap:24px;flex-wrap:wrap;padding:0;background:var(--bg);">
+<!-- STATE A: configure -->
+<div class="phone" data-screen-label="Share Dialog">
+  <div class="statusbar"><span>9:41</span><span class="sb-right"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div class="appbar large" style="padding-top:10px;"><div style="font:700 24px/1.1 var(--font);">Share</div></div>
+  <div class="hpad" style="opacity:0.4;filter:blur(1px);"><div class="card" style="height:120px;"></div></div>
+  <div class="sheet-scrim">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">
+        <img src="https://picsum.photos/seed/cnA2/80/80" style="width:46px;height:46px;border-radius:10px;object-fit:cover;">
+        <div><div class="sheet-title" style="margin:0;">Share “IMG_4821.heic”</div><div style="color:var(--fg-muted);font-size:12px;margin-top:3px;">Link decrypts in the recipient's browser</div></div>
+      </div>
+      <div class="field"><label class="field-label">Link expires</label>
+        <div class="sel">7 days <span class="mi" style="color:var(--fg-muted);font-size:16px;">expand_more</span></div>
+      </div>
+      <div class="opt-row">
+        <div class="opt-main"><div class="opt-t">Require password</div><div class="opt-s">Recipient must enter it to decrypt</div></div>
+        <label class="switch"><input type="checkbox" checked><span class="track"></span><span class="knob"></span></label>
+      </div>
+      <div class="field" style="margin-top:14px;">
+        <div class="input-icon"><span class="mi">key</span><input class="input" type="text" value="harbor-violet-42" ></div>
+        <div class="helper"><span class="mi" style="font-size:15px;flex:0 0 auto;">info</span><span>Send this password through a different channel than the link.</span></div>
+      </div>
+      <div class="sheet-actions"><button class="btn btn-primary btn-block btn-lg"><span class="mi">link</span> Create link</button></div>
+    </div>
+  </div>
+</div>
+<!-- STATE B: created -->
+<div class="phone" data-screen-label="Share Created">
+  <div class="statusbar"><span>9:41</span><span class="sb-right"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div class="appbar large" style="padding-top:10px;"><div style="font:700 24px/1.1 var(--font);">Share</div></div>
+  <div class="hpad" style="opacity:0.4;filter:blur(1px);"><div class="card" style="height:120px;"></div></div>
+  <div class="sheet-scrim">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div style="display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;margin:6px 0 18px;">
+        <div style="width:52px;height:52px;border-radius:999px;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:28px;"><span class="mi fill">check_circle</span></div>
+        <div class="sheet-title" style="margin-top:6px;">Link created</div>
+        <div style="color:var(--fg-muted);font-size:13px;">Expires in 7 days · password protected</div>
+      </div>
+      <label class="field-label">Encrypted link</label>
+      <div class="linkpanel"><span class="u">ciphernest.pages.dev/s/9fA2-kQ7x…</span><span class="mi" style="font-size:18px;">content_copy</span></div>
+      <div class="sheet-actions" style="margin-top:16px;">
+        <button class="btn btn-primary btn-block btn-lg"><span class="mi">content_copy</span> Copy link</button>
+        <button class="btn btn-secondary btn-block"><span class="mi">share</span> Share via…</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="../theme-switch.js"></script>
+</body>
+</html>

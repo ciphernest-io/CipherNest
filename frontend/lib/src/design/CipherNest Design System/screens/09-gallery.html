@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Screens" name="Gallery" subtitle="Samsung-tight grid, sticky dates" viewport="412x915" -->
+<html data-theme="binary" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gallery · CipherNest</title>
+<link rel="stylesheet" href="../themes.css">
+<link rel="stylesheet" href="../app.css">
+<link rel="stylesheet" href="../motion.css">
+<link rel="stylesheet" href="../fonts/material.css">
+<style>
+  html,body{background:var(--bg);margin:0;display:flex;justify-content:center;}
+  .gdate{ position:sticky; top:0; z-index:5; background:color-mix(in srgb,var(--bg) 88%,transparent); backdrop-filter:blur(12px); font:600 11px/1 var(--font); letter-spacing:0.12em; text-transform:uppercase; color:var(--fg-muted); padding:14px 12px 10px; display:flex; justify-content:space-between; align-items:center; }
+  .gdate .cnt{ font-size:11px; letter-spacing:0.04em; }
+  .vidcell::after{ content:""; position:absolute; right:6px; bottom:6px; width:0;height:0; border-left:9px solid #fff; border-top:6px solid transparent; border-bottom:6px solid transparent; filter:drop-shadow(0 0 3px rgba(0,0,0,.5)); }
+  .dur{ position:absolute; left:6px; bottom:6px; font:600 10px/1 var(--font); color:#fff; text-shadow:0 1px 3px rgba(0,0,0,.6); }
+</style>
+</head>
+<body>
+<div class="phone" data-screen-label="Gallery">
+  <div class="statusbar"><span>9:41</span><span class="sb-right"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div class="appbar"><span class="appbar-title" style="font-size:22px;font-weight:700;letter-spacing:-0.02em;">Photos</span><div class="appbar-trailing"><button class="iconbtn"><span class="mi">search</span></button><button class="iconbtn"><span class="mi">grid_view</span></button><button class="iconbtn"><span class="mi">more_vert</span></button></div></div>
+  <div class="screen-body" id="body">
+    <div class="gdate">May 2026 <span class="cnt">312</span></div>
+    <div class="grid3" id="g1"></div>
+    <div class="gdate">April 2026 <span class="cnt">208</span></div>
+    <div class="grid3" id="g2"></div>
+  </div>
+  <div class="tabbar">
+    <div class="tab active"><span class="mi fill">image</span>Pictures</div>
+    <div class="tab"><span class="mi">grid_view</span>Albums</div>
+    <div class="tab"><span class="mi">auto_awesome</span>Stories</div>
+  </div>
+</div>
+<script>
+  function cells(grid, seed, n, vids){
+    vids = vids||[];
+    let html='';
+    for(let i=0;i<n;i++){
+      const v = vids.includes(i);
+      html += `<div class="cell ${v?'vidcell':''}"><img loading="lazy" src="https://picsum.photos/seed/${seed}${i}/240/240">${v?'<span class="dur">0:'+(12+i)+'</span>':''}</div>`;
+    }
+    grid.innerHTML = html;
+  }
+  cells(document.getElementById('g1'),'cnA',18,[2,9]);
+  cells(document.getElementById('g2'),'cnB',15,[5]);
+</script>
+<script src="../theme-switch.js"></script>
+</body>
+</html>

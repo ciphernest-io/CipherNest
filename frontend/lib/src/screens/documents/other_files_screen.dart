@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 
 import '../../models/file_model.dart';
 import '../../../services/auto_sync_service.dart';
@@ -116,7 +116,7 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
       case '7z':
       case 'tar':
       case 'gz':
-        return PhosphorIcons.fileZip(PhosphorIconsStyle.thin);
+        return themeIconData('fileZip');
       case 'py':
       case 'js':
       case 'ts':
@@ -126,18 +126,18 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
       case 'cpp':
       case 'rs':
       case 'go':
-        return PhosphorIcons.fileCode(PhosphorIconsStyle.thin);
+        return themeIconData('fileCode');
       case 'ipynb':
-        return PhosphorIcons.notebook(PhosphorIconsStyle.thin);
+        return themeIconData('notebook');
       case 'csv':
       case 'tsv':
-        return PhosphorIcons.fileCsv(PhosphorIconsStyle.thin);
+        return themeIconData('fileCsv');
       case 'db':
       case 'sqlite':
       case 'sqlite3':
-        return PhosphorIcons.database(PhosphorIconsStyle.thin);
+        return themeIconData('database');
       default:
-        return PhosphorIcons.file(PhosphorIconsStyle.thin);
+        return themeIconData('file');
     }
   }
 
@@ -158,7 +158,7 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
         title: const Text('Other Files'),
         actions: [
           IconButton(
-            icon: Icon(PhosphorIcons.arrowsClockwise(PhosphorIconsStyle.thin)),
+            icon: ThemeIcon('arrowsClockwise'),
             onPressed: _handleSync,
           ),
         ],
@@ -194,7 +194,7 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
         Center(
           child: Column(
             children: [
-              Icon(PhosphorIcons.folderOpen(PhosphorIconsStyle.thin),
+              ThemeIcon('folderOpen',
                   size: 64, color: cs.surfaceContainerHighest),
               const SizedBox(height: 16),
               Text('No other files yet',
@@ -298,7 +298,7 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
             else
               PopupMenuButton<String>(
                 icon: Icon(
-                    PhosphorIcons.dotsThreeVertical(PhosphorIconsStyle.thin),
+                    themeIconData('dotsThreeVertical'),
                     color: cs.onSurface.withAlpha(120)),
                 itemBuilder: (_) => const [
                   PopupMenuItem(value: 'share', child: Text('Share')),

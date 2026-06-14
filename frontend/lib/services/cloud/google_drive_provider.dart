@@ -4,6 +4,7 @@ import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import '../../services/encryption_service.dart';
+import '../../src/models/file_model.dart';
 import 'cloud_account.dart';
 import 'cloud_provider.dart';
 
@@ -93,7 +94,7 @@ class GoogleDriveProvider implements CloudProvider {
   @override
   Future<String?> uploadEncryptedFile({
     required String filename,
-    required bool isImage,
+    required CnestFileType type,
     String? originalName,
     Uint8List? fileBytes,
     Stream<List<int>>? fileStream,
@@ -106,7 +107,7 @@ class GoogleDriveProvider implements CloudProvider {
       ..parents = ['appDataFolder']
       ..mimeType = 'application/octet-stream'
       ..appProperties = {
-        'type': isImage ? 'image' : 'document',
+        'type': type.wireName,
         'original_name': originalName ?? filename,
       };
 

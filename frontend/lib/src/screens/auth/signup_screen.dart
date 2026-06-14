@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 import 'package:flutter/services.dart';
 import '../../../services/key_manager_service.dart';
 import '../../config/routes.dart';
@@ -125,7 +125,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
         padding: const EdgeInsets.all(24.0),
         child: Column(
           children: [
-            Icon(PhosphorIcons.shieldCheck(PhosphorIconsStyle.thin), size: 64, color: cs.primary),
+            ThemeIcon('shieldCheck', size: 64, color: cs.primary),
             const SizedBox(height: 24),
             Text(
               'Write this down!',
@@ -166,7 +166,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   const SnackBar(content: Text('Copied to clipboard')),
                 );
               },
-              icon: Icon(PhosphorIcons.copy(PhosphorIconsStyle.thin)),
+              icon: ThemeIcon('copy'),
               label: const Text('Copy to Clipboard'),
             ),
             const Spacer(),

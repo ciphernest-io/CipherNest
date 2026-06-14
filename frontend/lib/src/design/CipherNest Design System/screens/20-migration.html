@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html data-theme="binary" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Migration · CipherNest</title>
+<link rel="stylesheet" href="../themes.css">
+<link rel="stylesheet" href="../app.css">
+<link rel="stylesheet" href="../motion.css">
+<link rel="stylesheet" href="../fonts/material.css">
+<style>
+  html,body{background:var(--bg);margin:0;display:flex;justify-content:center;flex-wrap:wrap;gap:24px;}
+  .preview-grid{ display:grid; grid-template-columns:repeat(4,1fr); gap:4px; border-radius:14px; overflow:hidden; }
+  .preview-grid img{ width:100%; aspect-ratio:1; object-fit:cover; }
+  .preview-grid .more{ position:relative; }
+  .preview-grid .more::after{ content:"+2.4k"; position:absolute; inset:0; background:rgba(0,0,0,0.55); display:flex; align-items:center; justify-content:center; color:#fff; font:600 14px/1 var(--font); }
+  .stat{ display:flex; align-items:center; gap:11px; padding:13px 0; }
+  .stat + .stat{ border-top:1px solid var(--hairline); }
+  .stat i{ font-size:22px; color:var(--accent); width:24px; flex:0 0 auto; }
+  .stat .l{ flex:1; font-size:14px; color:var(--fg-2); }
+  .stat .v{ font:600 14px/1 var(--font); }
+  /* progress screen */
+  .prog-ring{ width:120px;height:120px;border-radius:999px;background:conic-gradient(var(--accent) 62%, var(--surface-2) 0); display:flex; align-items:center; justify-content:center; }
+  .prog-ring .inner{ width:96px;height:96px;border-radius:999px;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center; }
+</style>
+</head>
+<body>
+<!-- A: prompt -->
+<div class="phone" data-screen-label="Migration Prompt">
+  <div class="statusbar"><span>9:41</span><span class="sb-right"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div class="appbar"><button class="iconbtn"><span class="mi">close</span></button></div>
+  <div class="screen-body hpad" style="padding-bottom:12px;">
+    <div style="width:56px;height:56px;border-radius:16px;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:30px;margin:6px 0 18px;"><span class="mi">gpp_maybe</span></div>
+    <h1 style="font:700 26px/1.2 var(--font);letter-spacing:-0.02em;margin:0 0 12px;">We found 2,431 unencrypted photos in your Google Drive</h1>
+    <p style="color:var(--fg-muted);font-size:14px;line-height:1.55;margin:0 0 22px;">Move them into your CipherNest vault. They'll be encrypted on this device, then the originals are removed from plain Drive.</p>
+    <div class="preview-grid">
+      <img src="https://picsum.photos/seed/m1/200/200"><img src="https://picsum.photos/seed/m2/200/200"><img src="https://picsum.photos/seed/m3/200/200"><img src="https://picsum.photos/seed/m4/200/200">
+      <img src="https://picsum.photos/seed/m5/200/200"><img src="https://picsum.photos/seed/m6/200/200"><img src="https://picsum.photos/seed/m7/200/200"><div class="more"><img src="https://picsum.photos/seed/m8/200/200"></div>
+    </div>
+    <div class="card" style="padding:4px 16px;margin-top:20px;">
+      <div class="stat"><span class="mi">photo_library</span><span class="l">Photos &amp; videos</span><span class="v">2,431</span></div>
+      <div class="stat"><span class="mi">database</span><span class="l">Total size</span><span class="v">14.8 GB</span></div>
+      <div class="stat"><span class="mi">schedule</span><span class="l">Estimated time</span><span class="v">~12 min on Wi-Fi</span></div>
+    </div>
+  </div>
+  <div class="hpad" style="padding:14px 20px calc(20px + env(safe-area-inset-bottom));border-top:1px solid var(--hairline);display:flex;flex-direction:column;gap:10px;">
+    <button class="btn btn-primary btn-block btn-lg"><span class="mi">lock</span> Encrypt and move</button>
+    <button class="btn btn-ghost btn-block">Not now</button>
+  </div>
+</div>
+<!-- B: progress -->
+<div class="phone" data-screen-label="Migration Progress">
+  <div class="statusbar"><span>9:41</span><span class="sb-right"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 36px;text-align:center;gap:24px;">
+    <div class="prog-ring"><div class="inner"><span style="font:700 24px/1 var(--font);">62%</span><span style="font-size:11px;color:var(--fg-muted);margin-top:4px;">1,507 / 2,431</span></div></div>
+    <div><h2 style="font:600 20px/1.3 var(--font);margin:0 0 8px;">Encrypting your photos</h2><p style="color:var(--fg-muted);font-size:14px;line-height:1.5;margin:0;max-width:280px;">Keep CipherNest open and your phone unlocked. This runs in the background too.</p></div>
+    <div style="display:flex;align-items:center;gap:8px;color:var(--fg-muted);font-size:13px;"><span class="mi fill" style="color:var(--success);">lock</span> AES-256 · ~4 min remaining</div>
+  </div>
+  <div class="hpad" style="padding:14px 20px calc(20px + env(safe-area-inset-bottom));"><button class="btn btn-secondary btn-block">Pause</button></div>
+</div>
+<script src="../theme-switch.js"></script>
+</body>
+</html>

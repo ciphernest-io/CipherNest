@@ -1,8 +1,10 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:photo_manager/photo_manager.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/file_model.dart';
 import '../../utils/date_grouper.dart';
 import '../../../services/cloud/cloud_service.dart';
@@ -11,6 +13,7 @@ import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/auto_sync_service.dart';
 import '../../../services/sync_service.dart';
+import '../share/share_dialog.dart';
 import 'image_viewer_screen.dart';
 
 class PicturesTab extends StatefulWidget {
@@ -21,13 +24,64 @@ class PicturesTab extends StatefulWidget {
 }
 
 class PicturesTabState extends State<PicturesTab> {
+  static const String _columnCountPrefKey = 'gallery_column_count';
+  static const int _minColumns = 2;
+  static const int _maxColumns = 5;
+
   late Future<List<CnestFile>> _filesFuture;
+  bool _favoritesOnly = false;
+  bool _selectionMode = false;
+  final Set<String> _selectedIds = {};
+
+  int _columnCount = 3;
+  // Accumulator for scale gestures — reset on each step so a single pinch
+  // can only step the grid by one column at a time.
+  double _pendingScale = 1.0;
 
   @override
   void initState() {
     super.initState();
     SyncService().syncNotifier.addListener(_onSyncComplete);
     _refresh();
+    _loadColumnCount();
+  }
+
+  Future<void> _loadColumnCount() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getInt(_columnCountPrefKey) ?? 3;
+    if (!mounted) return;
+    setState(() {
+      _columnCount = saved.clamp(_minColumns, _maxColumns);
+    });
+  }
+
+  Future<void> _persistColumnCount() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_columnCountPrefKey, _columnCount);
+  }
+
+  void _onScaleStart(ScaleStartDetails _) {
+    _pendingScale = 1.0;
+  }
+
+  void _onScaleUpdate(ScaleUpdateDetails details) {
+    // Ignore pure pans — only react to actual pinch deltas so vertical
+    // scrolling stays smooth.
+    if (details.pointerCount < 2) return;
+    _pendingScale = details.scale;
+    if (_pendingScale > 1.4 && _columnCount > _minColumns) {
+      setState(() => _columnCount -= 1);
+      _pendingScale = 1.0;
+      return;
+    }
+    if (_pendingScale < 0.7 && _columnCount < _maxColumns) {
+      setState(() => _columnCount += 1);
+      _pendingScale = 1.0;
+    }
+  }
+
+  void _onScaleEnd(ScaleEndDetails _) {
+    _persistColumnCount();
   }
 
   @override
@@ -44,8 +98,110 @@ class PicturesTabState extends State<PicturesTab> {
 
   void _refresh() {
     setState(() {
-      _filesFuture = DatabaseService().getFilesByType(CnestFileType.image);
+      _filesFuture = _loadFiles();
     });
+  }
+
+  Future<List<CnestFile>> _loadFiles() async {
+    final images =
+        await DatabaseService().getFilesByType(CnestFileType.image);
+    if (_favoritesOnly) {
+      return images.where((f) => f.isFavorite).toList();
+    }
+    return images;
+  }
+
+  void _enterSelection(String id) {
+    setState(() {
+      _selectionMode = true;
+      _selectedIds.add(id);
+    });
+  }
+
+  void _toggleSelected(String id) {
+    setState(() {
+      if (_selectedIds.contains(id)) {
+        _selectedIds.remove(id);
+      } else {
+        _selectedIds.add(id);
+      }
+      if (_selectedIds.isEmpty) _selectionMode = false;
+    });
+  }
+
+  void _exitSelection() {
+    setState(() {
+      _selectionMode = false;
+      _selectedIds.clear();
+    });
+  }
+
+  Future<void> _deleteSelected(List<CnestFile> all) async {
+    final picked = all.where((f) => _selectedIds.contains(f.id)).toList();
+    if (picked.isEmpty) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Move ${picked.length} photos to Recycle Bin?'),
+        content: const Text(
+          'They will be hidden from your gallery and permanently deleted '
+          'after 30 days. Restore from Settings > Recycle Bin.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    // Soft-delete only — encrypted blobs stay in cloud until the sweep runs
+    // so users can restore offline.
+    for (final f in picked) {
+      try {
+        await DatabaseService().deleteFile(f.id);
+        AutoSyncService.trackDeletion(f.filename, f.sizeBytes);
+      } catch (_) {
+        // Silent — best-effort bulk delete.
+      }
+    }
+    DatabaseBackupService().scheduleBackup();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${picked.length} photo${picked.length == 1 ? '' : 's'} '
+            'moved to Recycle Bin',
+          ),
+        ),
+      );
+    }
+    _exitSelection();
+    _refresh();
+  }
+
+  Future<void> _shareSelectedFilenames(List<CnestFile> all) async {
+    // Bulk share of encrypted files isn't a single share — surface a sheet
+    // explaining and offering "share first" for the highest-selected one,
+    // since the magic link format is per-file.
+    final picked = all.where((f) => _selectedIds.contains(f.id)).toList();
+    if (picked.isEmpty) return;
+    if (picked.length == 1) {
+      await ShareDialog.show(context, picked.first);
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Multi-file share isn\'t available yet — share photos one at a time.',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> handleSync() async {
@@ -57,60 +213,6 @@ class PicturesTabState extends State<PicturesTab> {
     }
   }
 
-  Future<void> _handleDelete(CnestFile file) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Delete Photo?'),
-        content: const Text('This will permanently delete the file.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child:
-                  const Text('Delete', style: TextStyle(color: Colors.red))),
-        ],
-      ),
-    );
-
-    if (confirm != true) return;
-
-    try {
-      if (file.cloudId != null) await CloudService().deleteFile(file.cloudId!);
-      if (file.thumbnailCloudId != null) {
-        await CloudService().deleteFile(file.thumbnailCloudId!);
-      }
-
-      await DatabaseService().deleteFile(file.id);
-      AutoSyncService.trackDeletion(file.filename, file.sizeBytes);
-      DatabaseBackupService().scheduleBackup();
-
-      final tempDir = await getTemporaryDirectory();
-      for (final path in [
-        '${tempDir.path}/thumb_${file.cloudId}.jpg',
-        '${tempDir.path}/${file.cloudId}_decrypted.jpg',
-        '${tempDir.path}/${file.id}_decrypted.mp4',
-        '${tempDir.path}/${file.id}_thumb.jpg',
-        '${tempDir.path}/${file.id}.cnest_decrypted',
-      ]) {
-        final f = File(path);
-        if (await f.exists()) await f.delete();
-      }
-
-      _refresh();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Photo deleted')));
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Delete failed: $e')));
-      }
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -143,59 +245,189 @@ class PicturesTabState extends State<PicturesTab> {
         // Build a flat list for ImageViewerScreen navigation
         final flatFiles = files;
 
+        // Landscape gets ~1.5x the persisted column count so the grid stays
+        // dense across the wider canvas. Clamped to 8 to avoid postage-stamp
+        // thumbnails on tablets.
+        final orientation = MediaQuery.of(context).orientation;
+        final effectiveColumnCount = orientation == Orientation.landscape
+            ? (_columnCount * 1.5).round().clamp(2, 8)
+            : _columnCount;
+
         return RefreshIndicator(
           onRefresh: handleSync,
-          child: CustomScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            slivers: [
-              for (int s = 0; s < sections.length; s++) ...[
-                SliverPersistentHeader(
-                  pinned: true,
-                  delegate: _DateHeaderDelegate(sections[s].label),
-                ),
-                SliverGrid(
-                  gridDelegate:
-                      const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    crossAxisSpacing: 1.5,
-                    mainAxisSpacing: 1.5,
-                  ),
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) {
-                      final file = sections[s].files[index];
-                      // Compute global index for ImageViewerScreen
-                      int globalIndex = 0;
-                      for (int prev = 0; prev < s; prev++) {
-                        globalIndex += sections[prev].files.length;
-                      }
-                      globalIndex += index;
+          child: Column(
+            children: [
+              _buildToolbar(files),
+              Expanded(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onScaleStart: _onScaleStart,
+                  onScaleUpdate: _onScaleUpdate,
+                  onScaleEnd: _onScaleEnd,
+                  child: CustomScrollView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    slivers: [
+                      for (int s = 0; s < sections.length; s++) ...[
+                        SliverPersistentHeader(
+                          pinned: false,
+                          floating: false,
+                          delegate: _DateHeaderDelegate(sections[s].label),
+                        ),
+                        SliverGrid(
+                          gridDelegate:
+                              SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: effectiveColumnCount,
+                            crossAxisSpacing: 1.5,
+                            mainAxisSpacing: 1.5,
+                          ),
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final file = sections[s].files[index];
+                            int globalIndex = 0;
+                            for (int prev = 0; prev < s; prev++) {
+                              globalIndex += sections[prev].files.length;
+                            }
+                            globalIndex += index;
+                            final isSelected = _selectedIds.contains(file.id);
 
-                      return GestureDetector(
-                        onTap: () async {
-                          final result = await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => ImageViewerScreen(
-                                files: flatFiles,
-                                initialIndex: globalIndex,
+                            return GestureDetector(
+                              onTap: () async {
+                                if (_selectionMode) {
+                                  _toggleSelected(file.id);
+                                  return;
+                                }
+                                final result = await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => ImageViewerScreen(
+                                      files: flatFiles,
+                                      initialIndex: globalIndex,
+                                    ),
+                                  ),
+                                );
+                                if (result == true) _refresh();
+                              },
+                              onLongPress: () => _enterSelection(file.id),
+                              child: Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  GalleryGridItem(
+                                      key: ValueKey(file.id), file: file),
+                                  if (_selectionMode)
+                                    Container(
+                                      color: isSelected
+                                          ? Colors.black.withAlpha(80)
+                                          : Colors.transparent,
+                                      child: Align(
+                                        alignment: Alignment.topRight,
+                                        child: Padding(
+                                          padding:
+                                              const EdgeInsets.all(4.0),
+                                          child: Icon(
+                                            isSelected
+                                                ? Icons.check_circle
+                                                : Icons.radio_button_unchecked,
+                                            color: Colors.white,
+                                            size: 22,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  if (!_selectionMode && file.isFavorite)
+                                    Positioned(
+                                      top: 4,
+                                      left: 4,
+                                      child: ThemeIcon(
+                                        'heart',
+                                        selected: true,
+                                        size: 14,
+                                        color: Colors.redAccent,
+                                      ),
+                                    ),
+                                ],
                               ),
-                            ),
-                          );
-                          if (result == true) _refresh();
-                        },
-                        onLongPress: () => _handleDelete(file),
-                        child: GalleryGridItem(
-                            key: ValueKey(file.id), file: file),
-                      );
-                    },
-                    childCount: sections[s].files.length,
+                            );
+                          },
+                          childCount: sections[s].files.length,
+                        ),
+                      ),
+                    ],
+                    ],
                   ),
                 ),
-              ],
+              ),
             ],
           ),
         );
       },
+    );
+  }
+
+  Widget _buildToolbar(List<CnestFile> all) {
+    final cs = Theme.of(context).colorScheme;
+    if (_selectionMode) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        color: cs.surfaceContainerHighest,
+        child: Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: _exitSelection,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              '${_selectedIds.length} selected',
+              style: TextStyle(
+                color: cs.onSurface,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Spacer(),
+            IconButton(
+              icon: ThemeIcon('shareFat'),
+              onPressed: () => _shareSelectedFilenames(all),
+            ),
+            IconButton(
+              icon: Icon(
+                themeIconData('trash'),
+                color: Colors.redAccent,
+              ),
+              onPressed: () => _deleteSelected(all),
+            ),
+          ],
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Row(
+        children: [
+          FilterChip(
+            label: const Text('Favorites'),
+            avatar: Icon(
+              _favoritesOnly
+                  ? themeIconData('heart', selected: true)
+                  : themeIconData('heart'),
+              size: 14,
+              color: _favoritesOnly ? Colors.redAccent : cs.onSurface,
+            ),
+            selected: _favoritesOnly,
+            onSelected: (v) {
+              setState(() => _favoritesOnly = v);
+              _refresh();
+            },
+          ),
+          const Spacer(),
+          Text(
+            '${all.length} photo${all.length == 1 ? '' : 's'}',
+            style: TextStyle(
+              color: cs.onSurface.withAlpha(140),
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -244,7 +476,11 @@ class GalleryGridItem extends StatefulWidget {
 }
 
 class _GalleryGridItemState extends State<GalleryGridItem> {
-  Uint8List? _imageData;
+  // Rung 1: MediaStore thumbnail bytes, held in state so Flutter's image
+  // cache hits across rebuilds (MemoryImage equality is by reference).
+  Uint8List? _assetThumbBytes;
+  // Rung 3: path to a decrypted thumbnail file we wrote into the temp cache.
+  String? _diskThumbPath;
   bool _loading = true;
   bool _isVideo = false;
 
@@ -259,18 +495,41 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
   Future<void> _loadThumbnail() async {
     if (!mounted) return;
 
-    // LOCAL-FIRST: If the original exists on device, use it directly (no decryption).
-    // Skip for videos — generating a thumbnail from a local video per grid item is too expensive.
+    // RUNG 1: Android's MediaStore — same drawer Samsung Gallery reads from.
+    if (widget.file.assetId != null) {
+      try {
+        final asset = await AssetEntity.fromId(widget.file.assetId!);
+        if (asset != null) {
+          final bytes = await asset.thumbnailDataWithSize(
+            const ThumbnailSize(300, 300),
+          );
+          if (bytes != null) {
+            if (mounted) {
+              setState(() {
+                _assetThumbBytes = bytes;
+                _loading = false;
+              });
+            }
+            return;
+          }
+        }
+      } catch (_) {
+        // Asset gone / permission revoked — fall through.
+      }
+    }
+
+    // RUNG 2: local original via Flutter's image decoder (downsamples at
+    // decode time on the IO thread). No state needed — build() returns
+    // Image.file directly when localPath is set.
     if (!_isVideo && widget.file.localPath != null) {
       final localFile = File(widget.file.localPath!);
       if (await localFile.exists()) {
-        final bytes = await localFile.readAsBytes();
-        if (mounted) setState(() { _imageData = bytes; _loading = false; });
+        if (mounted) setState(() => _loading = false);
         return;
       }
     }
 
-    // CLOUD FALLBACK: download encrypted thumbnail, decrypt, cache
+    // RUNG 3: encrypted thumb from cloud, decrypted once into the temp cache.
     if (_isVideo && widget.file.thumbnailCloudId == null) {
       if (mounted) setState(() => _loading = false);
       return;
@@ -288,52 +547,90 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
           : '${widget.file.cloudId}_decrypted.jpg';
       final cacheFile = File('${cacheDir.path}/$fileName');
 
-      if (await cacheFile.exists()) {
-        final bytes = await cacheFile.readAsBytes();
-        if (mounted) setState(() { _imageData = bytes; _loading = false; });
-        return;
+      if (!await cacheFile.exists()) {
+        final encryptedBytes =
+            await CloudService().downloadFile(targetCloudId);
+        final decryptedBytes =
+            await EncryptionService.decryptFile(encryptedBytes);
+        await cacheFile.writeAsBytes(decryptedBytes);
       }
 
-      final encryptedBytes =
-          await CloudService().downloadFile(targetCloudId);
-      final decryptedBytes =
-          await EncryptionService.decryptFile(encryptedBytes);
-      await cacheFile.writeAsBytes(decryptedBytes);
-
-      if (mounted) setState(() { _imageData = decryptedBytes; _loading = false; });
+      if (mounted) {
+        setState(() {
+          _diskThumbPath = cacheFile.path;
+          _loading = false;
+        });
+      }
     } catch (e) {
       if (mounted) setState(() => _loading = false);
     }
   }
 
+  Widget _videoOverlay(ColorScheme cs) {
+    return Center(
+      child: Icon(
+        themeIconData('playCircle', selected: true),
+        color: cs.onSurface.withAlpha(180),
+        size: 40,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    if (_loading) return Container(color: cs.surfaceContainerHighest);
 
-    if (_imageData == null) {
-      return Container(
-        color: cs.surfaceContainerHighest,
-        child: Center(
-          child: Icon(
-            _isVideo ? PhosphorIcons.playCircle(PhosphorIconsStyle.thin) : PhosphorIcons.imageBroken(PhosphorIconsStyle.thin),
-            color: cs.onSurface.withAlpha(140),
-            size: 40,
-          ),
-        ),
-      );
+    // Rung 1 — MediaStore bytes.
+    if (_assetThumbBytes != null) {
+      return Stack(fit: StackFit.expand, children: [
+        Image.memory(_assetThumbBytes!, fit: BoxFit.cover),
+        if (_isVideo) _videoOverlay(cs),
+      ]);
     }
 
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Image.memory(_imageData!, fit: BoxFit.cover, cacheWidth: 200),
-        if (_isVideo)
-          Center(
-            child:
-                Icon(PhosphorIcons.playCircle(PhosphorIconsStyle.fill), color: cs.onSurface.withAlpha(180), size: 40),
+    // Rung 2 — local original, Flutter decodes at cacheWidth.
+    if (!_isVideo && widget.file.localPath != null) {
+      final localFile = File(widget.file.localPath!);
+      if (localFile.existsSync()) {
+        return Stack(fit: StackFit.expand, children: [
+          Image.file(
+            localFile,
+            fit: BoxFit.cover,
+            cacheWidth: 300,
+            gaplessPlayback: true,
           ),
-      ],
+          if (_isVideo) _videoOverlay(cs),
+        ]);
+      }
+    }
+
+    // Rung 3 — decrypted thumb on disk.
+    if (_diskThumbPath != null) {
+      return Stack(fit: StackFit.expand, children: [
+        Image.file(
+          File(_diskThumbPath!),
+          fit: BoxFit.cover,
+          cacheWidth: 300,
+          gaplessPlayback: true,
+        ),
+        if (_isVideo) _videoOverlay(cs),
+      ]);
+    }
+
+    // Still loading or no thumbnail available — solid placeholder.
+    if (_loading) return Container(color: cs.surfaceContainerHighest);
+
+    return Container(
+      color: cs.surfaceContainerHighest,
+      child: Center(
+        child: Icon(
+          _isVideo
+              ? themeIconData('playCircle')
+              : themeIconData('imageBroken'),
+          color: cs.onSurface.withAlpha(140),
+          size: 40,
+        ),
+      ),
     );
   }
 }

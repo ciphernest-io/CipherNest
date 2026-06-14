@@ -1,0 +1,12 @@
+/* ============================================================
+   CipherNest — Design System entry point
+   Link this one file to pull in the whole system:
+     <link rel="stylesheet" href="styles.css">
+   Then set the identity on <html>:  data-theme + data-mode
+   e.g. <html data-theme="binary" data-mode="dark">
+   (binary/burrow/corporate/alien/paper/garnet/hackerman × dark/light)
+   ============================================================ */
+@import url("themes.css");          /* 7 theme packs × 2 modes: color, font, shape, density, motion, icon tokens + self-hosted fonts + .mi helper */
+@import url("app.css");             /* component library: shell, app bar, rows, cards, pills, sheets, buttons, inputs, type scale */
+@import url("motion.css");          /* token-driven motion (screenshot/print-safe) */
+@import url("fonts/material.css");  /* self-hosted Material Symbols subset (Outlined / Rounded / Sharp) */

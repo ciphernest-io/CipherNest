@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 import '../../models/album_model.dart';
 import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
@@ -146,12 +146,12 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: Icon(PhosphorIcons.pencilSimple(PhosphorIconsStyle.thin), color: cs.onSurface),
+              leading: ThemeIcon('pencilSimple', color: cs.onSurface),
               title: Text('Rename Album', style: TextStyle(color: cs.onSurface)),
               onTap: () => Navigator.pop(ctx, 'rename'),
             ),
             ListTile(
-              leading: Icon(PhosphorIcons.trash(PhosphorIconsStyle.thin), color: Colors.redAccent),
+              leading: ThemeIcon('trash', color: Colors.redAccent),
               title: const Text('Delete Album', style: TextStyle(color: Colors.redAccent)),
               onTap: () => Navigator.pop(ctx, 'delete'),
             ),
@@ -209,8 +209,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         title: Text(widget.album.name),
         actions: [
           if (!widget.album.isSmart) ...[
-            IconButton(icon: Icon(PhosphorIcons.imageSquare(PhosphorIconsStyle.thin)), onPressed: _addPhotos),
-            IconButton(icon: Icon(PhosphorIcons.dotsThreeVertical(PhosphorIconsStyle.thin)), onPressed: _showOptions),
+            IconButton(icon: ThemeIcon('imageSquare'), onPressed: _addPhotos),
+            IconButton(icon: ThemeIcon('dotsThreeVertical'), onPressed: _showOptions),
           ],
         ],
       ),
@@ -269,12 +269,12 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: Icon(PhosphorIcons.minusCircle(PhosphorIconsStyle.thin), color: cs.primary),
+              leading: ThemeIcon('minusCircle', color: cs.primary),
               title: Text('Remove from Album', style: TextStyle(color: cs.onSurface)),
               onTap: () => Navigator.pop(ctx, 'remove'),
             ),
             ListTile(
-              leading: Icon(PhosphorIcons.trash(PhosphorIconsStyle.thin), color: Colors.redAccent),
+              leading: ThemeIcon('trash', color: Colors.redAccent),
               title: const Text('Delete from Vault', style: TextStyle(color: Colors.redAccent)),
               onTap: () => Navigator.pop(ctx, 'delete'),
             ),
@@ -365,7 +365,7 @@ class _VaultPhotoPickerState extends State<_VaultPhotoPicker> {
                           Border.all(color: cs.onSurface, width: 1.5),
                     ),
                     child: isSelected
-                        ? Icon(PhosphorIcons.check(PhosphorIconsStyle.fill),
+                        ? ThemeIcon('check', selected: true,
                             size: 16, color: cs.onPrimary)
                         : null,
                   ),

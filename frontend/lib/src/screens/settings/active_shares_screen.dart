@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 
 import '../../models/share_model.dart';
 import '../../../services/share_service.dart';
@@ -75,7 +75,7 @@ class _ActiveSharesScreenState extends State<ActiveSharesScreen> {
         title: const Text('Active Shares'),
         actions: [
           IconButton(
-            icon: Icon(PhosphorIcons.arrowsClockwise(PhosphorIconsStyle.thin)),
+            icon: ThemeIcon('arrowsClockwise'),
             onPressed: _refresh,
           ),
         ],
@@ -92,7 +92,7 @@ class _ActiveSharesScreenState extends State<ActiveSharesScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(PhosphorIcons.linkSimple(PhosphorIconsStyle.thin),
+                  ThemeIcon('linkSimple',
                       size: 64, color: cs.onSurface.withAlpha(80)),
                   const SizedBox(height: 16),
                   Text('No active shares',
@@ -121,8 +121,8 @@ class _ActiveSharesScreenState extends State<ActiveSharesScreen> {
                       children: [
                         Icon(
                           share.hasPassword
-                              ? PhosphorIcons.lock(PhosphorIconsStyle.thin)
-                              : PhosphorIcons.linkSimple(PhosphorIconsStyle.thin),
+                              ? themeIconData('lock')
+                              : themeIconData('linkSimple'),
                           color: cs.primary,
                           size: 18,
                         ),
@@ -160,7 +160,7 @@ class _ActiveSharesScreenState extends State<ActiveSharesScreen> {
                       children: [
                         TextButton.icon(
                           icon: Icon(
-                              PhosphorIcons.copy(PhosphorIconsStyle.thin),
+                              themeIconData('copy'),
                               size: 14),
                           label: const Text('Copy'),
                           onPressed: () async {
@@ -176,7 +176,7 @@ class _ActiveSharesScreenState extends State<ActiveSharesScreen> {
                         const Spacer(),
                         TextButton.icon(
                           icon: Icon(
-                              PhosphorIcons.trash(PhosphorIconsStyle.thin),
+                              themeIconData('trash'),
                               size: 14,
                               color: Colors.redAccent),
                           label: const Text('Revoke',

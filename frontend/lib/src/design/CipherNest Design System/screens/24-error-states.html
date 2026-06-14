@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html data-theme="binary" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Error States · CipherNest</title>
+<link rel="stylesheet" href="../themes.css">
+<link rel="stylesheet" href="../app.css">
+<link rel="stylesheet" href="../motion.css">
+<link rel="stylesheet" href="../fonts/material.css">
+<style>
+  html,body{background:var(--bg);margin:0;padding:24px;display:flex;gap:24px;flex-wrap:wrap;justify-content:center;}
+  .phone{ height:520px; }
+  .err{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:36px; gap:14px; }
+  .err .eic{ width:74px;height:74px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:36px; }
+  .err h2{ font:600 19px/1.3 var(--font); margin:0; }
+  .err p{ color:var(--fg-muted); font-size:14px; line-height:1.5; margin:0; max-width:260px; }
+</style>
+</head>
+<body>
+<!-- expired -->
+<div class="phone" data-screen-label="Error · Expired">
+  <div class="statusbar"><span>9:41</span><span class="sb-right"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div class="err">
+    <div class="eic" style="background:rgba(255,178,62,0.14);color:var(--warning);"><span class="mi">hourglass_empty</span></div>
+    <h2>This share link has expired</h2>
+    <p>The sender set this link to expire. Ask them to create a new one.</p>
+  </div>
+</div>
+<!-- wrong password -->
+<div class="phone" data-screen-label="Error · Wrong Password">
+  <div class="statusbar"><span>9:41</span><span class="sb-right"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div class="err">
+    <div class="eic" style="background:rgba(255,92,110,0.14);color:var(--danger);"><span class="mi">lock_open</span></div>
+    <h2>Wrong password</h2>
+    <p>That password can't decrypt this file. Check the message the sender gave you and try again.</p>
+    <button class="btn btn-secondary" style="margin-top:6px;">Try again</button>
+  </div>
+</div>
+<!-- offline -->
+<div class="phone" data-screen-label="Error · Offline">
+  <div class="statusbar"><span>9:41</span><span class="sb-right"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div class="err">
+    <div class="eic" style="background:var(--surface);color:var(--fg-muted);"><span class="mi">cloud_off</span></div>
+    <h2>No connection to your cloud</h2>
+    <p>We can't reach Google Drive right now. Your vault keys are still safe on this device.</p>
+    <button class="btn btn-primary" style="margin-top:6px;"><span class="mi">refresh</span> Retry</button>
+  </div>
+</div>
+<!-- not found -->
+<div class="phone" data-screen-label="Error · Not Found">
+  <div class="statusbar"><span>9:41</span><span class="sb-right"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div class="err">
+    <div class="eic" style="background:var(--surface);color:var(--fg-muted);"><span class="mi">unknown_document</span></div>
+    <h2>File no longer available</h2>
+    <p>This file was revoked or deleted by its owner.</p>
+  </div>
+</div>
+<script src="../theme-switch.js"></script>
+</body>
+</html>

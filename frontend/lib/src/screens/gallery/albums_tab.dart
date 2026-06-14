@@ -1,11 +1,10 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../config/routes.dart';
 import '../../models/album_model.dart';
-import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
@@ -80,14 +79,14 @@ class _AlbumsTabState extends State<AlbumsTab> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(PhosphorIcons.folderSimple(PhosphorIconsStyle.thin), size: 64, color: cs.onSurface.withAlpha(120)),
+            ThemeIcon('folderSimple', size: 64, color: cs.onSurface.withAlpha(120)),
             const SizedBox(height: 16),
             Text('No albums yet',
                 style: TextStyle(color: cs.onSurface.withAlpha(120))),
             const SizedBox(height: 16),
             ElevatedButton.icon(
               onPressed: _createAlbum,
-              icon: Icon(PhosphorIcons.plus(PhosphorIconsStyle.thin)),
+              icon: ThemeIcon('plus'),
               label: const Text('Create Album'),
               style: ElevatedButton.styleFrom(
                   backgroundColor: cs.primary,
@@ -141,7 +140,7 @@ class _AlbumsTabState extends State<AlbumsTab> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(PhosphorIcons.plus(PhosphorIconsStyle.thin), color: cs.onSurface.withAlpha(140), size: 40),
+              ThemeIcon('plus', color: cs.onSurface.withAlpha(140), size: 40),
               const SizedBox(height: 8),
               Text('Create Album',
                   style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 13)),
@@ -224,7 +223,7 @@ class _AlbumCardState extends State<_AlbumCard> {
                       child: Icon(
                         widget.album.isSmart
                             ? _smartAlbumIcon(widget.album.smartQuery)
-                            : PhosphorIcons.folderSimple(PhosphorIconsStyle.thin),
+                            : themeIconData('folderSimple'),
                         color: cs.onSurface.withAlpha(60),
                         size: 40,
                       ),
@@ -258,15 +257,15 @@ class _AlbumCardState extends State<_AlbumCard> {
   IconData _smartAlbumIcon(String? query) {
     switch (query) {
       case 'all_images':
-        return PhosphorIcons.images(PhosphorIconsStyle.thin);
+        return themeIconData('images');
       case 'camera':
-        return PhosphorIcons.camera(PhosphorIconsStyle.thin);
+        return themeIconData('camera');
       case 'screenshots':
-        return PhosphorIcons.screencast(PhosphorIconsStyle.thin);
+        return themeIconData('screencast');
       case 'videos':
-        return PhosphorIcons.videoCamera(PhosphorIconsStyle.thin);
+        return themeIconData('videoCamera');
       default:
-        return PhosphorIcons.folderSimple(PhosphorIconsStyle.thin);
+        return themeIconData('folderSimple');
     }
   }
 }

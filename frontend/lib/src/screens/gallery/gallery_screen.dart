@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 import '../../config/routes.dart';
 import 'pictures_tab.dart';
 import 'albums_tab.dart';
@@ -37,11 +37,11 @@ class _GalleryScreenState extends State<GalleryScreen> {
         currentIndex: _bottomNavIndex,
         onTap: (index) => setState(() => _bottomNavIndex = index),
         items: [
-          BottomNavigationBarItem(icon: Icon(PhosphorIcons.image(PhosphorIconsStyle.thin)), label: 'Pictures'),
+          BottomNavigationBarItem(icon: ThemeIcon('image'), label: 'Pictures'),
           BottomNavigationBarItem(
-              icon: Icon(PhosphorIcons.folderSimple(PhosphorIconsStyle.thin)), label: 'Albums'),
-          BottomNavigationBarItem(icon: Icon(PhosphorIcons.clockCounterClockwise(PhosphorIconsStyle.thin)), label: 'Stories'),
-          BottomNavigationBarItem(icon: Icon(PhosphorIcons.list(PhosphorIconsStyle.thin)), label: 'Menu'),
+              icon: ThemeIcon('folderSimple'), label: 'Albums'),
+          BottomNavigationBarItem(icon: ThemeIcon('clockCounterClockwise'), label: 'Stories'),
+          BottomNavigationBarItem(icon: ThemeIcon('list'), label: 'Menu'),
         ],
       ),
     );
@@ -70,7 +70,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
         CircleAvatar(
           radius: 36,
           backgroundColor: cs.primary,
-          child: Icon(PhosphorIcons.lock(PhosphorIconsStyle.thin), color: cs.onSurface, size: 32),
+          child: ThemeIcon('lock', color: cs.onSurface, size: 32),
         ),
         const SizedBox(height: 16),
         Center(
@@ -82,26 +82,26 @@ class _GalleryScreenState extends State<GalleryScreen> {
         ),
         const SizedBox(height: 32),
         ListTile(
-          leading: Icon(PhosphorIcons.gear(PhosphorIconsStyle.thin), color: cs.onSurface.withAlpha(120)),
+          leading: ThemeIcon('gear', color: cs.onSurface.withAlpha(120)),
           title: Text('Settings', style: TextStyle(color: cs.onSurface)),
           trailing:
-              Icon(PhosphorIcons.caretRight(PhosphorIconsStyle.thin), size: 16, color: cs.onSurface.withAlpha(120)),
+              ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(120)),
           onTap: () => Navigator.pushNamed(context, AppRoutes.settings),
         ),
         ListTile(
-          leading: Icon(PhosphorIcons.key(PhosphorIconsStyle.thin), color: cs.onSurface.withAlpha(120)),
+          leading: ThemeIcon('key', color: cs.onSurface.withAlpha(120)),
           title: Text('Key Management',
               style: TextStyle(color: cs.onSurface)),
           trailing:
-              Icon(PhosphorIcons.caretRight(PhosphorIconsStyle.thin), size: 16, color: cs.onSurface.withAlpha(120)),
+              ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(120)),
           onTap: () => Navigator.pushNamed(context, AppRoutes.keyManagement),
         ),
         ListTile(
-          leading: Icon(PhosphorIcons.images(PhosphorIconsStyle.thin), color: cs.onSurface.withAlpha(120)),
+          leading: ThemeIcon('images', color: cs.onSurface.withAlpha(120)),
           title: Text('Migrate Gallery',
               style: TextStyle(color: cs.onSurface)),
           trailing:
-              Icon(PhosphorIcons.caretRight(PhosphorIconsStyle.thin), size: 16, color: cs.onSurface.withAlpha(120)),
+              ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(120)),
           onTap: () => Navigator.pushNamed(context, AppRoutes.migration),
         ),
         const SizedBox(height: 40),

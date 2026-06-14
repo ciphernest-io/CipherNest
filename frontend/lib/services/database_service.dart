@@ -5,7 +5,6 @@ import '../src/models/file_model.dart';
 import '../src/models/album_model.dart';
 import '../src/models/share_model.dart';
 import 'cloud/account_registry.dart';
-import 'cloud/cloud_service.dart';
 
 class DatabaseService {
   static final DatabaseService _instance = DatabaseService._internal();
@@ -43,7 +42,7 @@ class DatabaseService {
 
     final db = await openDatabase(
       path,
-      version: 4,
+      version: 7,
       onCreate: (db, version) async {
         await _createSchema(db);
         await _seedSmartAlbums(db);
@@ -53,16 +52,45 @@ class DatabaseService {
         // bare email to composite ${provider}_${email}. The data model
         // shift is incompatible with old rows, so we wipe everything and
         // let users re-link/sync from cloud.
+        //
+        // IMPORTANT: _createSchema produces the *current* (v7+) schema, so
+        // after the wipe-and-recreate the DB is already at the latest version
+        // — bail out before the additive ALTER TABLE migrations below try to
+        // re-add columns that the recreate already included (which would
+        // throw "duplicate column name").
         if (oldVersion < 3) {
           await db.execute('DROP TABLE IF EXISTS album_files');
           await db.execute('DROP TABLE IF EXISTS albums');
           await db.execute('DROP TABLE IF EXISTS files');
           await _createSchema(db);
           await _seedSmartAlbums(db);
+          return;
         }
         // v4 adds the `shares` table for outbound share tracking.
         if (oldVersion < 4) {
           await db.execute(_createSharesTableSql);
+        }
+        // v5 adds the photo_manager AssetEntity id so the grid can fetch the
+        // same thumbnail Android's MediaStore serves Samsung Gallery.
+        if (oldVersion < 5) {
+          await db.execute('ALTER TABLE files ADD COLUMN asset_id TEXT');
+        }
+        // v6 adds the favorites flag.
+        if (oldVersion < 6) {
+          await db.execute(
+            'ALTER TABLE files ADD COLUMN is_favorite INTEGER DEFAULT 0',
+          );
+        }
+        // v7 adds soft-delete columns for the Recycle Bin. Rows with
+        // is_deleted = 1 are hidden from every list query and only surface
+        // in the Recycle Bin screen until they expire (default 30 days).
+        if (oldVersion < 7) {
+          await db.execute(
+            'ALTER TABLE files ADD COLUMN is_deleted INTEGER DEFAULT 0',
+          );
+          await db.execute(
+            'ALTER TABLE files ADD COLUMN deleted_at INTEGER',
+          );
         }
       },
     );
@@ -98,6 +126,10 @@ class DatabaseService {
         created_at INTEGER,
         is_uploaded INTEGER,
         local_path TEXT,
+        asset_id TEXT,
+        is_favorite INTEGER DEFAULT 0,
+        is_deleted INTEGER DEFAULT 0,
+        deleted_at INTEGER,
         type INTEGER
       )
     ''');
@@ -183,9 +215,141 @@ class DatabaseService {
     );
   }
 
+  /// Patches the size of an existing row. Used after the in-app editor
+  /// replaces the original — the file bytes change so the cached size
+  /// must follow.
+  Future<void> updateSizeBytes(String id, int sizeBytes) async {
+    final db = await database;
+    await db.update(
+      'files',
+      {'size_bytes': sizeBytes},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  /// Soft-delete: hides the row from every gallery query and stamps the
+  /// deletion time so the Recycle Bin can show "X days left" and the sweep
+  /// can purge it after the TTL. The encrypted cloud blob is left alone so
+  /// restores are instant and offline.
   Future<void> deleteFile(String id) async {
     final db = await database;
+    await db.update(
+      'files',
+      {
+        'is_deleted': 1,
+        'deleted_at': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  /// Hard delete — used by the Recycle Bin "Delete forever" path and by the
+  /// 30-day sweeper. Callers are responsible for the cloud blob and any
+  /// cached artifacts; this only removes the SQLite row.
+  Future<void> permanentlyDeleteFile(String id) async {
+    final db = await database;
     await db.delete('files', where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// Soft-deleted rows for the current account, most-recently-trashed first.
+  Future<List<CnestFile>> getDeletedFiles() async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final maps = await db.query(
+      'files',
+      where: 'is_deleted = 1 AND account_id = ?',
+      whereArgs: [_currentAccountId],
+      orderBy: 'deleted_at DESC',
+    );
+    return maps.map((m) => CnestFile.fromMap(m)).toList();
+  }
+
+  /// Returns the millisecondsSinceEpoch a file was soft-deleted, or null if
+  /// the row is missing / not deleted. The Recycle Bin uses this to render
+  /// the "X days left" chip without bloating CnestFile with a transient
+  /// field that's only meaningful for trashed rows.
+  Future<int?> getDeletedAt(String id) async {
+    final db = await database;
+    final rows = await db.query(
+      'files',
+      columns: ['deleted_at'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return rows.first['deleted_at'] as int?;
+  }
+
+  /// Undoes a soft-delete. Clears the deleted_at stamp so future sweeps
+  /// don't grab it again.
+  Future<void> restoreFile(String id) async {
+    final db = await database;
+    await db.update(
+      'files',
+      {'is_deleted': 0, 'deleted_at': null},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  /// Ids of soft-deleted rows whose [deleted_at] is older than [ttl]. Used
+  /// by RecycleBinService to find rows that should be purged from cloud
+  /// and the local DB. Scoped to the current account so users don't have
+  /// to be on a specific account to clean up their own trash.
+  Future<List<String>> getExpiredDeletionIds({
+    Duration ttl = const Duration(days: 30),
+  }) async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final cutoff =
+        DateTime.now().subtract(ttl).millisecondsSinceEpoch;
+    final rows = await db.query(
+      'files',
+      columns: ['id'],
+      where: 'is_deleted = 1 AND account_id = ? AND deleted_at IS NOT NULL '
+          'AND deleted_at <= ?',
+      whereArgs: [_currentAccountId, cutoff],
+    );
+    return rows.map((r) => r['id'] as String).toList();
+  }
+
+  Future<void> setFavorite(String id, bool favorite) async {
+    final db = await database;
+    await db.update(
+      'files',
+      {'is_favorite': favorite ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  /// Updates the user-visible filename. The cloud blob keeps its `<uuid>.cnest`
+  /// name; only the metadata-derived display name changes. After a full wipe
+  /// and cloud-restore the filename would revert to the cloud's stored
+  /// `original_name` — durable cloud rename is a v2 polish.
+  Future<void> renameFile(String id, String newFilename) async {
+    final db = await database;
+    await db.update(
+      'files',
+      {'filename': newFilename},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<List<CnestFile>> getFavorites() async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final maps = await db.query(
+      'files',
+      where: 'is_favorite = 1 AND account_id = ? AND is_deleted = 0',
+      whereArgs: [_currentAccountId],
+      orderBy: 'created_at DESC',
+    );
+    return maps.map((m) => CnestFile.fromMap(m)).toList();
   }
 
   Future<List<CnestFile>> getFilesByType(CnestFileType type) async {
@@ -194,7 +358,7 @@ class DatabaseService {
 
     final List<Map<String, dynamic>> maps = await db.query(
       'files',
-      where: 'type = ? AND account_id = ?',
+      where: 'type = ? AND account_id = ? AND is_deleted = 0',
       whereArgs: [type.index, _currentAccountId],
       orderBy: 'created_at DESC',
     );
@@ -256,11 +420,20 @@ class DatabaseService {
       final name = file['name'] as String? ?? '';
       final realFilename = file['original_name'] as String? ?? name.replaceAll('.cnest', '');
       final typeStr = file['type'] as String?;
-      
-      bool isImage = false;
-      if (typeStr == 'image') isImage = true;
-      else if (typeStr == 'document') isImage = false;
-      else isImage = name.contains('photo');
+
+      // Prefer the cloud-side wire string. Fall back to extension inference
+      // for: (a) older blobs that pre-date the audio/other tags, (b) blobs
+      // mis-tagged as `document` by the early build (which lumped everything
+      // non-image into documents). Extension inference auto-heals music files
+      // and misc binaries that would otherwise live in the wrong tab.
+      CnestFileType resolvedType = CnestFileTypeWire.fromWire(typeStr) ??
+          CnestFileTypeWire.fromFilename(realFilename);
+      if (resolvedType == CnestFileType.document) {
+        final inferred = CnestFileTypeWire.fromFilename(realFilename);
+        if (inferred == CnestFileType.audio || inferred == CnestFileType.image) {
+          resolvedType = inferred;
+        }
+      }
 
       String localId = file['id'];
       if (name.endsWith('.cnest')) {
@@ -268,8 +441,9 @@ class DatabaseService {
       }
 
       int size = 0;
-      if (file['size'] is int) size = file['size'];
-      else if (file['size'] is String) size = int.tryParse(file['size']) ?? 0;
+      if (file['size'] is int) {
+        size = file['size'];
+      } else if (file['size'] is String) size = int.tryParse(file['size']) ?? 0;
 
       insertBatch.insert(
         'files',
@@ -278,14 +452,14 @@ class DatabaseService {
           'cloud_id': file['id'],
           'provider': AccountRegistry().activeAccount?.providerType ?? 0,
           'account_id': _currentAccountId,
-          'filename': realFilename, 
+          'filename': realFilename,
           'size_bytes': size,
-          'created_at': file['created'] != null 
-              ? DateTime.parse(file['created']).millisecondsSinceEpoch 
+          'created_at': file['created'] != null
+              ? DateTime.parse(file['created']).millisecondsSinceEpoch
               : DateTime.now().millisecondsSinceEpoch,
           'is_uploaded': 1,
           'local_path': null,
-          'type': isImage ? 0 : 1,
+          'type': resolvedType.index,
         },
         conflictAlgorithm: ConflictAlgorithm.ignore,
       );
@@ -311,35 +485,61 @@ class DatabaseService {
 
   Future<Map<String, int>> getStorageStats() async {
     final db = await database;
-    final email = CloudService().currentEmail;
-    if (email == null) return {'images': 0, 'docs': 0, 'total_count': 0};
+    // Use the composite account id ('${provider}_${email}') the rest of the
+    // app stores in account_id. Earlier this used CloudService().currentEmail
+    // (bare email) so the query matched zero rows.
+    if (_currentAccountId == null) {
+      return {
+        'images': 0,
+        'docs': 0,
+        'audio': 0,
+        'other': 0,
+        'total_count': 0,
+      };
+    }
 
     final countResult = await db.rawQuery(
-      'SELECT COUNT(*) as count FROM files WHERE account_id = ?', 
-      [email]
+      'SELECT COUNT(*) as count FROM files WHERE account_id = ? AND is_deleted = 0',
+      [_currentAccountId],
     );
     final count = Sqflite.firstIntValue(countResult) ?? 0;
 
     final result = await db.rawQuery('''
-      SELECT type, SUM(size_bytes) as total_size 
-      FROM files 
-      WHERE account_id = ? 
+      SELECT type, SUM(size_bytes) as total_size
+      FROM files
+      WHERE account_id = ? AND is_deleted = 0
       GROUP BY type
-    ''', [email]);
+    ''', [_currentAccountId]);
 
     int imageBytes = 0;
     int docBytes = 0;
+    int audioBytes = 0;
+    int otherBytes = 0;
 
     for (var row in result) {
       final type = row['type'] as int;
       final size = row['total_size'] as int? ?? 0;
-      if (type == 0) imageBytes = size;
-      else docBytes += size;
+      // Match CnestFileType enum order: image=0, document=1, other=2, audio=3.
+      switch (type) {
+        case 0:
+          imageBytes += size;
+          break;
+        case 1:
+          docBytes += size;
+          break;
+        case 3:
+          audioBytes += size;
+          break;
+        default:
+          otherBytes += size;
+      }
     }
 
     return {
       'images': imageBytes,
       'docs': docBytes,
+      'audio': audioBytes,
+      'other': otherBytes,
       'total_count': count,
     };
   }
@@ -350,7 +550,7 @@ class DatabaseService {
     final rows = await db.query(
       'files',
       columns: ['id', 'cloud_id', 'thumbnail_cloud_id'],
-      where: 'is_uploaded = 1 AND account_id = ?',
+      where: 'is_uploaded = 1 AND account_id = ? AND is_deleted = 0',
       whereArgs: [_currentAccountId],
     );
     final map = <String, String>{};

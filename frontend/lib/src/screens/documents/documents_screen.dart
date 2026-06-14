@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 import 'package:open_file/open_file.dart'; // Launches native PDF reader
 import 'package:path_provider/path_provider.dart'; // For temp storage
 import 'package:intl/intl.dart'; // You might need to add intl to pubspec
@@ -134,7 +134,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
         title: const Text('My Documents'),
         actions: [
           IconButton(
-            icon: Icon(PhosphorIcons.arrowsClockwise(PhosphorIconsStyle.thin)),
+            icon: ThemeIcon('arrowsClockwise'),
             onPressed: _handleSync,
           )
         ],
@@ -157,7 +157,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                   Center(
                     child: Column(
                       children: [
-                        Icon(PhosphorIcons.folderOpen(PhosphorIconsStyle.thin), size: 64, color: cs.surfaceContainerHighest),
+                        ThemeIcon('folderOpen', size: 64, color: cs.surfaceContainerHighest),
                         const SizedBox(height: 16),
                         Text('No documents found', style: TextStyle(color: cs.onSurface.withAlpha(120))),
                       ],
@@ -267,7 +267,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                         )
                       else
                         PopupMenuButton(
-                          icon: Icon(PhosphorIcons.dotsThreeVertical(PhosphorIconsStyle.thin), color: cs.onSurface.withAlpha(120)),
+                          icon: ThemeIcon('dotsThreeVertical', color: cs.onSurface.withAlpha(120)),
                           itemBuilder: (ctx) => [
                             const PopupMenuItem(
                               value: 'share',
@@ -277,7 +277,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                               value: 'delete',
                               child: Row(
                                 children: [
-                                  Icon(PhosphorIcons.trash(PhosphorIconsStyle.thin), color: Colors.red, size: 20),
+                                  ThemeIcon('trash', color: Colors.red, size: 20),
                                   SizedBox(width: 12),
                                   Text('Delete', style: TextStyle(color: Colors.red)),
                                 ],
@@ -354,36 +354,36 @@ class _DocumentThumbnailState extends State<_DocumentThumbnail> {
 
     switch (ext) {
       case 'pdf':
-        icon = PhosphorIcons.filePdf(PhosphorIconsStyle.thin);
+        icon = themeIconData('filePdf');
         color = const Color(0xFFCC4444);
         break;
       case 'doc':
       case 'docx':
-        icon = PhosphorIcons.fileText(PhosphorIconsStyle.thin);
+        icon = themeIconData('fileText');
         color = const Color(0xFF5588CC);
         break;
       case 'xls':
       case 'xlsx':
       case 'csv':
-        icon = PhosphorIcons.table(PhosphorIconsStyle.thin);
+        icon = themeIconData('table');
         color = const Color(0xFF55AA77);
         break;
       case 'ppt':
       case 'pptx':
-        icon = PhosphorIcons.presentation(PhosphorIconsStyle.thin);
+        icon = themeIconData('presentation');
         color = const Color(0xFFCC8844);
         break;
       case 'txt':
-        icon = PhosphorIcons.textT(PhosphorIconsStyle.thin);
+        icon = themeIconData('textT');
         color = Colors.grey;
         break;
       case 'zip':
       case 'rar':
-        icon = PhosphorIcons.fileZip(PhosphorIconsStyle.thin);
+        icon = themeIconData('fileZip');
         color = const Color(0xFFCCCC55);
         break;
       default:
-        icon = PhosphorIcons.file(PhosphorIconsStyle.thin);
+        icon = themeIconData('file');
         color = Colors.grey;
     }
 

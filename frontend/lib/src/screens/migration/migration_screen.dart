@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 import 'package:photo_manager/photo_manager.dart';
 import '../../config/routes.dart';
 
@@ -196,7 +196,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
           leading: _phase == _MigrationPhase.selectingAlbums ||
                   _phase == _MigrationPhase.ready
               ? IconButton(
-                  icon: Icon(PhosphorIcons.arrowLeft(PhosphorIconsStyle.thin)),
+                  icon: ThemeIcon('arrowLeft'),
                   onPressed: () => setState(() => _phase = _MigrationPhase.choosing),
                 )
               : null,
@@ -234,7 +234,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 20),
-        Icon(PhosphorIcons.images(PhosphorIconsStyle.thin), color: cs.primary, size: 48),
+        ThemeIcon('images', color: cs.primary, size: 48),
         const SizedBox(height: 16),
         Text(
           'Import Your Gallery',
@@ -248,21 +248,21 @@ class _MigrationScreenState extends State<MigrationScreen> {
         ),
         const SizedBox(height: 32),
         _MigrationOption(
-          icon: PhosphorIcons.infinity(PhosphorIconsStyle.thin),
+          icon: themeIconData('infinity'),
           title: 'Entire Gallery',
           subtitle: 'Encrypt all photos and videos on this device',
           onTap: _scanFullGallery,
         ),
         const SizedBox(height: 12),
         _MigrationOption(
-          icon: PhosphorIcons.folderSimple(PhosphorIconsStyle.thin),
+          icon: themeIconData('folderSimple'),
           title: 'Select Albums',
           subtitle: 'Choose specific albums to migrate',
           onTap: _showAlbumPicker,
         ),
         const SizedBox(height: 12),
         _MigrationOption(
-          icon: PhosphorIcons.handTap(PhosphorIconsStyle.thin),
+          icon: themeIconData('handTap'),
           title: 'Pick Photos Manually',
           subtitle: 'Hand-pick individual photos and videos',
           onTap: _pickManualPhotos,
@@ -302,7 +302,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
                   '${album.count} item${album.count == 1 ? '' : 's'}',
                   style: TextStyle(color: cs.onSurface.withAlpha(120)),
                 ),
-                secondary: Icon(PhosphorIcons.folderSimple(PhosphorIconsStyle.thin), color: cs.onSurface.withAlpha(120)),
+                secondary: ThemeIcon('folderSimple', color: cs.onSurface.withAlpha(120)),
                 onChanged: (val) {
                   setState(() {
                     if (val == true) {
@@ -361,7 +361,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(PhosphorIcons.checkCircle(PhosphorIconsStyle.fill), color: Colors.greenAccent, size: 64),
+            ThemeIcon('checkCircle', selected: true, color: Colors.greenAccent, size: 64),
             const SizedBox(height: 16),
             Text('All caught up!',
                 style: TextStyle(color: cs.onSurface, fontSize: 22, fontWeight: FontWeight.bold)),
@@ -403,11 +403,11 @@ class _MigrationScreenState extends State<MigrationScreen> {
           ),
           child: Column(
             children: [
-              _StatRow(label: 'Photos', value: '$photoCount', icon: PhosphorIcons.image(PhosphorIconsStyle.thin)),
+              _StatRow(label: 'Photos', value: '$photoCount', icon: themeIconData('image')),
               if (videoCount > 0)
-                _StatRow(label: 'Videos', value: '$videoCount', icon: PhosphorIcons.videoCamera(PhosphorIconsStyle.thin)),
-              _StatRow(label: 'Total Size', value: _formatBytes(_totalBytes), icon: PhosphorIcons.hardDrive(PhosphorIconsStyle.thin)),
-              _StatRow(label: 'Estimated Time', value: '~${_formatDuration(estimatedDuration)}', icon: PhosphorIcons.timer(PhosphorIconsStyle.thin)),
+                _StatRow(label: 'Videos', value: '$videoCount', icon: themeIconData('videoCamera')),
+              _StatRow(label: 'Total Size', value: _formatBytes(_totalBytes), icon: themeIconData('hardDrive')),
+              _StatRow(label: 'Estimated Time', value: '~${_formatDuration(estimatedDuration)}', icon: themeIconData('timer')),
             ],
           ),
         ),
@@ -420,7 +420,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
           height: 52,
           child: ElevatedButton.icon(
             onPressed: _startMigration,
-            icon: Icon(PhosphorIcons.lock(PhosphorIconsStyle.thin), color: cs.onPrimary),
+            icon: ThemeIcon('lock', color: cs.onPrimary),
             label: const Text('Start Migration', style: TextStyle(fontSize: 16)),
             style: ElevatedButton.styleFrom(
               backgroundColor: cs.primary,
@@ -495,11 +495,11 @@ class _MigrationScreenState extends State<MigrationScreen> {
             ),
             child: Column(
               children: [
-                _StatRow(label: 'Secured', value: '${p.synced}', icon: PhosphorIcons.checkCircle(PhosphorIconsStyle.fill), color: Colors.greenAccent),
+                _StatRow(label: 'Secured', value: '${p.synced}', icon: themeIconData('checkCircle', selected: true), color: Colors.greenAccent),
                 if (p.failed > 0)
-                  _StatRow(label: 'Failed', value: '${p.failed}', icon: PhosphorIcons.warning(PhosphorIconsStyle.fill), color: Colors.redAccent),
-                _StatRow(label: 'Uploaded', value: _formatBytes(p.bytesUploaded), icon: PhosphorIcons.cloudArrowUp(PhosphorIconsStyle.thin)),
-                _StatRow(label: 'ETA', value: _formatDuration(p.eta), icon: PhosphorIcons.timer(PhosphorIconsStyle.thin)),
+                  _StatRow(label: 'Failed', value: '${p.failed}', icon: themeIconData('warning', selected: true), color: Colors.redAccent),
+                _StatRow(label: 'Uploaded', value: _formatBytes(p.bytesUploaded), icon: themeIconData('cloudArrowUp')),
+                _StatRow(label: 'ETA', value: _formatDuration(p.eta), icon: themeIconData('timer')),
               ],
             ),
           ),
@@ -545,7 +545,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
-            r != null && r.failed == 0 ? PhosphorIcons.checkCircle(PhosphorIconsStyle.fill) : PhosphorIcons.info(PhosphorIconsStyle.thin),
+            r != null && r.failed == 0 ? themeIconData('checkCircle', selected: true) : themeIconData('info'),
             color: r != null && r.failed == 0 ? Colors.greenAccent : Colors.orangeAccent,
             size: 72,
           ),
@@ -565,11 +565,11 @@ class _MigrationScreenState extends State<MigrationScreen> {
               ),
               child: Column(
                 children: [
-                  _StatRow(label: 'Secured', value: '${r.synced}', icon: PhosphorIcons.checkCircle(PhosphorIconsStyle.fill), color: Colors.greenAccent),
+                  _StatRow(label: 'Secured', value: '${r.synced}', icon: themeIconData('checkCircle', selected: true), color: Colors.greenAccent),
                   if (r.failed > 0)
-                    _StatRow(label: 'Failed', value: '${r.failed}', icon: PhosphorIcons.warning(PhosphorIconsStyle.fill), color: Colors.redAccent),
+                    _StatRow(label: 'Failed', value: '${r.failed}', icon: themeIconData('warning', selected: true), color: Colors.redAccent),
                   if (r.skipped > 0)
-                    _StatRow(label: 'Skipped', value: '${r.skipped}', icon: PhosphorIcons.skipForward(PhosphorIconsStyle.thin), color: Colors.grey),
+                    _StatRow(label: 'Skipped', value: '${r.skipped}', icon: themeIconData('skipForward'), color: Colors.grey),
                 ],
               ),
             ),
@@ -657,7 +657,7 @@ class _MigrationOption extends StatelessWidget {
                 ],
               ),
             ),
-            Icon(PhosphorIcons.caretRight(PhosphorIconsStyle.thin), size: 16, color: cs.onSurface.withAlpha(120)),
+            ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(120)),
           ],
         ),
       ),
@@ -738,7 +738,7 @@ class _AssetPickerScreenState extends State<_AssetPickerScreen> {
                 if (asset.type == AssetType.video)
                   Positioned(
                     bottom: 4, right: 4,
-                    child: Icon(PhosphorIcons.videoCamera(PhosphorIconsStyle.thin), color: cs.onSurface, size: 18),
+                    child: ThemeIcon('videoCamera', color: cs.onSurface, size: 18),
                   ),
                 Positioned(
                   top: 4, right: 4,
@@ -750,7 +750,7 @@ class _AssetPickerScreenState extends State<_AssetPickerScreen> {
                       border: Border.all(color: cs.onSurface, width: 1.5),
                     ),
                     child: isSelected
-                        ? Icon(PhosphorIcons.check(PhosphorIconsStyle.fill), size: 16, color: cs.onPrimary)
+                        ? ThemeIcon('check', selected: true, size: 16, color: cs.onPrimary)
                         : null,
                   ),
                 ),

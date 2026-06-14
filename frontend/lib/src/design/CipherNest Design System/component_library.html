@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Components" name="Component Library" subtitle="All reusable building blocks" viewport="1000x620" -->
+<html data-theme="binary" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Component Library · CipherNest</title>
+<link rel="stylesheet" href="themes.css">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="fonts/material.css">
+<style>
+  html,body{background:var(--bg);margin:0;}
+  .doc{ max-width:960px; margin:0 auto; padding:56px 48px 80px; font-family:var(--font); color:var(--fg); }
+  .dochead{ display:flex; align-items:center; gap:16px; margin-bottom:8px; }
+  .dochead img{ width:44px; }
+  .dochead h1{ font:700 30px/1 var(--font); letter-spacing:-0.025em; margin:0; }
+  .docsub{ color:var(--fg-muted); font-size:15px; margin:0 0 44px; }
+  .sec-h{ font:600 13px/1 var(--font); letter-spacing:0.1em; text-transform:uppercase; color:var(--fg-muted); margin:44px 0 18px; padding-bottom:12px; border-bottom:1px solid var(--hairline); }
+  .cols{ display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .demo{ background:var(--panel); border:1px solid var(--hairline); border-radius:16px; padding:22px; }
+  .demo .lbl{ font:600 12px/1 var(--font); color:var(--fg-muted); margin-bottom:16px; }
+</style>
+</head>
+<body>
+<div class="doc" data-screen-label="Component Library">
+  <div class="dochead"><img src="assets/logo_mark_brass.png"><h1>Components</h1></div>
+  <p class="docsub">The reusable building blocks. Every screen is assembled from these.</p>
+
+  <div class="sec-h">Buttons</div>
+  <div class="demo">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
+      <button class="btn btn-primary">Create link</button>
+      <button class="btn btn-secondary">Cancel</button>
+      <button class="btn btn-ghost">Skip</button>
+      <button class="btn btn-danger"><span class="mi">cancel</span> Revoke</button>
+      <button class="iconbtn" style="background:var(--surface)"><span class="mi">search</span></button>
+      <button class="fab" style="position:static;width:52px;height:52px;border-radius:16px;"><span class="mi">add</span></button>
+    </div>
+  </div>
+
+  <div class="sec-h">Surface card · Row template</div>
+  <div class="cols">
+    <div class="demo"><div class="lbl">SURFACE CARD (12–14px radius, hairline)</div>
+      <div class="card card-pad"><div style="font:600 16px/1.2 var(--font)">Documents</div><div style="color:var(--fg-muted);font-size:13px;margin-top:6px;">184 files · 4.1 GB encrypted</div></div>
+    </div>
+    <div class="demo"><div class="lbl">ROW TEMPLATE</div>
+      <div class="group">
+        <div class="row"><div class="row-thumb accent"><span class="mi">image</span></div><div class="row-main"><div class="row-title">Photos &amp; Videos</div><div class="row-sub">2,431 items · 31.2 GB</div></div><span class="mi row-chevron">chevron_right</span></div>
+        <div class="row"><div class="row-thumb"><span class="mi fill" style="color:var(--danger)">picture_as_pdf</span></div><div class="row-main"><div class="row-title">Lease Agreement.pdf</div><div class="row-sub">2.4 MB · May 12</div></div><button class="row-kebab"><span class="mi">more_vert</span></button></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec-h">Pills & chips</div>
+  <div class="demo">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+      <span class="pill accent"><span class="mi fill">auto_awesome</span> Pro</span>
+      <span class="pill"><span class="mi fill" style="color:var(--accent)">key</span> Password</span>
+      <span class="pill"><span class="mi">schedule</span> 6d left</span>
+      <span class="pill"><span class="mi">public</span> Public</span>
+      <span class="pill solid">Best value</span>
+      <span class="pill ext" style="color:var(--danger);border-color:rgba(255,92,110,0.3)">PDF</span>
+      <span class="pill ext">ZIP</span>
+      <span class="date-header" style="padding:0;">MAY 2026</span>
+    </div>
+  </div>
+
+  <div class="sec-h">Inputs & controls</div>
+  <div class="cols">
+    <div class="demo"><div class="lbl">FIELDS</div>
+      <div class="field" style="margin-bottom:12px;"><label class="field-label">Password</label><div class="input-icon"><span class="mi">lock</span><input class="input" type="password" value="············"></div></div>
+      <div class="input-icon"><span class="mi">search</span><input class="input" placeholder="Search your vault"></div>
+    </div>
+    <div class="demo"><div class="lbl">TOGGLE · SEGMENTED</div>
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px;"><label class="switch"><input type="checkbox" checked><span class="track"></span><span class="knob"></span></label><span style="font-size:14px;">Require password</span></div>
+      <div class="segment"><div class="seg active">Dark</div><div class="seg">Light</div><div class="seg">System</div></div>
+    </div>
+  </div>
+
+  <div class="sec-h">Top app bar · Bottom tab bar</div>
+  <div class="cols">
+    <div class="demo"><div class="lbl">TOP APP BAR</div>
+      <div class="appbar" style="background:var(--surface);border-radius:12px;padding-right:8px;">
+        <button class="iconbtn"><span class="mi">arrow_back</span></button><span class="appbar-title">Documents</span>
+        <div class="appbar-trailing"><button class="iconbtn"><span class="mi">search</span></button><button class="iconbtn"><span class="mi">more_vert</span></button></div>
+      </div>
+    </div>
+    <div class="demo"><div class="lbl">BOTTOM TAB BAR</div>
+      <div class="tabbar" style="border-radius:12px;border:1px solid var(--hairline);overflow:hidden;">
+        <div class="tab active"><span class="mi fill">image</span>Pictures</div>
+        <div class="tab"><span class="mi">grid_view</span>Albums</div>
+        <div class="tab"><span class="mi">auto_awesome</span>Stories</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec-h">Bottom sheet shell</div>
+  <div class="demo" style="display:flex;justify-content:center;">
+    <div class="sheet" style="max-width:412px;border-radius:22px;border:1px solid var(--hairline);width:100%;">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title">Add to vault</div>
+      <div class="sheet-sub">Files are encrypted on this device before upload.</div>
+      <div class="group" style="margin-top:6px;">
+        <div class="row"><div class="row-thumb accent"><span class="mi">photo_library</span></div><div class="row-main"><div class="row-title">Photos &amp; Videos</div></div><span class="mi row-chevron">chevron_right</span></div>
+        <div class="row"><div class="row-thumb"><span class="mi" style="color:#5C8CFF">description</span></div><div class="row-main"><div class="row-title">Documents</div></div><span class="mi row-chevron">chevron_right</span></div>
+      </div>
+      <div class="sheet-actions"><button class="btn btn-primary btn-block btn-lg">Choose files</button><button class="btn btn-secondary btn-block">Cancel</button></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

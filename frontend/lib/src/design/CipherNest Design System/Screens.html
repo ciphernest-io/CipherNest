@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html data-theme="dark" data-accent="brass">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CipherNest · All Screens</title>
+<link rel="stylesheet" href="themes.css">
+<link rel="stylesheet" href="fonts/material.css">
+<style>
+  html,body{margin:0;background:var(--bg);}
+  iframe{ border:0; background:var(--bg); border-radius:14px; display:block; }
+  .ab-frame{ box-shadow:0 12px 40px rgba(0,0,0,0.4); border-radius:16px; overflow:hidden; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="design-canvas.jsx"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+function Frame({src, w, h}){
+  return (
+    <div className="ab-frame" style={{width:w, height:h}}>
+      <iframe src={src} width={w} height={h} loading="lazy" scrolling="no"></iframe>
+    </div>
+  );
+}
+
+const SECTIONS = [
+  { id:'foundations', title:'Foundations', subtitle:'Color, type & component reference', items:[
+    ['color_type_reference.html','Color & Type', 960, 760],
+    ['component_library.html','Components', 1000, 900],
+  ]},
+  { id:'getstarted', title:'Get Started', subtitle:'Splash, onboarding, auth', items:[
+    ['screens/01-splash.html','01 · Splash',412,915],
+    ['screens/02-onboarding.html','02 · Onboarding',412,915],
+    ['screens/03-cloud-selection.html','03 · Cloud Selection',412,915],
+    ['screens/04a-signup-password.html','04 · Set Password',412,915],
+    ['screens/04-mnemonic.html','04 · Recovery Phrase',412,915],
+    ['screens/05-login.html','05 · Login',412,915],
+    ['screens/06-restore.html','06 · Restore',412,915],
+  ]},
+  { id:'vault', title:'Your Vault', subtitle:'Home & upload', items:[
+    ['screens/07-home.html','07 · Home',412,915],
+    ['screens/08-upload-sheet.html','08 · Upload Sheet',412,915],
+  ]},
+  { id:'media', title:'Media', subtitle:'Gallery, albums, viewers', items:[
+    ['screens/09-gallery.html','09 · Gallery',412,915],
+    ['screens/10-albums.html','10 · Albums',412,915],
+    ['screens/11-stories.html','11 · Stories',412,915],
+    ['screens/12-image-viewer.html','12 · Image Viewer',412,915],
+    ['screens/13-video-player.html','13 · Video Player',412,915],
+  ]},
+  { id:'files', title:'Files & Audio', subtitle:'Documents, audio, other files', items:[
+    ['screens/14-documents.html','14 · Documents',412,915],
+    ['screens/15-audio.html','15 · Audio',412,915],
+    ['screens/16-other-files.html','16 · Other Files',412,915],
+  ]},
+  { id:'sharing', title:'Sharing', subtitle:'Share dialog & active links', items:[
+    ['screens/17-share-dialog.html','17 · Share (configure + created)',860,915],
+    ['screens/18-active-shares.html','18 · Active Shares',412,915],
+  ]},
+  { id:'system', title:'System', subtitle:'Settings, migration, paywall, web', items:[
+    ['screens/19-settings.html','19 · Settings',412,915],
+    ['screens/20-migration.html','20 · Migration (prompt + progress)',860,915],
+    ['screens/21-paywall.html','21 · Paywall',412,915],
+    ['screens/22-recipient-web.html','22 · Recipient Web Viewer',1440,900],
+  ]},
+  { id:'states', title:'Empty & Error States', subtitle:'Per-tab empties + error/expired', items:[
+    ['screens/23-empty-states.html','23 · Empty States',896,640],
+    ['screens/24-error-states.html','24 · Error & Expired',896,600],
+  ]},
+  { id:'themes', title:'Theme Packs · Home', subtitle:'7 complete identities — tap the ◐ control in any screen to switch live', items:[
+    ['screens/07-home.html?t=binary','Binary',412,915],
+    ['screens/07-home.html?t=burrow','Burrow',412,915],
+    ['screens/07-home.html?t=corporate','Corporate',412,915],
+    ['screens/07-home.html?t=alien','Alien',412,915],
+    ['screens/07-home.html?t=paper','Paper',412,915],
+    ['screens/07-home.html?t=garnet','Garnet',412,915],
+    ['screens/07-home.html?t=hackerman','Hackerman',412,915],
+  ]},
+];
+
+function App(){
+  return (
+    <DesignCanvas>
+      {SECTIONS.map(sec => (
+        <DCSection key={sec.id} id={sec.id} title={sec.title} subtitle={sec.subtitle}>
+          {sec.items.map(([src,label,w,h],i)=>(
+            <DCArtboard key={i} id={sec.id+'-'+i} label={label} width={w} height={h}>
+              <Frame src={src} w={w} h={h}/>
+            </DCArtboard>
+          ))}
+        </DCSection>
+      ))}
+    </DesignCanvas>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 
 import '../../models/file_model.dart';
 import '../../../services/auto_sync_service.dart';
@@ -181,7 +181,7 @@ class _AudioScreenState extends State<AudioScreen> {
         title: const Text('Audio'),
         actions: [
           IconButton(
-            icon: Icon(PhosphorIcons.arrowsClockwise(PhosphorIconsStyle.thin)),
+            icon: ThemeIcon('arrowsClockwise'),
             onPressed: _handleSync,
           ),
         ],
@@ -206,7 +206,7 @@ class _AudioScreenState extends State<AudioScreen> {
                         Center(
                           child: Column(
                             children: [
-                              Icon(PhosphorIcons.musicNote(PhosphorIconsStyle.thin),
+                              ThemeIcon('musicNote',
                                   size: 64, color: cs.onSurface.withAlpha(80)),
                               const SizedBox(height: 16),
                               Text('No audio files yet',
@@ -247,8 +247,8 @@ class _AudioScreenState extends State<AudioScreen> {
                                   )
                                 : Icon(
                                     isPlaying
-                                        ? PhosphorIcons.pause(PhosphorIconsStyle.fill)
-                                        : PhosphorIcons.play(PhosphorIconsStyle.fill),
+                                        ? themeIconData('pause', selected: true)
+                                        : themeIconData('play', selected: true),
                                     color: cs.primary,
                                     size: 18,
                                   ),
@@ -269,9 +269,7 @@ class _AudioScreenState extends State<AudioScreen> {
                                 fontSize: 12),
                           ),
                           trailing: PopupMenuButton<String>(
-                            icon: Icon(
-                                PhosphorIcons.dotsThreeVertical(
-                                    PhosphorIconsStyle.thin),
+                            icon: ThemeIcon('dotsThreeVertical',
                                 color: cs.onSurface.withAlpha(140)),
                             onSelected: (v) {
                               if (v == 'share') ShareDialog.show(context, file);
@@ -316,7 +314,7 @@ class _AudioScreenState extends State<AudioScreen> {
         children: [
           Row(
             children: [
-              Icon(PhosphorIcons.musicNote(PhosphorIconsStyle.thin),
+              ThemeIcon('musicNote',
                   size: 20, color: cs.primary),
               const SizedBox(width: 12),
               Expanded(
@@ -333,8 +331,8 @@ class _AudioScreenState extends State<AudioScreen> {
               IconButton(
                 icon: Icon(
                   _player.playing
-                      ? PhosphorIcons.pause(PhosphorIconsStyle.fill)
-                      : PhosphorIcons.play(PhosphorIconsStyle.fill),
+                      ? themeIconData('pause', selected: true)
+                      : themeIconData('play', selected: true),
                   color: cs.primary,
                 ),
                 onPressed: () async {
@@ -347,7 +345,7 @@ class _AudioScreenState extends State<AudioScreen> {
                 },
               ),
               IconButton(
-                icon: Icon(PhosphorIcons.stop(PhosphorIconsStyle.thin),
+                icon: ThemeIcon('stop',
                     color: cs.onSurface.withAlpha(140)),
                 onPressed: () async {
                   await _player.stop();

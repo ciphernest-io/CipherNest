@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:http/http.dart' as http;
 import '../encryption_service.dart';
+import '../../src/models/file_model.dart';
 import 'account_registry.dart';
 import 'cloud_account.dart';
 import 'cloud_provider.dart';
@@ -263,7 +264,7 @@ class OneDriveProvider implements CloudProvider {
   @override
   Future<String?> uploadEncryptedFile({
     required String filename,
-    required bool isImage,
+    required CnestFileType type,
     String? originalName,
     Uint8List? fileBytes,
     Stream<List<int>>? fileStream,
@@ -277,10 +278,9 @@ class OneDriveProvider implements CloudProvider {
 
     // Special files (DB backup, etc.) keep their original name unencoded.
     final isSpecial = filename == 'ciphernest_db_backup.cnest';
-    final type = isImage ? 'image' : 'document';
     final cloudName = isSpecial
         ? filename
-        : _encodeFilename(stem, type, originalName ?? filename);
+        : _encodeFilename(stem, type.wireName, originalName ?? filename);
 
     if (fileBytes != null) {
       return _uploadSmall(cloudName, fileBytes);

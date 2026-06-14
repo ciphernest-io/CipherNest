@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html data-theme="binary" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Active Shares · CipherNest</title>
+<link rel="stylesheet" href="../themes.css">
+<link rel="stylesheet" href="../app.css">
+<link rel="stylesheet" href="../motion.css">
+<link rel="stylesheet" href="../fonts/material.css">
+<style>
+  html,body{background:var(--bg);margin:0;display:flex;justify-content:center;}
+  .share{ padding:16px; }
+  .share + .share{ border-top:1px solid var(--hairline); }
+  .share-top{ display:flex; align-items:center; gap:11px; }
+  .share-th{ width:40px;height:40px;border-radius:10px;object-fit:cover;flex:0 0 auto; }
+  .share-name{ font:500 14px/1.2 var(--font); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .share-tags{ display:flex; gap:7px; margin-top:6px; }
+  .share-url{ font-family:var(--font-mono); font-size:12px; color:var(--fg-muted); margin-top:12px; background:var(--bg); border:1px solid var(--hairline); border-radius:8px; padding:9px 11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .share-acts{ display:flex; gap:9px; margin-top:11px; }
+  .share-acts .btn{ flex:1; height:40px; font-size:13px; }
+</style>
+</head>
+<body>
+<div class="phone" data-screen-label="Active Shares">
+  <div class="statusbar"><span>9:41</span><span class="sb-right"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div class="appbar"><button class="iconbtn"><span class="mi">arrow_back</span></button><span class="appbar-title">Active shares</span></div>
+  <div class="screen-body">
+    <div style="padding:8px 16px 4px;color:var(--fg-muted);font-size:13px;">3 active links · tap to manage</div>
+    <div>
+      <div class="share">
+        <div class="share-top">
+          <img class="share-th" src="https://picsum.photos/seed/cnA2/80/80">
+          <div style="flex:1;min-width:0;"><div class="share-name">IMG_4821.heic</div>
+            <div class="share-tags"><span class="pill"><span class="mi fill" style="color:var(--accent);">key</span> Password</span><span class="pill"><span class="mi">schedule</span> 6d left</span></div>
+          </div>
+        </div>
+        <div class="share-url">ciphernest.pages.dev/s/9fA2-kQ7x…</div>
+        <div class="share-acts"><button class="btn btn-secondary"><span class="mi">content_copy</span> Copy</button><button class="btn btn-danger"><span class="mi">cancel</span> Revoke</button></div>
+      </div>
+      <div class="share">
+        <div class="share-top">
+          <img class="share-th" src="https://picsum.photos/seed/cnB3/80/80">
+          <div style="flex:1;min-width:0;"><div class="share-name">Budget_Q2.xlsx</div>
+            <div class="share-tags"><span class="pill"><span class="mi">public</span> Public</span><span class="pill"><span class="mi">schedule</span> 22h left</span></div>
+          </div>
+        </div>
+        <div class="share-url">ciphernest.pages.dev/s/Lm0p-2Zr8…</div>
+        <div class="share-acts"><button class="btn btn-secondary"><span class="mi">content_copy</span> Copy</button><button class="btn btn-danger"><span class="mi">cancel</span> Revoke</button></div>
+      </div>
+      <div class="share">
+        <div class="share-top">
+          <img class="share-th" src="https://picsum.photos/seed/story1/80/80">
+          <div style="flex:1;min-width:0;"><div class="share-name">Lisbon album (38)</div>
+            <div class="share-tags"><span class="pill"><span class="mi fill" style="color:var(--accent);">key</span> Password</span><span class="pill" style="color:var(--fg-2);"><span class="mi">all_inclusive</span> Never expires</span></div>
+          </div>
+        </div>
+        <div class="share-url">ciphernest.pages.dev/s/Qx7v-8Hn2…</div>
+        <div class="share-acts"><button class="btn btn-secondary"><span class="mi">content_copy</span> Copy</button><button class="btn btn-danger"><span class="mi">cancel</span> Revoke</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="../theme-switch.js"></script>
+</body>
+</html>

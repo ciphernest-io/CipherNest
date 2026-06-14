@@ -11,7 +11,7 @@ import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../../crypto/aes_gcm.dart';
@@ -354,7 +354,7 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
       appBar: AppBar(
         title: const Text('Shared with you'),
         leading: IconButton(
-          icon: Icon(PhosphorIcons.arrowLeft(PhosphorIconsStyle.thin)),
+          icon: ThemeIcon('arrowLeft'),
           onPressed: () => Navigator.pop(context),
         ),
       ),
@@ -367,13 +367,13 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
       case _Phase.initial:
       case _Phase.downloading:
         return _StatusView(
-          icon: PhosphorIcons.cloudArrowDown(PhosphorIconsStyle.thin),
+          icon: themeIconData('cloudArrowDown'),
           label: 'Downloading encrypted blob…',
           spinner: true,
         );
       case _Phase.decrypting:
         return _StatusView(
-          icon: PhosphorIcons.lockKeyOpen(PhosphorIconsStyle.thin),
+          icon: themeIconData('lockKeyOpen'),
           label: 'Decrypting on-device…',
           spinner: true,
         );
@@ -381,13 +381,13 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
         return _buildPasswordForm(cs);
       case _Phase.expired:
         return _StatusView(
-          icon: PhosphorIcons.clockCountdown(PhosphorIconsStyle.thin),
+          icon: themeIconData('clockCountdown'),
           label: 'This link has expired.',
           spinner: false,
         );
       case _Phase.error:
         return _StatusView(
-          icon: PhosphorIcons.warningCircle(PhosphorIconsStyle.thin),
+          icon: themeIconData('warningCircle'),
           label: _errorMessage ?? 'Something went wrong.',
           spinner: false,
         );
@@ -405,7 +405,7 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Icon(
-              PhosphorIcons.lock(PhosphorIconsStyle.thin),
+              themeIconData('lock'),
               size: 56,
               color: cs.primary,
             ),
@@ -449,7 +449,7 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: cs.onPrimary),
                     )
-                  : Icon(PhosphorIcons.lockKeyOpen(PhosphorIconsStyle.thin)),
+                  : ThemeIcon('lockKeyOpen'),
               label: Text(_passwordSubmitting ? 'Unlocking…' : 'Unlock'),
             ),
           ],
@@ -496,7 +496,7 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
-              PhosphorIcons.musicNotes(PhosphorIconsStyle.thin),
+              themeIconData('musicNotes'),
               size: 80,
               color: cs.primary,
             ),
@@ -510,8 +510,8 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
                   onPressed: () => playing ? p.pause() : p.play(),
                   icon: Icon(
                     playing
-                        ? PhosphorIcons.pauseCircle(PhosphorIconsStyle.fill)
-                        : PhosphorIcons.playCircle(PhosphorIconsStyle.fill),
+                        ? themeIconData('pauseCircle', selected: true)
+                        : themeIconData('playCircle', selected: true),
                     color: cs.primary,
                   ),
                 );
@@ -549,8 +549,8 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
           children: [
             Icon(
               _mediaKind == _MediaKind.document
-                  ? PhosphorIcons.fileText(PhosphorIconsStyle.thin)
-                  : PhosphorIcons.file(PhosphorIconsStyle.thin),
+                  ? themeIconData('fileText')
+                  : themeIconData('file'),
               size: 80,
               color: cs.primary,
             ),
@@ -562,7 +562,7 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
             ),
             const SizedBox(height: 24),
             ElevatedButton.icon(
-              icon: Icon(PhosphorIcons.arrowSquareOut(PhosphorIconsStyle.thin)),
+              icon: ThemeIcon('arrowSquareOut'),
               label: const Text('Open with…'),
               onPressed: () async {
                 final r = await OpenFile.open(f.path);
@@ -575,7 +575,7 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
             ),
             const SizedBox(height: 8),
             OutlinedButton.icon(
-              icon: Icon(PhosphorIcons.copy(PhosphorIconsStyle.thin)),
+              icon: ThemeIcon('copy'),
               label: const Text('Copy file path'),
               onPressed: () async {
                 await Clipboard.setData(ClipboardData(text: f.path));

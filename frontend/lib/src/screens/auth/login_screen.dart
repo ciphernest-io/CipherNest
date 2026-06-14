@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 import '../../config/routes.dart';
 import '../../../services/key_manager_service.dart';
 
@@ -60,7 +60,7 @@ class _LoginScreenState extends State<LoginScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Icon(PhosphorIcons.lockKey(PhosphorIconsStyle.thin), size: 80, color: cs.primary),
+              ThemeIcon('lockKey', size: 80, color: cs.primary),
               const SizedBox(height: 32),
               
               Text(
@@ -77,7 +77,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   labelText: 'Master Password',
                   errorText: _error,
                   border: const OutlineInputBorder(),
-                  prefixIcon: Icon(PhosphorIcons.key(PhosphorIconsStyle.thin)),
+                  prefixIcon: ThemeIcon('key'),
                 ),
               ),
               const SizedBox(height: 24),
@@ -97,7 +97,7 @@ class _LoginScreenState extends State<LoginScreen> {
               // This is now the primary way to trigger biometrics
               TextButton.icon(
                 onPressed: _triggerBiometrics,
-                icon: Icon(PhosphorIcons.fingerprint(PhosphorIconsStyle.thin)),
+                icon: ThemeIcon('fingerprint'),
                 label: const Text('Use Biometrics'),
               ),
             ],

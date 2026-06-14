@@ -2,7 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/database_service.dart';
@@ -212,7 +212,7 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
-            PhosphorIcons.trash(PhosphorIconsStyle.thin),
+            themeIconData('trash'),
             size: 64,
             color: cs.onSurface.withAlpha(120),
           ),
@@ -251,14 +251,14 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
             IconButton(
               tooltip: 'Restore',
               icon: Icon(
-                PhosphorIcons.arrowCounterClockwise(PhosphorIconsStyle.thin),
+                themeIconData('arrowCounterClockwise'),
               ),
               onPressed: _restoreSelected,
             ),
             IconButton(
               tooltip: 'Delete forever',
               icon: Icon(
-                PhosphorIcons.trashSimple(PhosphorIconsStyle.thin),
+                themeIconData('trashSimple'),
                 color: Colors.redAccent,
               ),
               onPressed: () => _deleteForeverSelected(files),

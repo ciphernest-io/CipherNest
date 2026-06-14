@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html data-theme="binary" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Video Player · CipherNest</title>
+<link rel="stylesheet" href="../themes.css">
+<link rel="stylesheet" href="../app.css">
+<link rel="stylesheet" href="../motion.css">
+<link rel="stylesheet" href="../fonts/material.css">
+<style>
+  html,body{background:#000;margin:0;display:flex;justify-content:center;}
+  .phone.viewer{ background:#000; }
+  .v-top{ position:absolute; top:0; left:0; right:0; z-index:20; height:96px; padding-top:44px; display:flex; align-items:center; gap:4px; padding-left:6px; padding-right:10px; background:linear-gradient(to bottom, rgba(0,0,0,0.62), transparent); }
+  .v-top .fn{ flex:1; text-align:center; }
+  .v-top .fn .name{ font:600 14px/1.2 var(--font); color:#fff; }
+  .v-top .fn .sub{ font:400 11px/1 var(--font); color:rgba(255,255,255,0.6); margin-top:3px; }
+  .v-top .iconbtn{ color:#fff; }
+  .v-stage{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; }
+  .v-stage img{ width:100%; height:100%; object-fit:cover; opacity:0.85; }
+  .bigplay{ position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); z-index:18; width:74px;height:74px;border-radius:999px;background:rgba(0,0,0,0.42);backdrop-filter:blur(10px);border:1.5px solid rgba(255,255,255,0.35);display:flex;align-items:center;justify-content:center;color:#fff;font-size:30px;cursor:pointer; }
+  .v-bottom{ position:absolute; left:0; right:0; bottom:0; z-index:20; padding:20px 20px 28px; background:linear-gradient(to top, rgba(0,0,0,0.78), transparent); }
+  .scrub{ display:flex; align-items:center; gap:11px; color:#fff; font:500 12px/1 var(--font); font-feature-settings:"tnum"; }
+  .track{ flex:1; height:4px; border-radius:999px; background:rgba(255,255,255,0.22); position:relative; }
+  .track .fill{ position:absolute; left:0; top:0; bottom:0; width:38%; background:var(--accent); border-radius:999px; }
+  .track .knob{ position:absolute; left:38%; top:50%; transform:translate(-50%,-50%); width:13px;height:13px;border-radius:999px;background:#fff; box-shadow:0 0 0 4px rgba(194,161,90,0.3); }
+  .vctrls{ display:flex; align-items:center; justify-content:center; gap:34px; margin-top:8px; color:#fff; }
+  .vctrls .iconbtn{ color:#fff; }
+  .vctrls .pp{ width:60px;height:60px;font-size:30px; }
+</style>
+</head>
+<body>
+<div class="phone viewer" data-screen-label="Video Player">
+  <div class="v-stage"><img src="https://picsum.photos/seed/vid9/900/1300"></div>
+  <div class="bigplay"><span class="mi fill">play_arrow</span></div>
+  <div class="v-top">
+    <button class="iconbtn"><span class="mi">arrow_back</span></button>
+    <div class="fn"><div class="name">Lisbon_sunset.mp4</div><div class="sub">May 18, 2026 · 1080p</div></div>
+    <button class="iconbtn"><span class="mi">more_vert</span></button>
+  </div>
+  <div class="v-bottom">
+    <div class="scrub"><span>0:38</span><div class="track"><div class="fill"></div><div class="knob"></div></div><span style="color:rgba(255,255,255,0.6);">1:42</span></div>
+    <div class="vctrls">
+      <button class="iconbtn"><span class="mi fill">skip_previous</span></button>
+      <button class="iconbtn"><span class="mi">fast_rewind</span></button>
+      <button class="iconbtn pp"><span class="mi fill">pause</span></button>
+      <button class="iconbtn"><span class="mi">fast_forward</span></button>
+      <button class="iconbtn"><span class="mi">fullscreen</span></button>
+    </div>
+  </div>
+</div>
+<script src="../theme-switch.js"></script>
+</body>
+</html>

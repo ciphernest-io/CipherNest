@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'dart:math';
 
 import 'package:bip39/bip39.dart' as bip39;

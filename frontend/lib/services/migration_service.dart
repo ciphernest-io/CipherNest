@@ -284,7 +284,7 @@ class MigrationService {
       final encryptedStream = EncryptionService.encryptStream(file.openRead());
       mainCloudId = await CloudService().uploadEncryptedFile(
         filename: mainCloudFilename,
-        isImage: false,
+        type: CnestFileType.image,
         originalName: filename,
         stream: encryptedStream,
         size: encryptedSize,
@@ -294,7 +294,7 @@ class MigrationService {
       final encrypted = await EncryptionService.encryptFile(fileBytes);
       mainCloudId = await CloudService().uploadEncryptedFile(
         filename: mainCloudFilename,
-        isImage: isImage,
+        type: isImage ? CnestFileType.image : CnestFileType.document,
         originalName: filename,
         bytes: encrypted,
       );
@@ -309,7 +309,7 @@ class MigrationService {
           await EncryptionService.encryptFile(thumbnailBytes);
       thumbCloudId = await CloudService().uploadEncryptedFile(
         filename: '${fileId}_thumb.cnest',
-        isImage: true,
+        type: CnestFileType.image,
         bytes: encryptedThumb,
       );
     }

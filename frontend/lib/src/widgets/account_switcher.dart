@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import 'theme_icon.dart';
 import '../config/routes.dart';
 import '../../services/cloud/account_registry.dart';
 import '../../services/cloud/cloud_account.dart';
@@ -16,13 +16,13 @@ class AccountSwitcher extends StatelessWidget {
   IconData _providerIcon(int providerType) {
     switch (providerType) {
       case CloudAccount.providerGoogle:
-        return PhosphorIcons.googleLogo(PhosphorIconsStyle.thin);
+        return themeIconData('googleLogo');
       case CloudAccount.providerOneDrive:
-        return PhosphorIcons.microsoftOutlookLogo(PhosphorIconsStyle.thin);
+        return themeIconData('microsoftOutlookLogo');
       case CloudAccount.providerDropbox:
-        return PhosphorIcons.dropboxLogo(PhosphorIconsStyle.thin);
+        return themeIconData('dropboxLogo');
       default:
-        return PhosphorIcons.cloud(PhosphorIconsStyle.thin);
+        return themeIconData('cloud');
     }
   }
 
@@ -92,7 +92,7 @@ class AccountSwitcher extends StatelessWidget {
                       ),
                     ),
                     if (a.id == active.id)
-                      Icon(PhosphorIcons.check(PhosphorIconsStyle.fill),
+                      ThemeIcon('check', selected: true,
                           size: 16, color: cs.primary),
                   ],
                 ),
@@ -102,7 +102,7 @@ class AccountSwitcher extends StatelessWidget {
               value: '__add__',
               child: Row(
                 children: [
-                  Icon(PhosphorIcons.plus(PhosphorIconsStyle.thin),
+                  ThemeIcon('plus',
                       size: 18, color: cs.primary),
                   const SizedBox(width: 12),
                   Text('Add another account',
@@ -128,7 +128,7 @@ class AccountSwitcher extends StatelessWidget {
                       size: 16, color: cs.primary),
                 ),
                 const SizedBox(width: 6),
-                Icon(PhosphorIcons.caretDown(PhosphorIconsStyle.thin),
+                ThemeIcon('caretDown',
                     size: 14, color: cs.onSurface.withAlpha(140)),
               ],
             ),

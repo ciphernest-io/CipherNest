@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 import '../../../services/cloud/cloud_service.dart';
 
 class KeyManagementScreen extends StatefulWidget {
@@ -64,7 +64,7 @@ class _KeyManagementScreenState extends State<KeyManagementScreen> {
               child: Column(
                 children: [
                   Icon(
-                    _resultColor == Colors.greenAccent ? PhosphorIcons.lock(PhosphorIconsStyle.thin) : PhosphorIcons.clock(PhosphorIconsStyle.thin),
+                    _resultColor == Colors.greenAccent ? themeIconData('lock') : themeIconData('clock'),
                     size: 48,
                     color: _resultColor,
                   ),
@@ -89,7 +89,7 @@ class _KeyManagementScreenState extends State<KeyManagementScreen> {
               height: 50,
               child: ElevatedButton.icon(
                 onPressed: _isTesting ? null : _runCanaryTest,
-                icon: Icon(PhosphorIcons.shieldCheck(PhosphorIconsStyle.thin)),
+                icon: ThemeIcon('shieldCheck'),
                 label: const Text("Run Integrity Check"),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: cs.primary,

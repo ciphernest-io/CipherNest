@@ -2,7 +2,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/file_model.dart';
@@ -86,7 +86,7 @@ class _StoriesTabState extends State<StoriesTab> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(PhosphorIcons.sparkle(PhosphorIconsStyle.thin), size: 64, color: cs.onSurface.withAlpha(120)),
+            ThemeIcon('sparkle', size: 64, color: cs.onSurface.withAlpha(120)),
             const SizedBox(height: 16),
             Text('No stories yet',
                 style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 16)),
@@ -126,7 +126,7 @@ class _StoriesTabState extends State<StoriesTab> {
         children: [
           Row(
             children: [
-              Icon(PhosphorIcons.clockCounterClockwise(PhosphorIconsStyle.thin), color: cs.primary, size: 20),
+              ThemeIcon('clockCounterClockwise', color: cs.primary, size: 20),
               const SizedBox(width: 8),
               Text('On this day, one year ago',
                   style: TextStyle(
@@ -205,7 +205,7 @@ class _StoriesTabState extends State<StoriesTab> {
             ),
             Center(
               child:
-                  Icon(PhosphorIcons.playCircle(PhosphorIconsStyle.fill), color: Colors.white, size: 56),
+                  ThemeIcon('playCircle', selected: true, color: Colors.white, size: 56),
             ),
             Positioned(
               bottom: 12,

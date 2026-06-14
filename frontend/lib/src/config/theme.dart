@@ -1,311 +1,352 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-// ---------------------------------------------------------------------------
-// ACCENT THEMES
-// ---------------------------------------------------------------------------
-
-enum AccentTheme { acidGreen, electricOrange, cyanTech, magentaNeon }
-
-class AccentColors {
-  final Color primary;
-  final Color muted;
-
-  const AccentColors({required this.primary, required this.muted});
-
-  static const acidGreen = AccentColors(
-    primary: Color(0xFFBBFF00),
-    muted: Color(0xFF6B9400),
-  );
-  static const electricOrange = AccentColors(
-    primary: Color(0xFFFFAA00),
-    muted: Color(0xFF996600),
-  );
-  static const cyanTech = AccentColors(
-    primary: Color(0xFF00FFEE),
-    muted: Color(0xFF009988),
-  );
-  static const magentaNeon = AccentColors(
-    primary: Color(0xFFFF00BB),
-    muted: Color(0xFF990070),
-  );
-
-  static AccentColors fromTheme(AccentTheme theme) {
-    switch (theme) {
-      case AccentTheme.acidGreen:
-        return acidGreen;
-      case AccentTheme.electricOrange:
-        return electricOrange;
-      case AccentTheme.cyanTech:
-        return cyanTech;
-      case AccentTheme.magentaNeon:
-        return magentaNeon;
-    }
-  }
-}
+import 'theme_controller.dart';
+import 'theme_packs.dart';
 
 // ---------------------------------------------------------------------------
-// SEMANTIC TOKENS  (kept as statics so old `AppColors.xxx` references compile
-// while screens are migrated; new code should read from Theme/ColorScheme)
+// SEMANTIC SHIM — AppColors stays as static getters that resolve to the live
+// theme pack. A handful of widgets still reference AppColors.primary directly
+// (gallery viewer's filmstrip border, settings cache slider). They keep
+// working without per-site refactor.
 // ---------------------------------------------------------------------------
 
 class AppColors {
-  // Dark mode defaults (legacy compatibility)
-  static const Color background = Color(0xFF000000);
-  static const Color surface = Color(0xFF1F1F1F);
-  static const Color primary = Color(0xFFBBFF00); // acid green default
-  static const Color primaryMuted = Color(0xFF6B9400);
-  static const Color textPrimary = Color(0xFFFFFFFF);
-  static const Color textSecondary = Color(0xFFE0E0E0);
-  static const Color divider = Color(0xFF2A2A2A);
+  static Color get _tokens =>
+      ThemePackTokens.forPackMode(
+        ThemeController().pack,
+        ThemeController().brightness,
+      ).accent;
 
-  // Semantic accents (fixed, not theme-dependent)
+  /// The primary accent of the current pack/mode.
+  static Color get primary => _tokens;
+
+  /// Legacy semantic constants. Surfaces and text now come from `Theme.of`,
+  /// but these stay for the few hardcoded call-sites that haven't migrated.
   static const Color error = Color(0xFFFF4444);
   static const Color success = Color(0xFF44FF88);
   static const Color warning = Color(0xFFFFAA00);
 }
 
 // ---------------------------------------------------------------------------
-// TYPOGRAPHY
+// TYPOGRAPHY — routes to the active pack's fonts. Bungee Hairline for the
+// brand wordmark is the one fixed anchor across every pack.
 // ---------------------------------------------------------------------------
 
 class AppTypography {
-  /// Brand logo font — used wherever "Ciphernest" appears as a logo/header.
+  static ThemePackTokens get _t => ThemePackTokens.forPackMode(
+        ThemeController().pack,
+        ThemeController().brightness,
+      );
+
+  /// CipherNest wordmark. Always Bungee Hairline weight 800 — the one font
+  /// that never changes across packs.
   static TextStyle brand({double fontSize = 28, Color? color}) {
     return GoogleFonts.bungeeHairline(
       fontSize: fontSize,
-      fontWeight: FontWeight.w400,
-      color: color ?? AppColors.textPrimary,
+      fontWeight: FontWeight.w800,
+      color: color ?? _t.fg,
       letterSpacing: 2,
     );
   }
 
-  /// Headings — clean geometric sans.
+  /// Heading style — uses the current pack's title font.
   static TextStyle heading({
     double fontSize = 22,
     FontWeight fontWeight = FontWeight.w600,
     Color? color,
   }) {
-    return GoogleFonts.spaceGrotesk(
+    return _packTextStyle(
+      _t.titleFontFamily,
       fontSize: fontSize,
       fontWeight: fontWeight,
-      color: color ?? AppColors.textPrimary,
+      color: color ?? _t.fg,
+      letterSpacing: _t.titleLetterSpacing,
     );
   }
 
-  /// Body & metadata — monospace terminal vibe.
+  /// Body style — uses the current pack's UI font.
   static TextStyle body({
     double fontSize = 14,
     FontWeight fontWeight = FontWeight.w400,
     Color? color,
   }) {
-    return GoogleFonts.spaceMono(
+    return _packTextStyle(
+      _t.fontFamily,
       fontSize: fontSize,
       fontWeight: fontWeight,
-      color: color ?? AppColors.textSecondary,
+      color: color ?? _t.fg2,
+    );
+  }
+}
+
+/// Routes a font-family name to GoogleFonts when the family is on Google
+/// Fonts, or falls through to a plain `TextStyle(fontFamily: ...)` for
+/// self-hosted faces (Bungee Hairline is the brand wordmark, never used as
+/// a pack body font here).
+TextStyle _packTextStyle(
+  String family, {
+  required double fontSize,
+  required FontWeight fontWeight,
+  required Color color,
+  double letterSpacing = 0,
+}) {
+  // GoogleFonts.getFont throws if the family isn't on the Google Fonts API.
+  // The handful of self-hosted display faces (Snowburst One is on GF, VT323
+  // is on GF, Carattere is on GF, etc.) all resolve. DM Sans substitutes for
+  // "Google Sans Flex" which isn't on the API.
+  try {
+    return GoogleFonts.getFont(
+      family,
+      fontSize: fontSize,
+      fontWeight: fontWeight,
+      color: color,
+      letterSpacing: letterSpacing,
+    );
+  } catch (_) {
+    // Final fallback: system font.
+    return TextStyle(
+      fontSize: fontSize,
+      fontWeight: fontWeight,
+      color: color,
+      letterSpacing: letterSpacing,
     );
   }
 }
 
 // ---------------------------------------------------------------------------
-// THEME BUILDER
+// THEME BUILDER — translates a pack + mode into Flutter ThemeData.
 // ---------------------------------------------------------------------------
 
 class AppTheme {
+  /// Build the [ThemeData] for a given theme pack + brightness mode.
+  /// Every visual decision in this method reads from [ThemePackTokens] so
+  /// switching packs swaps the whole UI at once.
   static ThemeData build({
-    required Brightness brightness,
-    required AccentTheme accent,
+    required ThemePack pack,
+    required Brightness mode,
   }) {
-    final isDark = brightness == Brightness.dark;
-    final accentColors = AccentColors.fromTheme(accent);
-
-    final scaffoldBg = isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF);
-    final surfaceColor = isDark ? const Color(0xFF1F1F1F) : const Color(0xFFE0E0E0);
-    final headingColor = isDark ? const Color(0xFFFFFFFF) : const Color(0xFF000000);
-    final bodyColor = isDark ? const Color(0xFFE0E0E0) : const Color(0xFF424242);
-    final dividerColor = isDark ? const Color(0xFF2A2A2A) : const Color(0xFFBDBDBD);
+    final t = ThemePackTokens.forPackMode(pack, mode);
 
     final colorScheme = ColorScheme(
-      brightness: brightness,
-      primary: accentColors.primary,
-      onPrimary: Colors.black,
-      secondary: accentColors.muted,
-      onSecondary: Colors.white,
-      error: AppColors.error,
-      onError: Colors.white,
-      surface: surfaceColor,
-      onSurface: headingColor,
-      surfaceContainerHighest: isDark ? const Color(0xFF2A2A2A) : const Color(0xFFD0D0D0),
-      outline: dividerColor,
+      brightness: mode,
+      primary: t.accent,
+      onPrimary: t.onAccent,
+      secondary: t.accent,
+      onSecondary: t.onAccent,
+      error: t.danger,
+      onError: t.onAccent,
+      surface: t.bg,
+      onSurface: t.fg,
+      surfaceContainerLowest: t.bg,
+      surfaceContainerLow: t.panel,
+      surfaceContainer: t.panel,
+      surfaceContainerHigh: t.surface,
+      surfaceContainerHighest: t.surface2,
+      outline: t.hairline,
+      outlineVariant: t.hairline,
+      scrim: t.scrim,
+      tertiary: t.info,
+      onTertiary: t.onAccent,
+    );
+
+    final titleStyle = _packTextStyle(
+      t.titleFontFamily,
+      fontSize: 17,
+      fontWeight: FontWeight.w600,
+      color: t.fg,
+      letterSpacing: t.titleLetterSpacing,
+    );
+    final bodyStyle = _packTextStyle(
+      t.fontFamily,
+      fontSize: 14,
+      fontWeight: FontWeight.w400,
+      color: t.fg2,
     );
 
     return ThemeData(
       useMaterial3: true,
-      brightness: brightness,
+      brightness: mode,
       colorScheme: colorScheme,
-      scaffoldBackgroundColor: scaffoldBg,
-      dividerColor: dividerColor,
+      scaffoldBackgroundColor: t.bg,
+      canvasColor: t.bg,
+      dividerColor: t.hairline,
 
-      // AppBar
       appBarTheme: AppBarTheme(
-        backgroundColor: scaffoldBg,
-        foregroundColor: headingColor,
+        backgroundColor: t.bg,
+        foregroundColor: t.fg,
         elevation: 0,
         centerTitle: false,
-        titleTextStyle: GoogleFonts.spaceGrotesk(
-          fontSize: 20,
-          fontWeight: FontWeight.w600,
-          color: headingColor,
-        ),
+        titleTextStyle: titleStyle.copyWith(fontSize: 20),
       ),
 
-      // Bottom nav
       bottomNavigationBarTheme: BottomNavigationBarThemeData(
-        backgroundColor: surfaceColor,
-        selectedItemColor: accentColors.primary,
-        unselectedItemColor: bodyColor.withAlpha(120),
+        backgroundColor: t.panel,
+        selectedItemColor: t.accent,
+        unselectedItemColor: t.fgMuted,
         type: BottomNavigationBarType.fixed,
         elevation: 0,
       ),
 
-      // Cards & containers
       cardTheme: CardThemeData(
-        color: surfaceColor,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        color: t.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(t.rCard),
+        ),
         elevation: 0,
       ),
 
-      // Dialogs
       dialogTheme: DialogThemeData(
-        backgroundColor: surfaceColor,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        titleTextStyle: GoogleFonts.spaceGrotesk(
-          fontSize: 18,
-          fontWeight: FontWeight.w600,
-          color: headingColor,
+        backgroundColor: t.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(t.rCardLg),
         ),
+        titleTextStyle: titleStyle.copyWith(fontSize: 18),
       ),
 
-      // Snackbar
       snackBarTheme: SnackBarThemeData(
-        backgroundColor: surfaceColor,
-        contentTextStyle: GoogleFonts.spaceMono(fontSize: 13, color: headingColor),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        backgroundColor: t.surface,
+        contentTextStyle: bodyStyle.copyWith(color: t.fg),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(t.rCard),
+        ),
         behavior: SnackBarBehavior.floating,
       ),
 
-      // Buttons
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: accentColors.primary,
-          foregroundColor: Colors.black,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          backgroundColor: t.accent,
+          foregroundColor: t.onAccent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(t.rCard),
+          ),
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-          textStyle: GoogleFonts.spaceGrotesk(fontSize: 15, fontWeight: FontWeight.w600),
+          textStyle: titleStyle.copyWith(fontSize: 15, fontWeight: FontWeight.w600),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          foregroundColor: accentColors.primary,
-          side: BorderSide(color: accentColors.primary),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          foregroundColor: t.accent,
+          side: BorderSide(color: t.accent),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(t.rCard),
+          ),
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
         ),
       ),
       textButtonTheme: TextButtonThemeData(
-        style: TextButton.styleFrom(foregroundColor: accentColors.primary),
+        style: TextButton.styleFrom(foregroundColor: t.accent),
       ),
 
-      // Floating Action Button
       floatingActionButtonTheme: FloatingActionButtonThemeData(
-        backgroundColor: accentColors.primary,
-        foregroundColor: Colors.black,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        backgroundColor: t.accent,
+        foregroundColor: t.onAccent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(t.rCardLg),
+        ),
       ),
 
-      // Input fields
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: surfaceColor,
+        fillColor: t.surface,
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: dividerColor),
+          borderRadius: BorderRadius.circular(t.rInput),
+          borderSide: BorderSide(color: t.hairline),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: dividerColor),
+          borderRadius: BorderRadius.circular(t.rInput),
+          borderSide: BorderSide(color: t.hairline),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: accentColors.primary, width: 1.5),
+          borderRadius: BorderRadius.circular(t.rInput),
+          borderSide: BorderSide(color: t.accent, width: 1.5),
         ),
-        labelStyle: GoogleFonts.spaceMono(color: bodyColor),
-        hintStyle: GoogleFonts.spaceMono(color: bodyColor.withAlpha(100)),
+        labelStyle: bodyStyle,
+        hintStyle: bodyStyle.copyWith(color: t.fgFaint),
       ),
 
-      // Switch
       switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) return accentColors.primary;
-          return bodyColor;
+          if (states.contains(WidgetState.selected)) return t.accent;
+          return t.fgMuted;
         }),
         trackColor: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) return accentColors.primary.withAlpha(80);
-          return dividerColor;
+          if (states.contains(WidgetState.selected)) return t.accentSoft;
+          return t.hairline;
         }),
       ),
 
-      // Slider
       sliderTheme: SliderThemeData(
-        activeTrackColor: accentColors.primary,
-        inactiveTrackColor: dividerColor,
-        thumbColor: accentColors.primary,
-        overlayColor: accentColors.primary.withAlpha(40),
+        activeTrackColor: t.accent,
+        inactiveTrackColor: t.hairline,
+        thumbColor: t.accent,
+        overlayColor: t.accentFaint,
       ),
 
-      // Bottom sheet
       bottomSheetTheme: BottomSheetThemeData(
-        backgroundColor: surfaceColor,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        backgroundColor: t.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(t.rSheet)),
         ),
       ),
 
-      // Text theme
+      chipTheme: ChipThemeData(
+        backgroundColor: t.surface,
+        selectedColor: t.accentSoft,
+        side: BorderSide(color: t.hairline),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(t.rPill),
+        ),
+        labelStyle: bodyStyle.copyWith(color: t.fg),
+      ),
+
       textTheme: TextTheme(
-        headlineLarge: GoogleFonts.spaceGrotesk(
-          fontSize: 30, fontWeight: FontWeight.w700, color: headingColor,
+        headlineLarge: _packTextStyle(
+          t.titleFontFamily,
+          fontSize: 32, fontWeight: FontWeight.w700, color: t.fg,
+          letterSpacing: t.titleLetterSpacing,
         ),
-        headlineMedium: GoogleFonts.spaceGrotesk(
-          fontSize: 22, fontWeight: FontWeight.w600, color: headingColor,
+        headlineMedium: _packTextStyle(
+          t.titleFontFamily,
+          fontSize: 28, fontWeight: FontWeight.w700, color: t.fg,
+          letterSpacing: t.titleLetterSpacing,
         ),
-        headlineSmall: GoogleFonts.spaceGrotesk(
-          fontSize: 18, fontWeight: FontWeight.w600, color: headingColor,
+        headlineSmall: _packTextStyle(
+          t.titleFontFamily,
+          fontSize: 22, fontWeight: FontWeight.w600, color: t.fg,
+          letterSpacing: t.titleLetterSpacing,
         ),
-        titleLarge: GoogleFonts.spaceGrotesk(
-          fontSize: 16, fontWeight: FontWeight.w600, color: headingColor,
+        titleLarge: _packTextStyle(
+          t.titleFontFamily,
+          fontSize: 17, fontWeight: FontWeight.w600, color: t.fg,
+          letterSpacing: t.titleLetterSpacing,
         ),
-        titleMedium: GoogleFonts.spaceGrotesk(
-          fontSize: 14, fontWeight: FontWeight.w500, color: headingColor,
+        titleMedium: _packTextStyle(
+          t.titleFontFamily,
+          fontSize: 14, fontWeight: FontWeight.w500, color: t.fg,
         ),
-        bodyLarge: GoogleFonts.spaceMono(
-          fontSize: 15, fontWeight: FontWeight.w400, color: bodyColor,
+        bodyLarge: _packTextStyle(
+          t.fontFamily,
+          fontSize: 15, fontWeight: FontWeight.w400, color: t.fg2,
         ),
-        bodyMedium: GoogleFonts.spaceMono(
-          fontSize: 13, fontWeight: FontWeight.w400, color: bodyColor,
+        bodyMedium: _packTextStyle(
+          t.fontFamily,
+          fontSize: 14, fontWeight: FontWeight.w400, color: t.fg2,
         ),
-        bodySmall: GoogleFonts.spaceMono(
-          fontSize: 11, fontWeight: FontWeight.w400, color: bodyColor.withAlpha(180),
+        bodySmall: _packTextStyle(
+          t.fontFamily,
+          fontSize: 12, fontWeight: FontWeight.w400, color: t.fgMuted,
         ),
-        labelLarge: GoogleFonts.spaceGrotesk(
-          fontSize: 14, fontWeight: FontWeight.w600, color: headingColor,
+        labelLarge: _packTextStyle(
+          t.titleFontFamily,
+          fontSize: 13, fontWeight: FontWeight.w600, color: t.fg,
         ),
-        labelSmall: GoogleFonts.spaceMono(
-          fontSize: 10, fontWeight: FontWeight.w400, color: bodyColor.withAlpha(150),
+        labelSmall: _packTextStyle(
+          t.fontFamily,
+          fontSize: 11, fontWeight: FontWeight.w400, color: t.fgFaint,
         ),
       ),
 
-      // Page transitions — fast, easeInOut
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: {
           TargetPlatform.android: CupertinoPageTransitionsBuilder(),
@@ -314,10 +355,4 @@ class AppTheme {
       ),
     );
   }
-
-  // Convenience getters for backward compatibility
-  static ThemeData get darkTheme => build(
-        brightness: Brightness.dark,
-        accent: AccentTheme.acidGreen,
-      );
 }

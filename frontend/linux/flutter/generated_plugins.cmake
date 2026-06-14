@@ -4,10 +4,12 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   desktop_webview_window
+  emoji_picker_flutter
   file_selector_linux
   flutter_secure_storage_linux
   gtk
   open_file_linux
+  pasteboard
   printing
   url_launcher_linux
   window_to_front

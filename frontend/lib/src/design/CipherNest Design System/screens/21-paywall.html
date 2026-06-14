@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Screens" name="Paywall" subtitle="Free vs Pro comparison" viewport="412x915" -->
+<html data-theme="binary" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CipherNest Pro · Paywall</title>
+<link rel="stylesheet" href="../themes.css">
+<link rel="stylesheet" href="../app.css">
+<link rel="stylesheet" href="../motion.css">
+<link rel="stylesheet" href="../fonts/material.css">
+<style>
+  html,body{background:var(--bg);margin:0;display:flex;justify-content:center;}
+  .pro-hero{ text-align:center; padding:8px 28px 22px; }
+  .pro-badge{ display:inline-flex; align-items:center; gap:7px; padding:7px 14px; border-radius:999px; background:var(--accent-soft); color:var(--accent); font:700 12px/1 var(--font); letter-spacing:0.04em; }
+  .compare{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .plan{ border-radius:var(--r-card-lg); padding:18px 16px; border:1px solid var(--hairline); background:var(--surface); }
+  .plan.pro{ border-color:var(--accent); background:linear-gradient(160deg, var(--accent-soft), var(--surface)); position:relative; }
+  .plan .pn{ font:600 14px/1 var(--font); color:var(--fg-muted); }
+  .plan.pro .pn{ color:var(--accent); }
+  .plan .pp{ font:700 26px/1 var(--font); letter-spacing:-0.02em; margin:10px 0 2px; }
+  .plan .ps{ font-size:11px; color:var(--fg-muted); }
+  .feat{ display:flex; align-items:flex-start; gap:9px; padding:9px 0; font-size:13px; line-height:1.35; }
+  .feat i{ font-size:16px; flex:0 0 auto; margin-top:1px; }
+  .feat.yes i{ color:var(--success); }
+  .feat.no i{ color:var(--fg-faint); }
+  .feat.no{ color:var(--fg-faint); }
+</style>
+</head>
+<body>
+<div class="phone" data-screen-label="Paywall">
+  <div class="statusbar"><span>9:41</span><span class="sb-right"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div class="appbar"><span class="spacer"></span><button class="iconbtn"><span class="mi">close</span></button></div>
+  <div class="screen-body" style="padding-bottom:12px;">
+    <div class="pro-hero">
+      <img src="../assets/logo_mark_brass.png" style="width:52px;margin-bottom:14px;">
+      <div class="pro-badge"><span class="mi fill">auto_awesome</span> CIPHERNEST PRO</div>
+      <h1 style="font:700 26px/1.18 var(--font);letter-spacing:-0.02em;margin:14px 0 8px;">More room. Same zero-knowledge.</h1>
+      <p style="color:var(--fg-muted);font-size:14px;line-height:1.5;margin:0;">Upgrade your vault without ever giving us your keys.</p>
+    </div>
+    <div class="hpad">
+      <div class="compare">
+        <div class="plan">
+          <div class="pn">Free</div>
+          <div class="pp">5 GB</div><div class="ps">encrypted storage</div>
+          <div style="margin-top:12px;border-top:1px solid var(--hairline);padding-top:6px;">
+            <div class="feat yes"><span class="mi fill">check_circle</span>On-device AES-256</div>
+            <div class="feat yes"><span class="mi fill">check_circle</span>3 active share links</div>
+            <div class="feat no"><span class="mi fill">remove_circle</span>Single device</div>
+            <div class="feat no"><span class="mi fill">remove_circle</span>Standard support</div>
+          </div>
+        </div>
+        <div class="plan pro">
+          <span class="pill solid" style="position:absolute;top:-11px;left:50%;transform:translateX(-50%);">Best value</span>
+          <div class="pn">Pro</div>
+          <div class="pp">1 TB</div><div class="ps">encrypted storage</div>
+          <div style="margin-top:12px;border-top:1px solid var(--hairline);padding-top:6px;">
+            <div class="feat yes"><span class="mi fill">check_circle</span>On-device AES-256</div>
+            <div class="feat yes"><span class="mi fill">check_circle</span>Unlimited share links</div>
+            <div class="feat yes"><span class="mi fill">check_circle</span>Multi-device sync</div>
+            <div class="feat yes"><span class="mi fill">check_circle</span>Priority support</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="hpad" style="padding:14px 20px calc(20px + env(safe-area-inset-bottom));border-top:1px solid var(--hairline);">
+    <button class="btn btn-primary btn-block btn-lg">Go Pro · $5.99/mo</button>
+    <div style="text-align:center;color:var(--fg-muted);font-size:12px;margin-top:12px;">$59.99/yr · cancel anytime · restore purchase</div>
+  </div>
+</div>
+<script src="../theme-switch.js"></script>
+</body>
+</html>
