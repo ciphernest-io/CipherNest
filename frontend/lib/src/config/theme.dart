@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import 'theme_controller.dart';
 import 'theme_packs.dart';
@@ -40,9 +39,11 @@ class AppTypography {
       );
 
   /// CipherNest wordmark. Always Bungee Hairline weight 800 — the one font
-  /// that never changes across packs.
+  /// that never changes across packs. Bundled locally (assets/fonts/) so the
+  /// splash never paints in the platform fallback while google_fonts fetches.
   static TextStyle brand({double fontSize = 28, Color? color}) {
-    return GoogleFonts.bungeeHairline(
+    return TextStyle(
+      fontFamily: 'BungeeHairline',
       fontSize: fontSize,
       fontWeight: FontWeight.w800,
       color: color ?? _t.fg,
@@ -80,10 +81,12 @@ class AppTypography {
   }
 }
 
-/// Routes a font-family name to GoogleFonts when the family is on Google
-/// Fonts, or falls through to a plain `TextStyle(fontFamily: ...)` for
-/// self-hosted faces (Bungee Hairline is the brand wordmark, never used as
-/// a pack body font here).
+/// Direct fontFamily reference against the bundled TTF assets. Every pack
+/// font (Hanken Grotesk, IM Fell English, DM Sans, Snowburst One, Carattere,
+/// EB Garamond, Chakra Petch, VT323) is declared in pubspec.yaml under its
+/// human name, so `fontFamily: 'IM Fell English'` binds to the local asset
+/// with zero network round-trip. Kills the FOUC that runtime GoogleFonts
+/// downloads were causing on cold install.
 TextStyle _packTextStyle(
   String family, {
   required double fontSize,
@@ -91,27 +94,13 @@ TextStyle _packTextStyle(
   required Color color,
   double letterSpacing = 0,
 }) {
-  // GoogleFonts.getFont throws if the family isn't on the Google Fonts API.
-  // The handful of self-hosted display faces (Snowburst One is on GF, VT323
-  // is on GF, Carattere is on GF, etc.) all resolve. DM Sans substitutes for
-  // "Google Sans Flex" which isn't on the API.
-  try {
-    return GoogleFonts.getFont(
-      family,
-      fontSize: fontSize,
-      fontWeight: fontWeight,
-      color: color,
-      letterSpacing: letterSpacing,
-    );
-  } catch (_) {
-    // Final fallback: system font.
-    return TextStyle(
-      fontSize: fontSize,
-      fontWeight: fontWeight,
-      color: color,
-      letterSpacing: letterSpacing,
-    );
-  }
+  return TextStyle(
+    fontFamily: family,
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    letterSpacing: letterSpacing,
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 name: ciphernest
-description: "Private cloud, on your terms."
+description: "Your cloud. Actually private."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -104,18 +104,55 @@ flutter:
     - assets/images/
     - assets/images/themes/
     - assets/icons/
+    - assets/wordlists/
 
   fonts:
-    - family: Inter
+    - family: BungeeHairline
       fonts:
-        - asset: assets/fonts/Inter-Regular.ttf
+        - asset: assets/fonts/BungeeHairline-Regular.ttf
           weight: 400
-        - asset: assets/fonts/Inter-Medium.ttf
-          weight: 500
-        - asset: assets/fonts/Inter-SemiBold.ttf
+    - family: Hanken Grotesk
+      fonts:
+        - asset: assets/fonts/HankenGrotesk-VF.ttf
+          weight: 400
+        - asset: assets/fonts/HankenGrotesk-VF.ttf
           weight: 600
-        - asset: assets/fonts/Inter-Bold.ttf
-          weight: 700
+    - family: IM Fell English
+      fonts:
+        - asset: assets/fonts/IMFellEnglish-Regular.ttf
+          weight: 400
+    - family: DM Sans
+      fonts:
+        - asset: assets/fonts/DMSans-VF.ttf
+          weight: 400
+        - asset: assets/fonts/DMSans-VF.ttf
+          weight: 600
+    - family: Spline Sans Mono
+      fonts:
+        - asset: assets/fonts/SplineSansMono-VF.ttf
+          weight: 400
+    - family: Snowburst One
+      fonts:
+        - asset: assets/fonts/SnowburstOne-Regular.ttf
+          weight: 400
+    - family: Carattere
+      fonts:
+        - asset: assets/fonts/Carattere-Regular.ttf
+          weight: 400
+    - family: EB Garamond
+      fonts:
+        - asset: assets/fonts/EBGaramond-VF.ttf
+          weight: 400
+    - family: Chakra Petch
+      fonts:
+        - asset: assets/fonts/ChakraPetch-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/ChakraPetch-SemiBold.ttf
+          weight: 600
+    - family: VT323
+      fonts:
+        - asset: assets/fonts/VT323-Regular.ttf
+          weight: 400
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

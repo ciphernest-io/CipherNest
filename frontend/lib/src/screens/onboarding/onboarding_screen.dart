@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../config/flags.dart';
 import '../../config/routes.dart';
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
@@ -13,16 +15,24 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   final List<_OnboardingPageData> _pages = const [
     _OnboardingPageData(
-      title: 'Your cloud. Your keys.',
-      description: 'CipherNest encrypts your photos and documents before they ever leave your device — so only you can read them.',
+      title: "Your data isn't as private as you think.",
+      description:
+          "Every major cloud can scan, index, and analyze whatever you upload. Whether they do or don't is their promise, not math. CipherNest makes the promise obsolete; what leaves your phone is unreadable to anyone but you.",
     ),
     _OnboardingPageData(
-      title: 'Privacy shouldn’t be a trade-off.',
-      description: 'Big tech scans and indexes your files. CipherNest keeps your memories private.',
+      title: 'CipherNest encrypts everything on your device.',
+      description:
+          'AES-256. Photos, videos, documents, whatever. Sealed on your phone before it touches the internet. Your cloud stores unreadable ciphertext. Only you can decrypt it.',
     ),
     _OnboardingPageData(
-      title: 'Security you don’t have to think about.',
-      description: 'Files are encrypted locally using AES-256 GCM. Your data stays unreadable to cloud providers — by design.',
+      title: 'No new cloud. No new bill.',
+      description:
+          'CipherNest layers on the Google Drive or OneDrive you already have. Your existing storage becomes an encrypted vault. Two minutes to set up.',
+    ),
+    _OnboardingPageData(
+      title: "Don't trust us. Read the code.",
+      description:
+          'CipherNest is open source under GPL v3. Every line of the encryption pipeline is on GitHub. Auditable, yours to verify. Heck, fork it if you want. This is what real privacy looks like.',
     ),
   ];
 
@@ -38,9 +48,21 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   void _finish() {
+    // NOTE: we intentionally do NOT persist a "user swiped through the
+    // slides" flag here. Splash-gating on that would misroute users who
+    // close the app mid-signup (e.g. at the master-password screen) into
+    // the restore flow instead of onboarding. The setup-complete flag is
+    // written only once the user actually reaches HomeScreen.
+    //
+    // With the paywall flag on (dev/test build), show the tier sheet
+    // before signup. In the release AAB the flag is off and we jump
+    // straight to master-password creation.
+    final target = kPaywallEnabled
+        ? AppRoutes.subscription
+        : AppRoutes.masterPassword;
     Navigator.pushNamedAndRemoveUntil(
-      context, 
-      AppRoutes.subscription, 
+      context,
+      target,
       (route) => false,
     );
   }

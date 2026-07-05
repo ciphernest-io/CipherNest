@@ -3,9 +3,12 @@ import 'package:flutter/material.dart';
 import '../screens/splash/splash_screen.dart';
 import '../screens/onboarding/onboarding_screen.dart';
 import '../screens/subscription/subscription_screen.dart';
-import '../screens/auth/signup_screen.dart';
+import '../screens/auth/master_password_screen.dart';
+import '../screens/auth/recovery_phrase_screen.dart';
 import '../screens/auth/login_screen.dart';
-import '../screens/auth/restore_account_screen.dart';
+import '../screens/auth/quick_settings_screen.dart';
+import '../screens/auth/reconnect_screen.dart';
+import '../screens/auth/restore_phrase_screen.dart';
 import '../screens/cloud_selection/cloud_selection_screen.dart';
 import '../screens/home/home_screen.dart';
 import '../screens/gallery/gallery_screen.dart';
@@ -25,9 +28,12 @@ class AppRoutes {
   static const String splash = '/';
   static const String onboarding = '/onboarding';
   static const String subscription = '/subscription';
-  static const String signup = '/signup';
+  static const String masterPassword = '/master-password';
+  static const String recoveryPhrase = '/recovery-phrase';
   static const String login = '/login';
   static const String restore = '/restore';
+  static const String reconnect = '/reconnect';
+  static const String quickSettings = '/quick-settings';
   static const String cloudSelection = '/cloud-selection';
   static const String home = '/home';
   static const String gallery = '/gallery';
@@ -54,19 +60,42 @@ class AppRoutes {
       case subscription:
         return MaterialPageRoute(builder: (_) => const SubscriptionScreen());
 
-      case signup:
-        return MaterialPageRoute(builder: (_) => const SignUpScreen());
+      case masterPassword:
+        final rawArgs = routeSettings.arguments;
+        final args = rawArgs is MasterPasswordArgs
+            ? rawArgs
+            : MasterPasswordArgs.createNew;
+        return MaterialPageRoute(
+          builder: (_) => MasterPasswordScreen(args: args),
+        );
+
+      case recoveryPhrase:
+        final mnemonic = routeSettings.arguments as String;
+        return MaterialPageRoute(
+          builder: (_) => RecoveryPhraseScreen(mnemonic: mnemonic),
+        );
 
       case login:
         return MaterialPageRoute(builder: (_) => const LoginScreen());
 
       case restore:
-        return MaterialPageRoute(builder: (_) => const RestoreAccountScreen());
+        return MaterialPageRoute(builder: (_) => const RestorePhraseScreen());
+
+      case reconnect:
+        return MaterialPageRoute(builder: (_) => const ReconnectScreen());
+
+      case quickSettings:
+        return MaterialPageRoute(builder: (_) => const QuickSettingsScreen());
 
       case cloudSelection:
-        final addAnother = (routeSettings.arguments as bool?) ?? false;
+        final rawArgs = routeSettings.arguments;
+        final args = switch (rawArgs) {
+          CloudSelectionArgs a => a,
+          true => CloudSelectionArgs.addAnother,
+          _ => CloudSelectionArgs.signup,
+        };
         return MaterialPageRoute(
-          builder: (_) => CloudSelectionScreen(isAddAnother: addAnother),
+          builder: (_) => CloudSelectionScreen(args: args),
         );
 
       case home:

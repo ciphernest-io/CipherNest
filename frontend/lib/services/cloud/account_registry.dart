@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'cloud_account.dart';
 
 /// Singleton ChangeNotifier owning the list of connected cloud accounts and
@@ -13,6 +14,7 @@ class AccountRegistry extends ChangeNotifier {
 
   static const _storageKeyAccounts = 'cloud_accounts_v1';
   static const _storageKeyActive = 'active_account_id';
+  static const _lastProviderTypeKey = 'last_provider_type_v1';
 
   final _storage = const FlutterSecureStorage();
   List<CloudAccount> _accounts = [];
@@ -64,6 +66,7 @@ class AccountRegistry extends ChangeNotifier {
     _activeAccountId ??= account.id;
     await _persistAccounts();
     await _persistActive();
+    await _persistLastProviderType(account.providerType);
     notifyListeners();
   }
 
@@ -126,5 +129,20 @@ class AccountRegistry extends ChangeNotifier {
     } else {
       await _storage.write(key: _storageKeyActive, value: _activeAccountId!);
     }
+  }
+
+  Future<void> _persistLastProviderType(int type) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_lastProviderTypeKey, type);
+  }
+
+  /// Returns the provider type the user most recently connected. Reads the
+  /// active account first (fresh state) and falls back to a persisted hint
+  /// (survives sign-out). Used by the reconnect screen to label its
+  /// primary button.
+  Future<int?> getLastProviderType() async {
+    if (activeAccount != null) return activeAccount!.providerType;
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_lastProviderTypeKey);
   }
 }

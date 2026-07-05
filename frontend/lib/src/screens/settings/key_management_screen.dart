@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../widgets/theme_icon.dart';
-import '../../../services/cloud/cloud_service.dart';
+import '../../../services/cloud/canary_retry.dart';
 
 class KeyManagementScreen extends StatefulWidget {
   const KeyManagementScreen({super.key});
@@ -21,18 +21,34 @@ class _KeyManagementScreenState extends State<KeyManagementScreen> {
       _resultColor = Colors.yellow;
     });
 
-    // Run the actual test from CloudService
-    final success = await CloudService().canaryTest();
+    // The shared helper retries once on transient (network / OAuth warm-up)
+    // failures. A `false` return is a real crypto mismatch — wrong key.
+    // A rethrown exception is a real network/auth error after retry.
+    bool success = false;
+    Object? transientError;
+    try {
+      success = await canaryWithRetry();
+    } catch (e) {
+      transientError = e;
+    }
 
     if (!mounted) return;
 
     setState(() {
       _isTesting = false;
       if (success) {
-        _testResult = "INTEGRITY CONFIRMED\nAES-256-GCM Keys Active\nCloud Link Established";
+        _testResult =
+            "INTEGRITY CONFIRMED\nAES-256-GCM Keys Active\nCloud Link Established";
         _resultColor = Colors.greenAccent;
+      } else if (transientError != null) {
+        _testResult =
+            "COULD NOT REACH CLOUD\nCheck your connection and try again.\n\n${transientError.toString()}";
+        _resultColor = Colors.orangeAccent;
       } else {
-        _testResult = "INTEGRITY CHECK FAILED\nCould not verify encryption keys or connection.";
+        _testResult =
+            "INTEGRITY CHECK FAILED\nCould not decrypt the canary file. "
+            "Either the master key on this device does not match the vault, "
+            "or the cloud files were modified outside CipherNest.";
         _resultColor = Colors.redAccent;
       }
     });

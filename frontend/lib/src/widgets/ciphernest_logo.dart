@@ -3,8 +3,8 @@ import '../config/theme.dart';
 import '../config/theme_controller.dart';
 
 /// The CipherNest wordmark. Always Bungee Hairline (the one font that never
-/// changes across theme packs) — only the "Nest" half and the period are
-/// tinted with the current pack's accent.
+/// changes across theme packs) — only the "Nest" half is tinted with the
+/// current pack's accent.
 class CiphernestLogo extends StatelessWidget {
   final double fontSize;
   final Color? textColor;
@@ -23,10 +23,6 @@ class CiphernestLogo extends StatelessWidget {
           const TextSpan(text: 'Cipher'),
           TextSpan(
             text: 'Nest',
-            style: AppTypography.brand(fontSize: fontSize, color: accent),
-          ),
-          TextSpan(
-            text: '.',
             style: AppTypography.brand(fontSize: fontSize, color: accent),
           ),
         ],

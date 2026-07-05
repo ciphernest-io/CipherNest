@@ -13,6 +13,22 @@ class KeyManagerService {
   factory KeyManagerService() => _instance;
   KeyManagerService._internal();
 
+  /// Set to true by [createAccount], cleared after the user completes the
+  /// recovery-phrase type-back. Its presence at login time signals the app
+  /// to resume the interrupted signup by re-showing the phrase.
+  static const _kSignupInProgress = 'signup_in_progress_v1';
+
+  /// True once the recovery-phrase type-back has been completed for the
+  /// current vault. When this flips, the encrypted-mnemonic blob below is
+  /// wiped — we never keep the phrase on disk one second longer than we
+  /// have to.
+  static const _kRecoveryShown = 'recovery_shown_v1';
+
+  /// AES-GCM(master-key, plaintext=mnemonic) cipher text.
+  static const _kEncryptedMnemonic = 'encrypted_mnemonic';
+  static const _kEncryptedMnemonicNonce = 'encrypted_mnemonic_nonce';
+  static const _kEncryptedMnemonicMac = 'encrypted_mnemonic_mac';
+
   final _storage = const FlutterSecureStorage();
   final LocalAuthentication _localAuth = LocalAuthentication();
   final _argon2 = Argon2id(
@@ -40,24 +56,36 @@ class KeyManagerService {
 
   /// CREATION: Generates a new Master Key from a 12-word mnemonic.
   /// Returns the mnemonic so the user can write it down.
+  ///
+  /// Also persists the mnemonic encrypted-under-the-master-key and sets a
+  /// signup-in-progress flag. If the user kills the app between here and
+  /// completing the recovery-phrase type-back, the login screen can decrypt
+  /// the pending mnemonic on next unlock and resume the flow, so nobody
+  /// loses their vault to a mid-signup crash.
   Future<String> createAccount(String password) async {
     // 1. Generate 12-word mnemonic (BIP-39)
     final mnemonic = bip39.generateMnemonic();
-    
+
     // 2. Derive the Master Key (32 bytes) from the mnemonic
     // We use the seed, taken as 32 bytes for AES-256
     final seed = bip39.mnemonicToSeed(mnemonic);
-    final masterKeyBytes = seed.sublist(0, 32); 
+    final masterKeyBytes = seed.sublist(0, 32);
     _masterKey = SecretKey(masterKeyBytes);
 
-    // 3. Save directly to SecureStorage for "Remember Me" access (Biometric protected in future)
+    // 3. Save directly to SecureStorage for "Remember Me" access
     await _storage.write(
-      key: 'master_key_raw', 
-      value: base64Encode(masterKeyBytes)
+      key: 'master_key_raw',
+      value: base64Encode(masterKeyBytes),
     );
 
     // 4. Encrypt the MK with the Password (for Cloud Backup & Login)
     await _encryptAndSaveKeyBlob(password, masterKeyBytes);
+
+    // 5. Persist encrypted mnemonic + signup-in-progress flag (crash-safety).
+    await _encryptAndSaveMnemonicBlob(mnemonic);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kSignupInProgress, true);
+    await prefs.setBool(_kRecoveryShown, false);
 
     return mnemonic;
   }
@@ -163,6 +191,80 @@ class KeyManagerService {
       return true;
     }
     return false;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Signup-in-progress crash-recovery
+  // ---------------------------------------------------------------------------
+
+  /// True iff the app is in the middle of a signup: master key exists but
+  /// the recovery-phrase type-back never completed. Used by the login screen
+  /// to route back to the phrase view after unlock.
+  Future<bool> hasSignupInProgress() async {
+    final prefs = await SharedPreferences.getInstance();
+    return (prefs.getBool(_kSignupInProgress) ?? false) &&
+        !(prefs.getBool(_kRecoveryShown) ?? false);
+  }
+
+  /// Decrypts and returns the pending mnemonic if a signup was interrupted.
+  /// Requires the master key to already be unlocked in memory (via [login]
+  /// or a biometric unlock). Returns null if there is no pending mnemonic,
+  /// the blob is missing / corrupted, or decryption fails for any reason.
+  Future<String?> retrieveMnemonicIfPending() async {
+    if (_masterKey == null) return null;
+    final prefs = await SharedPreferences.getInstance();
+    final cipher = prefs.getString(_kEncryptedMnemonic);
+    final nonce = prefs.getString(_kEncryptedMnemonicNonce);
+    final mac = prefs.getString(_kEncryptedMnemonicMac);
+    if (cipher == null || nonce == null || mac == null) return null;
+    try {
+      final secretBox = SecretBox(
+        base64Decode(cipher),
+        nonce: base64Decode(nonce),
+        mac: Mac(base64Decode(mac)),
+      );
+      final clearText = await AesGcm.with256bits().decrypt(
+        secretBox,
+        secretKey: _masterKey!,
+      );
+      return utf8.decode(clearText);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Called by the recovery-phrase screen once the type-back completes.
+  /// Wipes the encrypted mnemonic (no reason to keep it after this), sets
+  /// the recovery-shown flag, and clears the signup-in-progress flag.
+  Future<void> markRecoveryShown() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kRecoveryShown, true);
+    await prefs.setBool(_kSignupInProgress, false);
+    await prefs.remove(_kEncryptedMnemonic);
+    await prefs.remove(_kEncryptedMnemonicNonce);
+    await prefs.remove(_kEncryptedMnemonicMac);
+  }
+
+  /// Encrypts the mnemonic under the master key. Called only from within
+  /// [createAccount] while `_masterKey` is guaranteed non-null.
+  Future<void> _encryptAndSaveMnemonicBlob(String mnemonic) async {
+    final algorithm = AesGcm.with256bits();
+    final nonce = _randomBytes(12);
+    final secretBox = await algorithm.encrypt(
+      utf8.encode(mnemonic),
+      secretKey: _masterKey!,
+      nonce: nonce,
+    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _kEncryptedMnemonic,
+      base64Encode(secretBox.cipherText),
+    );
+    await prefs.setString(_kEncryptedMnemonicNonce, base64Encode(nonce));
+    await prefs.setString(
+      _kEncryptedMnemonicMac,
+      base64Encode(secretBox.mac.bytes),
+    );
   }
 
   // --- HELPERS ---

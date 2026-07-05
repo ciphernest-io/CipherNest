@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../../widgets/theme_icon.dart';
 import '../../config/routes.dart';
+import '../../../services/cloud/account_registry.dart';
 import '../../../services/key_manager_service.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -11,21 +14,37 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  static const _kBiometricEnabled = 'biometric_enabled_v1';
+
   final _passwordController = TextEditingController();
   bool _isLoading = false;
   String? _error;
 
+  /// True only if the device supports biometrics AND the user explicitly
+  /// opted in via Quick Settings (or the Settings screen later). Gates the
+  /// biometric button — never show an unlock affordance the user didn't
+  /// ask for.
+  bool _biometricAvailable = false;
+
   @override
   void initState() {
     super.initState();
-    // REMOVED: _triggerBiometrics(); 
-    // Now the user must explicitly tap the button.
+    _checkBiometricAvailability();
+  }
+
+  Future<void> _checkBiometricAvailability() async {
+    final canUse = await KeyManagerService().canCheckBiometrics;
+    if (!canUse) return;
+    final prefs = await SharedPreferences.getInstance();
+    final enabled = prefs.getBool(_kBiometricEnabled) ?? false;
+    if (!mounted) return;
+    setState(() => _biometricAvailable = enabled);
   }
 
   Future<void> _triggerBiometrics() async {
     final success = await KeyManagerService().authenticateWithBiometrics();
     if (success && mounted) {
-      Navigator.pushReplacementNamed(context, AppRoutes.home);
+      await _routeAfterUnlock();
     }
   }
 
@@ -38,7 +57,7 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       final success = await KeyManagerService().login(_passwordController.text);
       if (success && mounted) {
-        Navigator.pushReplacementNamed(context, AppRoutes.home);
+        await _routeAfterUnlock();
       } else {
         setState(() => _error = "Incorrect password");
       }
@@ -47,6 +66,40 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  /// After a successful unlock, decide where to land:
+  ///   - Signup was interrupted mid-flow (killed between password and
+  ///     recovery phrase) → resume with the recovery phrase screen.
+  ///   - Otherwise route to home if an active cloud account is registered,
+  ///     or to reconnect if not.
+  Future<void> _routeAfterUnlock() async {
+    if (await KeyManagerService().hasSignupInProgress()) {
+      final mnemonic =
+          await KeyManagerService().retrieveMnemonicIfPending();
+      if (mnemonic != null) {
+        if (!mounted) return;
+        Navigator.pushReplacementNamed(
+          context,
+          AppRoutes.recoveryPhrase,
+          arguments: mnemonic,
+        );
+        return;
+      }
+      // Blob missing / corrupt — flag is stale. Clear it so we don't
+      // retry forever, then fall through to the normal routing below.
+      debugPrint(
+        'Signup-in-progress flag set but mnemonic irrecoverable — clearing.',
+      );
+      await KeyManagerService().markRecoveryShown();
+    }
+
+    if (!mounted) return;
+    final hasActive = AccountRegistry().activeAccount != null;
+    Navigator.pushReplacementNamed(
+      context,
+      hasActive ? AppRoutes.home : AppRoutes.reconnect,
+    );
   }
 
   @override
@@ -92,14 +145,14 @@ class _LoginScreenState extends State<LoginScreen> {
                   : const Text('Unlock Vault'),
               ),
               
-              const SizedBox(height: 16),
-              
-              // This is now the primary way to trigger biometrics
-              TextButton.icon(
-                onPressed: _triggerBiometrics,
-                icon: ThemeIcon('fingerprint'),
-                label: const Text('Use Biometrics'),
-              ),
+              if (_biometricAvailable) ...[
+                const SizedBox(height: 16),
+                TextButton.icon(
+                  onPressed: _triggerBiometrics,
+                  icon: ThemeIcon('fingerprint'),
+                  label: const Text('Use Biometrics'),
+                ),
+              ],
             ],
           ),
         ),

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../config/routes.dart';
 import '../../config/theme.dart';
@@ -22,24 +23,44 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _checkUser() async {
-    // 1. Branding delay (Keep the logo visible for a moment)
-    await Future.delayed(const Duration(milliseconds: 1500));
+    // 1. Branding delay. Kept short so we're not dead-time before the first
+    // useful screen. 700ms is enough for the wordmark to register.
+    await Future.delayed(const Duration(milliseconds: 700));
 
-    // 2. Restore the cloud account registry from secure storage
+    // 2. Restore the cloud account registry from secure storage.
     await AccountRegistry().load();
 
-    // 3. Check if the Master Key exists in storage
-    final hasAccount = await KeyManagerService().hasAccount();
+    // 3. Read the three signals that gate the initial route.
+    final hasKey = await KeyManagerService().hasAccount();
+    final prefs = await SharedPreferences.getInstance();
+    // "Setup completed" means the user has reached Home at least once
+    // (written by HomeScreen on mount). This is the distinction between
+    // "signed out, wants to restore" and "closed mid-signup, should start
+    // over from onboarding" — quitting at the master-password screen or
+    // any pre-home step must NOT trigger the restore flow.
+    final setupCompleted =
+        prefs.getBool('setup_completed_v1') ?? false;
 
-    if (mounted) {
-      if (hasAccount) {
-        // User exists -> Go to Login (Biometrics/Password)
-        Navigator.pushReplacementNamed(context, AppRoutes.login);
-      } else {
-        // New User -> Go to Onboarding
-        Navigator.pushReplacementNamed(context, AppRoutes.onboarding);
-      }
+    if (!mounted) return;
+
+    // Decision tree:
+    //   hasKey                        -> login    (login will further route
+    //                                               to reconnect if there's
+    //                                               no active cloud after
+    //                                               unlock)
+    //   !hasKey && setupCompleted     -> restore  (signed out but has done
+    //                                               a full setup before)
+    //   !hasKey && !setupCompleted    -> onboarding (never finished setup
+    //                                               yet — start over)
+    String target;
+    if (hasKey) {
+      target = AppRoutes.login;
+    } else if (setupCompleted) {
+      target = AppRoutes.restore;
+    } else {
+      target = AppRoutes.onboarding;
     }
+    Navigator.pushReplacementNamed(context, target);
   }
 
   @override
@@ -59,7 +80,7 @@ class _SplashScreenState extends State<SplashScreen> {
             const CiphernestLogo(fontSize: 36),
             const SizedBox(height: 8),
             Text(
-              'Private cloud, on your terms',
+              'Your cloud. Actually private.',
               style: AppTypography.body(fontSize: 12),
             ),
           ],

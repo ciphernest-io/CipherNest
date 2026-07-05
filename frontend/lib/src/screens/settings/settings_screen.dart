@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:local_auth/local_auth.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart'; // ENABLED
@@ -12,6 +13,7 @@ import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/cache_manager_service.dart';
 import '../../../services/auto_sync_service.dart';
+import '../../../services/key_manager_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../config/theme_packs.dart';
 import '../../config/theme_controller.dart';
@@ -39,11 +41,55 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _showFeatured = true;
   bool _showYearAgo = true;
 
+  // Biometrics
+  bool _biometricAvailable = false;
+  bool _biometricEnabled = false;
+  bool _biometricEnrolling = false;
+
   @override
   void initState() {
     super.initState();
     _loadStats();
     _loadPreferences(); // ENABLED
+    _loadBiometricCapability();
+  }
+
+  Future<void> _loadBiometricCapability() async {
+    final canUse = await KeyManagerService().canCheckBiometrics;
+    if (mounted) setState(() => _biometricAvailable = canUse);
+  }
+
+  Future<void> _toggleBiometric(bool wants) async {
+    if (!wants) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('biometric_enabled_v1', false);
+      if (mounted) setState(() => _biometricEnabled = false);
+      return;
+    }
+    setState(() => _biometricEnrolling = true);
+    try {
+      final auth = LocalAuthentication();
+      final ok = await auth.authenticate(
+        localizedReason: 'Set up CipherNest unlock',
+        options: const AuthenticationOptions(
+          biometricOnly: true,
+          stickyAuth: true,
+        ),
+      );
+      if (!mounted) return;
+      if (ok) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('biometric_enabled_v1', true);
+        if (mounted) setState(() => _biometricEnabled = true);
+      } else {
+        setState(() => _biometricEnabled = false);
+      }
+    } catch (e) {
+      debugPrint('Biometric enroll failed: $e');
+      if (mounted) setState(() => _biometricEnabled = false);
+    } finally {
+      if (mounted) setState(() => _biometricEnrolling = false);
+    }
   }
 
   // --- NEW: PERSISTENCE LOGIC ---
@@ -56,6 +102,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _cacheLimitGB = val;
         _originalLimitGB = val;
         _autoSyncEnabled = prefs.getBool('auto_sync_enabled') ?? false;
+        _biometricEnabled = prefs.getBool('biometric_enabled_v1') ?? false;
         _showFeatured = prefs.getBool('gallery_show_featured') ?? true;
         _showYearAgo = prefs.getBool('gallery_show_year_ago') ?? true;
         if (lastRunMs > 0) {
@@ -499,6 +546,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const Divider(color: Colors.white10),
           // ... Security Section ...
           _SectionHeader(title: "Security"),
+          if (_biometricAvailable)
+            SwitchListTile(
+              secondary: ThemeIcon('fingerprint', color: Colors.tealAccent),
+              title: const Text('Unlock with biometrics',
+                  style: TextStyle(color: Colors.white)),
+              subtitle: Text(
+                _biometricEnabled
+                    ? 'Fingerprint or face unlocks CipherNest'
+                    : 'Off — use master password to unlock',
+                style: const TextStyle(color: Colors.grey),
+              ),
+              value: _biometricEnabled,
+              activeThumbColor: Colors.tealAccent,
+              onChanged: _biometricEnrolling ? null : _toggleBiometric,
+            ),
           ListTile(
             leading: ThemeIcon('key', color: Colors.greenAccent),
             title: const Text('Key Management', style: TextStyle(color: Colors.white)),
@@ -536,9 +598,11 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-/// One row in the theme-pack picker. Shows the pack name, a one-line tagline,
-/// and a swatch trio (bg / surface / accent) so the user can preview the
-/// palette before tapping. Tap commits via [onTap].
+/// One tile in the theme-pack picker. Renders in the pack's OWN tokens —
+/// its own surface colour, corner radius, font, and card-art image — so the
+/// tile itself becomes the preview, independent of the currently-applied
+/// theme. Mode (dark/light) follows the ThemeController so toggling
+/// brightness updates every tile in place.
 class _ThemePackTile extends StatelessWidget {
   final ThemePack pack;
   final bool selected;
@@ -551,104 +615,96 @@ class _ThemePackTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    // Preview swatches use the pack's DARK tokens since dark is the design
-    // system's default — the user can flip the brightness switch above.
-    final t = ThemePackTokens.forPackMode(pack, Brightness.dark);
+    final mode = ThemeController().brightness;
+    final t = ThemePackTokens.forPackMode(pack, mode);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: selected ? cs.surfaceContainerHigh : cs.surfaceContainer,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: selected ? cs.primary : cs.outline,
-              width: selected ? 2 : 1,
-            ),
-          ),
-          child: Row(
-            children: [
-              _SwatchTrio(bg: t.bg, surface: t.surface, accent: t.accent),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      pack.label,
-                      style: TextStyle(
-                        color: cs.onSurface,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 15,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      pack.tagline,
-                      style: TextStyle(
-                        color: cs.onSurface.withAlpha(140),
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(t.rCard),
+          child: Container(
+            padding: EdgeInsets.all(t.pad * 0.6),
+            decoration: BoxDecoration(
+              color: t.surface,
+              borderRadius: BorderRadius.circular(t.rCard),
+              border: Border.all(
+                color: selected ? t.accent : t.hairline,
+                width: selected ? 2 : 1,
               ),
-              if (selected)
-                Icon(Icons.check_circle, color: cs.primary, size: 22),
-            ],
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              pack.label,
+                              style: TextStyle(
+                                fontFamily: t.titleFontFamily,
+                                color: t.fg,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 17,
+                                letterSpacing: t.titleLetterSpacing,
+                              ),
+                            ),
+                          ),
+                          if (selected)
+                            Icon(Icons.check_circle,
+                                color: t.accent, size: 20),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        pack.tagline,
+                        style: TextStyle(
+                          fontFamily: t.fontFamily,
+                          color: t.fg2,
+                          fontSize: 12,
+                          height: 1.3,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Aa Bb Cc  0123',
+                        style: TextStyle(
+                          fontFamily: t.titleFontFamily,
+                          color: t.accent,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: t.titleLetterSpacing,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(t.rIc),
+                  child: Image.asset(
+                    t.cardArtAsset,
+                    width: 76,
+                    height: 76,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => Container(
+                      width: 76,
+                      height: 76,
+                      color: t.surface2,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
-    );
-  }
-}
-
-class _SwatchTrio extends StatelessWidget {
-  final Color bg;
-  final Color surface;
-  final Color accent;
-  const _SwatchTrio({
-    required this.bg,
-    required this.surface,
-    required this.accent,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 56,
-      height: 36,
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          _Dot(color: surface),
-          const SizedBox(width: 4),
-          _Dot(color: accent),
-        ],
-      ),
-    );
-  }
-}
-
-class _Dot extends StatelessWidget {
-  final Color color;
-  const _Dot({required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 14,
-      height: 14,
-      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
     );
   }
 }

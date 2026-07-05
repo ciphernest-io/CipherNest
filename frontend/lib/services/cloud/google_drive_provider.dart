@@ -36,6 +36,13 @@ class GoogleDriveProvider implements CloudProvider {
       await _googleSignIn.signOut();
       final acct = await _googleSignIn.signIn();
       if (acct == null) return null;
+      // Force the plugin to materialise auth headers now, so the first
+      // signInSilently() that fires from _getApi() right after this returns
+      // hits a warm cache. Without this, Google's silent-sign-in can return
+      // null or a stale token on the first call after signIn(), which
+      // surfaces up the stack as a spurious "wrong phrase" dialog on the
+      // canary check.
+      await acct.authHeaders;
       return CloudAccount(
         providerType: CloudAccount.providerGoogle,
         email: acct.email,
@@ -210,27 +217,33 @@ class GoogleDriveProvider implements CloudProvider {
 
   @override
   Future<bool> checkIntegrity() async {
-    try {
-      if (_authHeaders == null) {
-        final email = await restoreSession();
-        if (email == null) return false;
+    // No outer try/catch. Only the actual crypto step returns `false` (the
+    // real "wrong key" signal). Network / HTTP / auth / stream exceptions
+    // propagate so the caller can distinguish transient failures from a
+    // genuine wrong-phrase and retry as appropriate.
+    if (_authHeaders == null) {
+      final email = await restoreSession();
+      if (email == null) {
+        throw Exception('Silent sign-in returned no session');
       }
+    }
 
-      final list = await listCloudFiles();
-      if (list.isEmpty) return true;
+    final list = await listCloudFiles();
+    if (list.isEmpty) return true;
 
-      final fileId = list.first['id'];
-      final api = await _getApi();
-      final media = await api.files.get(
-        fileId,
-        downloadOptions: drive.DownloadOptions.fullMedia,
-      ) as drive.Media;
+    final fileId = list.first['id'];
+    final api = await _getApi();
+    final media = await api.files.get(
+      fileId,
+      downloadOptions: drive.DownloadOptions.fullMedia,
+    ) as drive.Media;
+    final chunk = await media.stream.first;
 
-      final chunk = await media.stream.first;
+    try {
       await EncryptionService.verifyKey(Uint8List.fromList(chunk));
       return true;
     } catch (e) {
-      debugPrint('Integrity Check Failed: $e');
+      debugPrint('Canary crypto fail (wrong key for this vault): $e');
       return false;
     }
   }

@@ -1,0 +1,558 @@
+import 'dart:math';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../../../services/key_manager_service.dart';
+import '../../config/routes.dart';
+import '../../config/theme.dart' show AppColors;
+import '../../utils/wordlists.dart';
+import '../../widgets/bip39_autocomplete_row.dart';
+import '../../widgets/theme_icon.dart';
+
+/// Signup step 2 of 2. Two internal stages:
+///  1. Display: numbered grid of the 12 mnemonic words + advice cards.
+///  2. Type-back: three random positions must be typed correctly.
+///
+/// The mnemonic is passed as `Navigator` route argument. Kept in memory
+/// only; never persisted here (KeyManagerService already committed the
+/// derived master key).
+class RecoveryPhraseScreen extends StatefulWidget {
+  const RecoveryPhraseScreen({super.key, required this.mnemonic});
+
+  final String mnemonic;
+
+  @override
+  State<RecoveryPhraseScreen> createState() => _RecoveryPhraseScreenState();
+}
+
+class _RecoveryPhraseScreenState extends State<RecoveryPhraseScreen> {
+  int _stage = 1;
+  late final List<String> _words = widget.mnemonic.trim().split(RegExp(r'\s+'));
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        automaticallyImplyLeading: false,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        leading: _stage == 2
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => setState(() => _stage = 1),
+              )
+            : null,
+      ),
+      body: SafeArea(
+        child: _stage == 1
+            ? _DisplayStage(
+                words: _words,
+                onContinue: () => setState(() => _stage = 2),
+              )
+            : _TypeBackStage(
+                words: _words,
+                onSuccess: () async {
+                  // Wipes the encrypted-mnemonic blob + clears the
+                  // signup-in-progress flag. Must run before we hand off
+                  // to cloud selection — the recovery obligation is met.
+                  await KeyManagerService().markRecoveryShown();
+                  if (!context.mounted) return;
+                  Navigator.pushReplacementNamed(
+                    context,
+                    AppRoutes.cloudSelection,
+                  );
+                },
+                onShowAgain: () => setState(() => _stage = 1),
+              ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stage 1 — Display
+// ---------------------------------------------------------------------------
+
+class _DisplayStage extends StatelessWidget {
+  const _DisplayStage({required this.words, required this.onContinue});
+
+  final List<String> words;
+  final VoidCallback onContinue;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: ThemeIcon(
+              'shieldCheck',
+              selected: true,
+              size: 44,
+              color: cs.primary,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Save this phrase. Seriously.',
+            textAlign: TextAlign.center,
+            style: text.headlineMedium?.copyWith(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            "There is no 'forgot password' button after this. If you lose the phrase, the files are gone. We can't help you. That's kind of the whole point.",
+            textAlign: TextAlign.center,
+            style: text.bodyMedium?.copyWith(
+              color: cs.onSurface.withValues(alpha: 0.72),
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 24),
+          _WordGrid(words: words),
+          const SizedBox(height: 16),
+          Center(
+            child: TextButton.icon(
+              icon: ThemeIcon('copy', size: 16, color: cs.primary),
+              label: Text(
+                'Copy to clipboard',
+                style: TextStyle(color: cs.primary),
+              ),
+              onPressed: () => _confirmCopy(context, words.join(' ')),
+            ),
+          ),
+          const SizedBox(height: 16),
+          _AdviceCard(
+            icon: 'note',
+            title: 'Write it on paper.',
+            body: "Old-school wins. Paper doesn't sync to the cloud.",
+          ),
+          const SizedBox(height: 10),
+          _AdviceCard(
+            icon: 'key',
+            title: 'Or drop it in a password manager.',
+            body:
+                "Any password manager you already trust. Its own vault is encrypted; your phrase inherits that protection.",
+          ),
+          const SizedBox(height: 10),
+          _AdviceCard(
+            icon: 'xCircle',
+            iconTint: AppColors.error,
+            title: 'Do NOT email or text it to yourself.',
+            body:
+                "Emailing yourself the phrase is basically publishing it. That inbox lives on Google's servers, so does your phrase now. Cloud clipboards, cloud photo backups, cloud SMS all leak the same way. Every 'sync' is a copy you don't own. Kinda defeats the whole point.",
+          ),
+          const SizedBox(height: 28),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: onContinue,
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+              ),
+              child: const Text(
+                "I've saved it. Test me.",
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _confirmCopy(BuildContext context, String phrase) async {
+    final cs = Theme.of(context).colorScheme;
+    final proceed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sure about that?'),
+        content: const Text(
+          "Your clipboard is visible to every app on your phone. It probably syncs to Google's or Samsung's cloud clipboard. If you must copy, paste into a password manager RIGHT NOW and then wipe your clipboard. If you don't have a password manager, you probably shouldn't be copying this.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Nevermind'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: cs.error),
+            child: const Text('Copy anyway'),
+          ),
+        ],
+      ),
+    );
+    if (proceed == true) {
+      await Clipboard.setData(ClipboardData(text: phrase));
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Copied. Wipe your clipboard soon.')),
+      );
+    }
+  }
+}
+
+class _WordGrid extends StatelessWidget {
+  const _WordGrid({required this.words});
+  final List<String> words;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return GridView.count(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      crossAxisCount: 3,
+      childAspectRatio: 2.6,
+      mainAxisSpacing: 8,
+      crossAxisSpacing: 8,
+      children: List.generate(words.length, (i) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: cs.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: cs.outline.withValues(alpha: 0.4)),
+          ),
+          child: Row(
+            children: [
+              Text(
+                '${i + 1}',
+                style: TextStyle(
+                  color: cs.onSurface.withValues(alpha: 0.45),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  words[i],
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontFamily: 'Courier',
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      }),
+    );
+  }
+}
+
+class _AdviceCard extends StatelessWidget {
+  const _AdviceCard({
+    required this.icon,
+    required this.title,
+    required this.body,
+    this.iconTint,
+  });
+
+  final String icon;
+  final String title;
+  final String body;
+  final Color? iconTint;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: cs.outline.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: ThemeIcon(
+              icon,
+              size: 22,
+              color: iconTint ?? cs.primary,
+              selected: iconTint == null,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  body,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: cs.onSurface.withValues(alpha: 0.7),
+                        height: 1.35,
+                      ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stage 2 — Type-back challenge
+// ---------------------------------------------------------------------------
+
+class _TypeBackStage extends StatefulWidget {
+  const _TypeBackStage({
+    required this.words,
+    required this.onSuccess,
+    required this.onShowAgain,
+  });
+
+  final List<String> words;
+  final Future<void> Function() onSuccess;
+  final VoidCallback onShowAgain;
+
+  @override
+  State<_TypeBackStage> createState() => _TypeBackStageState();
+}
+
+class _TypeBackStageState extends State<_TypeBackStage> {
+  late final List<int> _positions;
+  late final List<TextEditingController> _controllers;
+  Set<String>? _bipSet;
+
+  @override
+  void initState() {
+    super.initState();
+    final rand = Random.secure();
+    final pool = List<int>.generate(widget.words.length, (i) => i)
+      ..shuffle(rand);
+    _positions = pool.take(3).toList()..sort();
+    _controllers = List.generate(3, (_) => TextEditingController());
+    for (final c in _controllers) {
+      c.addListener(() => setState(() {}));
+    }
+    Bip39Wordlist.loadSet().then((s) {
+      if (!mounted) return;
+      setState(() => _bipSet = s);
+    });
+  }
+
+  @override
+  void dispose() {
+    for (final c in _controllers) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  bool _isMatch(int slot) {
+    final entered = _controllers[slot].text.trim().toLowerCase();
+    final expected = widget.words[_positions[slot]].toLowerCase();
+    return entered == expected;
+  }
+
+  bool _isWrong(int slot) {
+    final entered = _controllers[slot].text.trim().toLowerCase();
+    if (entered.isEmpty) return false;
+    // Wrong once entered word is in the wordlist but not the expected one,
+    // OR once it's long enough that autocomplete can't rescue it.
+    final inList = _bipSet?.contains(entered) ?? false;
+    if (inList && entered != widget.words[_positions[slot]].toLowerCase()) {
+      return true;
+    }
+    return false;
+  }
+
+  bool get _allCorrect =>
+      _isMatch(0) && _isMatch(1) && _isMatch(2);
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Prove you saved it.',
+            style: text.headlineMedium?.copyWith(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Type words #${_positions[0] + 1}, #${_positions[1] + 1}, and #${_positions[2] + 1} from your recovery phrase.',
+            style: text.bodyMedium?.copyWith(
+              color: cs.onSurface.withValues(alpha: 0.72),
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 24),
+          for (int i = 0; i < 3; i++) ...[
+            _TypeBackSlot(
+              position: _positions[i] + 1,
+              controller: _controllers[i],
+              status: _isMatch(i)
+                  ? _SlotStatus.correct
+                  : _isWrong(i)
+                      ? _SlotStatus.wrong
+                      : _SlotStatus.neutral,
+            ),
+            const SizedBox(height: 12),
+          ],
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: _allCorrect
+                  ? () => _handleSuccess(context)
+                  : null,
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+              ),
+              child: const Text(
+                'Enter CipherNest.',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: widget.onShowAgain,
+            child: Text(
+              'Show phrase again',
+              style: TextStyle(
+                color: cs.onSurface.withValues(alpha: 0.7),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _handleSuccess(BuildContext context) async {
+    // Defensive: shouldn't be reachable with disabled CTA, but if the state
+    // race ever slips through, catch it.
+    if (!_allCorrect) {
+      await showModalBottomSheet<void>(
+        context: context,
+        builder: (ctx) => Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                "See? That's why we made you do this. Go save it properly. We'll wait.",
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  widget.onShowAgain();
+                },
+                child: const Text('Show phrase again'),
+              ),
+            ],
+          ),
+        ),
+      );
+      return;
+    }
+    await widget.onSuccess();
+  }
+}
+
+enum _SlotStatus { neutral, correct, wrong }
+
+class _TypeBackSlot extends StatelessWidget {
+  const _TypeBackSlot({
+    required this.position,
+    required this.controller,
+    required this.status,
+  });
+
+  final int position;
+  final TextEditingController controller;
+  final _SlotStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget? suffix;
+    Color? borderColor;
+    switch (status) {
+      case _SlotStatus.correct:
+        suffix = Padding(
+          padding: const EdgeInsets.all(12),
+          child: ThemeIcon(
+            'checkCircle',
+            selected: true,
+            size: 20,
+            color: AppColors.success,
+          ),
+        );
+        borderColor = AppColors.success;
+      case _SlotStatus.wrong:
+        suffix = Padding(
+          padding: const EdgeInsets.all(12),
+          child: ThemeIcon(
+            'xCircle',
+            selected: true,
+            size: 20,
+            color: AppColors.error,
+          ),
+        );
+        borderColor = AppColors.error;
+      case _SlotStatus.neutral:
+        suffix = null;
+        borderColor = null;
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          controller: controller,
+          autocorrect: false,
+          textCapitalization: TextCapitalization.none,
+          decoration: InputDecoration(
+            labelText: 'Word #$position',
+            border: const OutlineInputBorder(),
+            enabledBorder: borderColor != null
+                ? OutlineInputBorder(
+                    borderSide: BorderSide(color: borderColor, width: 1.5),
+                  )
+                : null,
+            focusedBorder: borderColor != null
+                ? OutlineInputBorder(
+                    borderSide: BorderSide(color: borderColor, width: 1.8),
+                  )
+                : null,
+            suffixIcon: suffix,
+          ),
+        ),
+        Bip39AutocompleteRow(controller: controller),
+      ],
+    );
+  }
+}
+

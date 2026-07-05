@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../../widgets/theme_icon.dart';
@@ -9,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:video_thumbnail/video_thumbnail.dart'; // NEW IMPORT
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
@@ -16,12 +18,14 @@ import '../../widgets/account_switcher.dart';
 import '../../widgets/ciphernest_logo.dart';
 
 import '../../models/file_model.dart';
+import '../../../services/cnest_errors.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/cloud/account_registry.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/sync_service.dart';
+import '../../widgets/friendly_error_sheet.dart';
 
 enum _UploadCategory { media, document, audio, other }
 
@@ -35,7 +39,6 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isUploading = false;
   bool _isLoadingSession = true;
-  String? _sessionError;
   Map<String, int>? _vaultStats;
 
   @override
@@ -65,57 +68,46 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (mounted) setState(() => _vaultStats = stats);
   }
 
+  Future<void> _markSetupCompleted() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('setup_completed_v1', true);
+  }
+
   Future<void> _initSession() async {
-    setState(() {
-      _isLoadingSession = true;
-      _sessionError = null;
-    });
+    setState(() => _isLoadingSession = true);
+
+    // Reaching Home is the point at which "the user has finished setup at
+    // least once" — this is the flag the splash gate reads next time to
+    // distinguish "signed out, restore" from "closed mid-signup, onboard
+    // again." Set idempotently on every home mount.
+    unawaited(_markSetupCompleted());
 
     try {
       final active = AccountRegistry().activeAccount;
       String? email = active?.email;
       email ??= await CloudService().restoreSession();
 
-      if (mounted) {
-        if (active != null) {
-          DatabaseService().setCurrentAccount(active.id);
-          setState(() => _isLoadingSession = false);
-          _refreshStats();
-          SyncService().syncNow();
-        } else if (email != null) {
-          // Legacy/edge case — no active account but a session exists
-          setState(() => _isLoadingSession = false);
-          _refreshStats();
-          SyncService().syncNow();
-        } else {
-          setState(() {
-            _isLoadingSession = false;
-            _sessionError = "Session expired. Please reconnect.";
-          });
-        }
+      if (!mounted) return;
+      if (active != null) {
+        DatabaseService().setCurrentAccount(active.id);
+        setState(() => _isLoadingSession = false);
+        _refreshStats();
+        SyncService().syncNow();
+      } else if (email != null) {
+        // Legacy edge case: no active account but a session exists.
+        setState(() => _isLoadingSession = false);
+        _refreshStats();
+        SyncService().syncNow();
+      } else {
+        // Splash + login should have caught this and routed to reconnect,
+        // but we defend against race conditions (token invalidated after
+        // login success). Route rather than render an inline error.
+        Navigator.pushReplacementNamed(context, AppRoutes.reconnect);
       }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isLoadingSession = false;
-          _sessionError = "Connection failed: $e";
-        });
-      }
-    }
-  }
-
-  Future<void> _handleReconnect() async {
-    setState(() => _isLoadingSession = true);
-    try {
-      await Navigator.pushNamed(context, AppRoutes.cloudSelection);
-      await _initSession();
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isLoadingSession = false;
-          _sessionError = "Login failed: $e";
-        });
-      }
+    } catch (e, s) {
+      debugPrint('Home _initSession failed: $e\n$s');
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(context, AppRoutes.reconnect);
     }
   }
 
@@ -170,6 +162,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     Uint8List? thumbnailBytes;
     bool isVideo = false;
     String? pickedPath;
+    // Hoisted above the try so the catch block can roll back the DB
+    // row that gets inserted in step 4 when a later step (upload) fails.
+    String? fileId;
 
     try {
       // --- 1. UNIFIED PICKER (FilePicker Only) ---
@@ -245,7 +240,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       // --- 4. DATABASE ENTRY ---
-      final fileId = const Uuid().v4();
+      fileId = const Uuid().v4();
       CnestFileType type;
       if (isVideo || isMedia) {
         type = CnestFileType.image;
@@ -348,15 +343,43 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
       }
 
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-        );
+    } catch (e, s) {
+      debugPrint('Upload failed: $e\n$s');
+      // The DB row for `fileId` may have been inserted BEFORE the upload
+      // started (step 4). If we don't roll it back here, the gallery
+      // keeps a phantom entry for a file that never made it to the cloud
+      // — the "cryptic red developer error" leaves a leftover row.
+      // Roll back cleanly, then surface a friendly error sheet.
+      final rollbackId = fileId;
+      if (rollbackId != null) {
+        try {
+          await DatabaseService().deleteFile(rollbackId);
+        } catch (rollbackErr) {
+          debugPrint('Upload rollback failed: $rollbackErr');
+        }
       }
+      if (!mounted) return;
+      await showCnestError(context, _mapUploadError(e));
     } finally {
       if (mounted) setState(() => _isUploading = false);
     }
+  }
+
+  CnestError _mapUploadError(Object e) {
+    final msg = e.toString().toLowerCase();
+    // Drive: 403 with "storageQuotaExceeded" in the JSON body.
+    // Graph:  403/507 with "quotaLimitReached".
+    if (msg.contains('storagequotaexceeded') ||
+        msg.contains('quotalimitreached') ||
+        msg.contains('quota exceeded')) {
+      return const StorageFullError();
+    }
+    if (msg.contains('failed host lookup') ||
+        msg.contains('network is unreachable') ||
+        msg.contains('no address associated with hostname')) {
+      return const OfflineError();
+    }
+    return UnexpectedError(code: 'UPLOAD', debugDetail: e.toString());
   }
 
   @override
@@ -367,26 +390,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    if (_sessionError != null) {
-      return Scaffold(
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              ThemeIcon('cloudSlash', size: 64, color: cs.onSurface.withAlpha(120)),
-              const SizedBox(height: 16),
-              Text(_sessionError!, style: const TextStyle(color: Colors.red)),
-              const SizedBox(height: 24),
-              ElevatedButton.icon(
-                onPressed: _handleReconnect,
-                icon: ThemeIcon('signIn'),
-                label: const Text("Reconnect Google Drive"),
-              )
-            ],
-          ),
-        ),
-      );
-    }
+    // Missing-cloud state is now handled by the reconnect screen (routed to
+    // from splash, login, or _initSession's defensive catch). Home does not
+    // render an inline error surface anymore.
 
     final cards = <Widget>[
       _DashboardCard(
@@ -420,6 +426,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: false,
         title: const CiphernestLogo(fontSize: 22),
         actions: [
           const AccountSwitcher(),

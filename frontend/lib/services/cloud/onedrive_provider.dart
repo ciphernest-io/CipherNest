@@ -53,13 +53,24 @@ class OneDriveProvider implements CloudProvider {
 
     String redirectResult;
     try {
+      // useWebview: true forces an in-app WebView instead of Custom Tabs.
+      // Custom Tabs launches in whatever browser the user has set as
+      // default (Brave, Chrome, etc.); browser-level shields on Brave
+      // (and, apparently, some Chrome installs) can block the
+      // post-consent redirect back to the ciphernest:// scheme. The
+      // WebView path is browser-choice-agnostic and cookie-isolated, so
+      // the OAuth loop closes reliably regardless of the user's default
+      // browser. preferEphemeral is kept as a defence-in-depth hint.
       redirectResult = await FlutterWebAuth2.authenticate(
         url: authUrl.toString(),
         callbackUrlScheme: 'ciphernest',
         options: const FlutterWebAuth2Options(
-          preferEphemeral: false,
+          preferEphemeral: true,
+          useWebview: true,
         ),
       );
+      debugPrint('OneDrive auth returned redirect: '
+          '${redirectResult.split('?').first}?…');
     } catch (e) {
       debugPrint('OneDrive auth cancelled or failed: $e');
       return null;
@@ -68,7 +79,10 @@ class OneDriveProvider implements CloudProvider {
     final returnedUri = Uri.parse(redirectResult);
     final code = returnedUri.queryParameters['code'];
     if (code == null) {
-      debugPrint('OneDrive auth: no code in redirect');
+      debugPrint(
+        'OneDrive auth: redirect had no code. '
+        'Query params: ${returnedUri.queryParameters.keys.toList()}',
+      );
       return null;
     }
 
@@ -526,26 +540,32 @@ class OneDriveProvider implements CloudProvider {
 
   @override
   Future<bool> checkIntegrity() async {
+    // No outer try/catch. Only crypto verification returns `false`; every
+    // other failure propagates so the caller can distinguish "wrong key"
+    // from "transient network / token / stream error" and retry.
+    final list = await listCloudFiles();
+    if (list.isEmpty) return true;
+
+    // Find the first non-thumbnail file (thumbnails wouldn't have the
+    // master-key-encrypted header structure that verifyKey expects).
+    final main = list.firstWhere(
+      (f) => f['_isThumb'] != true,
+      orElse: () => list.first,
+    );
+    final fileId = main['id'] as String?;
+    if (fileId == null) {
+      throw Exception('First cloud file has no id — Graph response malformed');
+    }
+
+    final bytes = await downloadFile(fileId);
+    // Use just the first chunk for verification
+    final probe = bytes.sublist(0, bytes.length < 1024 ? bytes.length : 1024);
+
     try {
-      final list = await listCloudFiles();
-      if (list.isEmpty) return true;
-
-      // Find the first non-thumbnail file (thumbnails wouldn't have the
-      // master-key-encrypted header structure that verifyKey expects).
-      final main = list.firstWhere(
-        (f) => f['_isThumb'] != true,
-        orElse: () => list.first,
-      );
-      final fileId = main['id'] as String?;
-      if (fileId == null) return false;
-
-      final bytes = await downloadFile(fileId);
-      // Use just the first chunk for verification
-      final probe = bytes.sublist(0, bytes.length < 1024 ? bytes.length : 1024);
       await EncryptionService.verifyKey(Uint8List.fromList(probe));
       return true;
     } catch (e) {
-      debugPrint('OneDrive integrity check failed: $e');
+      debugPrint('OneDrive canary crypto fail (wrong key): $e');
       return false;
     }
   }
