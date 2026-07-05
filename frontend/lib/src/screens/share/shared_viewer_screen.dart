@@ -18,8 +18,8 @@ import '../../../crypto/aes_gcm.dart';
 import '../../../services/encryption_service.dart';
 
 /// Receives a CipherNest magic link (either via the `ciphernest://` custom
-/// scheme or an `https://ciphernest.pages.dev/s/...` App Link) and decrypts
-/// the shared blob entirely on-device.
+/// scheme or an `https://<AppConstants.shareHost>/s/...` App Link) and
+/// decrypts the shared blob entirely on-device.
 ///
 /// The route argument is a [Uri] holding the full share URL.
 class SharedViewerScreen extends StatefulWidget {
