@@ -24,10 +24,22 @@ const $ = (id) => document.getElementById(id);
 const status = $('status');
 const statusText = $('statusText');
 const passwordForm = $('passwordForm');
+const passwordInput = $('passwordInput');
+const passwordSubmit = $('passwordSubmit');
 const preview = $('preview');
 const actions = $('actions');
 const downloadBtn = $('downloadBtn');
 const openInAppBtn = $('openInAppBtn');
+
+// Argon2id parameters. Must match the Dart sender's
+// EncryptionService.derivePasswordKey exactly, otherwise the derived
+// share key won't match the one used to wrap the file key.
+const ARGON2_PARAMS = {
+  parallelism: 1,
+  iterations: 2,
+  memorySize: 65536, // KiB = 64 MiB
+  hashLength: 32,
+};
 
 let lastDecryptedBlob = null;
 let lastFilename = 'shared-file';
@@ -100,12 +112,41 @@ function main() {
   }
 
   if (fragParams.p) {
-    // Password-protected — Argon2 isn't built into SubtleCrypto and we want
-    // this viewer to remain dependency-free. Direct recipient to the app.
-    showOpenInApp(
-      'This share is password-protected. ' +
-      'Open the link in the CipherNest Android app to enter the password.'
-    );
+    // Password-protected. hash-wasm ships Argon2id (SubtleCrypto lacks
+    // it), which we load from /hash-wasm.min.js. Prompt for the password
+    // then derive the share key.
+    const saltBytes = b64UrlDecodeBytes(fragParams.p);
+    showPasswordPrompt(async (password) => {
+      if (typeof hashwasm === 'undefined' || !hashwasm.argon2id) {
+        return showError(
+          'Argon2 library did not load. Check your connection and refresh.'
+        );
+      }
+      setStatus('Deriving key from password (about 5 seconds)…', true);
+      let derived;
+      try {
+        derived = await hashwasm.argon2id({
+          password,
+          salt: saltBytes,
+          parallelism: ARGON2_PARAMS.parallelism,
+          iterations: ARGON2_PARAMS.iterations,
+          memorySize: ARGON2_PARAMS.memorySize,
+          hashLength: ARGON2_PARAMS.hashLength,
+          outputType: 'binary',
+        });
+      } catch (e) {
+        return showError('Key derivation failed: ' + (e?.message || e));
+      }
+      try {
+        await decryptAndRender(downloadUrl, derived);
+      } catch (e) {
+        console.error(e);
+        showError(
+          "Couldn't decrypt this share. Wrong password? (" +
+            (e?.message || e) + ')'
+        );
+      }
+    });
     return;
   }
   if (!fragParams.k) {
@@ -117,6 +158,24 @@ function main() {
     console.error(e);
     showError('Decryption failed: ' + (e?.message || e));
   });
+}
+
+// Reveals the password form and wires the submit/Enter handlers to
+// the supplied callback. Called only when we're in password mode.
+function showPasswordPrompt(onSubmit) {
+  hide(status);
+  passwordForm.classList.remove('hidden');
+  const submit = async () => {
+    const pw = passwordInput.value;
+    if (!pw) return;
+    passwordForm.classList.add('hidden');
+    await onSubmit(pw);
+  };
+  passwordSubmit.onclick = submit;
+  passwordInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submit();
+  });
+  passwordInput.focus();
 }
 
 // ---------------------------------------------------------------------------
@@ -158,23 +217,30 @@ async function decryptAndRender(downloadUrl, shareKeyBytes) {
 
 async function decryptBody(fileKey, body) {
   // The sender uses TWO different body layouts depending on file type:
-  //   - Images / small files:  EncryptionService.encryptFile writes one
-  //                            AES-GCM output covering the WHOLE body:
-  //                              [12-byte nonce][ciphertext][16-byte tag]
-  //   - Videos / streaming:    EncryptionService.encryptStream splits the
-  //                            plaintext into 512 KiB chunks, each becomes
-  //                              [12-byte nonce][ct][16-byte tag]
-  //                            of up to 524316 bytes on disk.
+  //   - Images / small files: EncryptionService.encryptFile writes one
+  //                           AES-GCM output covering the WHOLE body:
+  //                             [12-byte nonce][ciphertext][16-byte tag]
+  //   - Videos / streaming:   EncryptionService.encryptStream splits the
+  //                           plaintext into 512 KiB chunks, each becomes
+  //                             [12-byte nonce][ct][16-byte tag]
+  //                           of up to 524316 bytes on disk.
   //
-  // Any body that fits inside a single chunk (≤ 524316 bytes total,
-  // including the nonce+tag overhead) is decryptable as a single
-  // AES-GCM call. Chunked bodies are only ever >524316 bytes, and the
-  // last chunk may be shorter. So the heuristic is safe:
-  //   body.length ≤ ENCRYPTED_CHUNK_SIZE → single-shot
-  //   body.length >  ENCRYPTED_CHUNK_SIZE → chunked
-  if (body.length <= ENCRYPTED_CHUNK_SIZE) {
+  // We can't tell the two layouts apart from body length alone — a 2 MB
+  // photo encrypted single-shot and a 2 MB single-chunk video are the
+  // same size, but the earlier "if body ≤ 524316 use single-shot"
+  // heuristic broke images >~500 KB because it forced them into the
+  // chunked path where the tag alignment doesn't match.
+  //
+  // Try single-shot first. AES-GCM MAC failure is deterministic and
+  // fast — the whole ciphertext gets processed anyway during a normal
+  // decrypt, so the double-try cost is a rounding error.
+  try {
     return await aesGcmDecrypt(fileKey, body);
+  } catch (_) {
+    // MAC failure — likely a chunked body from encryptStream. Fall
+    // through to the chunked path below.
   }
+
   const parts = [];
   let offset = 0;
   while (offset < body.length) {

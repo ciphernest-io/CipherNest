@@ -112,12 +112,17 @@
     </footer>
   </div>
   <!--
-    ABSOLUTE path. The _redirects rule `/s/* → /index.html 200` means any
+    ABSOLUTE paths. The _redirects rule `/s/* → /index.html 200` means any
     RELATIVE `src="share.js"` on a page served at `/s/<encoded>` resolves
     to `/s/share.js`, which the same rewrite would serve as index.html,
     which the browser refuses to execute as JS. Anchoring at `/` bypasses
     the /s/* rewrite entirely.
+
+    hash-wasm ships Argon2id (SubtleCrypto lacks it), which we need to
+    unlock password-protected shares. UMD bundle, ~213 KB with WASM
+    inlined; loaded once per session.
   -->
+  <script src="/hash-wasm.min.js" defer></script>
   <script src="/share.js" defer></script>
 </body>
 </html>
