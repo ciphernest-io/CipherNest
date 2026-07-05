@@ -108,6 +108,13 @@
       <span>Server cannot read this file. Made by CipherNest.</span>
     </footer>
   </div>
-  <script src="share.js" defer></script>
+  <!--
+    ABSOLUTE path. The _redirects rule `/s/* → /index.html 200` means any
+    RELATIVE `src="share.js"` on a page served at `/s/<encoded>` resolves
+    to `/s/share.js`, which the same rewrite would serve as index.html,
+    which the browser refuses to execute as JS. Anchoring at `/` bypasses
+    the /s/* rewrite entirely.
+  -->
+  <script src="/share.js" defer></script>
 </body>
 </html>

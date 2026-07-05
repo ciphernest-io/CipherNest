@@ -116,6 +116,24 @@ async function decryptAndRender(downloadUrl, shareKeyBytes) {
 }
 
 async function decryptBody(fileKey, body) {
+  // The sender uses TWO different body layouts depending on file type:
+  //   - Images / small files:  EncryptionService.encryptFile writes one
+  //                            AES-GCM output covering the WHOLE body:
+  //                              [12-byte nonce][ciphertext][16-byte tag]
+  //   - Videos / streaming:    EncryptionService.encryptStream splits the
+  //                            plaintext into 512 KiB chunks, each becomes
+  //                              [12-byte nonce][ct][16-byte tag]
+  //                            of up to 524316 bytes on disk.
+  //
+  // Any body that fits inside a single chunk (≤ 524316 bytes total,
+  // including the nonce+tag overhead) is decryptable as a single
+  // AES-GCM call. Chunked bodies are only ever >524316 bytes, and the
+  // last chunk may be shorter. So the heuristic is safe:
+  //   body.length ≤ ENCRYPTED_CHUNK_SIZE → single-shot
+  //   body.length >  ENCRYPTED_CHUNK_SIZE → chunked
+  if (body.length <= ENCRYPTED_CHUNK_SIZE) {
+    return await aesGcmDecrypt(fileKey, body);
+  }
   const parts = [];
   let offset = 0;
   while (offset < body.length) {
