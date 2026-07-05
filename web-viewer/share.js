@@ -31,6 +31,10 @@ const openInAppBtn = $('openInAppBtn');
 
 let lastDecryptedBlob = null;
 let lastFilename = 'shared-file';
+// Populated from the URL fragment's `n=` param when present. When the
+// sender attaches the original filename, downloads and inline captions
+// use it verbatim instead of the auto-generated 'shared-file.ext'.
+let originalFilename = null;
 
 document.addEventListener('DOMContentLoaded', () => {
   try {
@@ -78,6 +82,20 @@ function main() {
     const expMs = parseInt(expStr, 10);
     if (Number.isFinite(expMs) && Date.now() > expMs) {
       return showError('This share link has expired.');
+    }
+  }
+
+  // Optional filename in the fragment. Populated by newer builds of the
+  // Flutter app; missing on older shares (we fall back to auto-generated
+  // names in that case).
+  if (fragParams.n) {
+    try {
+      const nameBytes = b64UrlDecodeBytes(fragParams.n);
+      const decoded = new TextDecoder('utf-8').decode(nameBytes);
+      // Strip any path segments as a defence in case a sender got creative.
+      originalFilename = decoded.replace(/^.*[\\/]/, '').slice(0, 255);
+    } catch (e) {
+      console.warn('Bad filename in URL fragment:', e);
     }
   }
 
@@ -232,7 +250,10 @@ async function render(bytes) {
   const blob = new Blob([bytes], { type: mime });
   const url = URL.createObjectURL(blob);
   lastDecryptedBlob = blob;
-  lastFilename = 'shared-file' + extForKind(kind);
+  // Prefer the sender-supplied original filename; fall back to a generic
+  // name with a sniffed extension only if no filename came through the
+  // URL fragment.
+  lastFilename = originalFilename || ('shared-file' + extForKind(kind));
 
   preview.classList.remove('hidden');
   actions.classList.remove('hidden');
@@ -263,6 +284,15 @@ async function render(bytes) {
         '<div class="size">' + humanSize(bytes.byteLength) + '</div>' +
       '</div>';
     preview.appendChild(row);
+  }
+
+  // Filename caption under the preview for images/video/audio. For the
+  // 'unknown' file-row branch above, the name is already inline, so skip.
+  if (kind !== 'unknown') {
+    const caption = document.createElement('div');
+    caption.className = 'preview-caption';
+    caption.textContent = lastFilename + ' · ' + humanSize(bytes.byteLength);
+    preview.appendChild(caption);
   }
 
   downloadBtn.onclick = () => {

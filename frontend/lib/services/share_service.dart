@@ -102,13 +102,16 @@ class ShareService {
       bytes: shareBlob,
     );
 
-    // 7. Construct magic link.
+    // 7. Construct magic link. Attach the file's display name so the
+    // recipient's download preserves it (fragment stays client-side, so
+    // the filename never reaches the server).
     final expiresAt = expiry == null ? null : DateTime.now().add(expiry);
     final shareUrl = await _buildShareUrl(
       downloadUrl: uploaded.downloadUrl,
       shareKey: shareKey,
       salt: salt,
       expiresAt: expiresAt,
+      filename: file.filename,
     );
 
     // 8. Persist locally.
@@ -131,6 +134,7 @@ class ShareService {
   Future<String> _buildShareUrl({
     required String downloadUrl,
     required SecretKey shareKey,
+    required String filename,
     Uint8List? salt,
     DateTime? expiresAt,
   }) async {
@@ -148,6 +152,9 @@ class ShareService {
     if (expiresAt != null) {
       fragment.write('&exp=${expiresAt.millisecondsSinceEpoch}');
     }
+    // Original filename, base64url-encoded so it survives special chars
+    // (spaces, unicode). Recipient uses it as the `<a download=…>` value.
+    fragment.write('&n=${base64Url.encode(utf8.encode(filename))}');
 
     return 'https://${AppConstants.shareHost}/s/$encodedDl#${fragment.toString()}';
   }
