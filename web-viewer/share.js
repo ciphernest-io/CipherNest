@@ -206,9 +206,16 @@ async function fetchViaProxy(downloadUrl) {
   // virus-scan warning, OneDrive sign-in page, etc.) instead of the real blob.
   const contentType = resp.headers.get('Content-Type') || '';
   if (contentType.includes('text/html')) {
+    // Surface the diagnostic headers the proxy attached so we can see
+    // exactly what the cloud returned — sign-in page, virus scan warning,
+    // access denied, etc.
+    const debug = resp.headers.get('X-CipherNest-Debug') || '(no snippet)';
+    const finalUrl = resp.headers.get('X-CipherNest-Final-Url') || '(unknown)';
+    console.error('Cloud returned HTML. Final URL:', finalUrl);
+    console.error('First 300 bytes:', debug);
     throw new Error(
       'The cloud host returned an HTML page instead of the encrypted file. ' +
-      'The share link may have been revoked or the file is no longer public.'
+      'Final URL: ' + finalUrl + '. First bytes: ' + debug
     );
   }
   const buf = await resp.arrayBuffer();

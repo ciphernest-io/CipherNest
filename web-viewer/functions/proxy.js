@@ -55,27 +55,63 @@ export async function onRequestGet({ request }) {
     return new Response('Host not allowed: ' + parsed.host, { status: 403 });
   }
 
-  // Forward the request, following redirects (Drive uses redirects to the
-  // actual content host for `uc?export=download`).
+  // Forward the request, following redirects. Use a Chrome-flavored
+  // User-Agent because Drive occasionally serves different content to
+  // generic/bot User-Agents — anonymous public downloads sometimes get
+  // an HTML "sign in required" page for non-browser UAs.
   const upstream = await fetch(parsed.toString(), {
     method: 'GET',
     redirect: 'follow',
     headers: {
-      'User-Agent': 'CipherNest-WebViewer/1.0',
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
       'Accept': '*/*',
+      'Accept-Language': 'en-US,en;q=0.9',
     },
   });
 
-  // Stream the body straight back, dropping cookies and any sensitive headers.
+  const upstreamContentType =
+    upstream.headers.get('Content-Type') || 'application/octet-stream';
+
+  // Diagnostic: if the upstream returned HTML instead of the encrypted
+  // blob, sniff the first ~300 bytes and expose them in a response
+  // header so we can see exactly what Drive is complaining about in
+  // DevTools Network tab (and forward the HTML through as-is, so the
+  // client's existing "returned HTML" check still fires).
+  let debugSnippet = '';
+  let bodyToReturn = upstream.body;
+  if (upstreamContentType.includes('text/html')) {
+    const buf = await upstream.arrayBuffer();
+    const bytes = new Uint8Array(
+      buf,
+      0,
+      Math.min(400, buf.byteLength),
+    );
+    debugSnippet = new TextDecoder('utf-8')
+      .decode(bytes)
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .slice(0, 300);
+    bodyToReturn = buf;
+  }
+
   const headers = new Headers();
-  headers.set('Content-Type',
-    upstream.headers.get('Content-Type') || 'application/octet-stream');
+  headers.set('Content-Type', upstreamContentType);
   const len = upstream.headers.get('Content-Length');
   if (len) headers.set('Content-Length', len);
   headers.set('Access-Control-Allow-Origin', '*');
+  headers.set(
+    'Access-Control-Expose-Headers',
+    'X-CipherNest-Debug, X-CipherNest-Final-Url',
+  );
   headers.set('Cache-Control', 'no-store');
+  headers.set('X-CipherNest-Final-Url', upstream.url);
+  if (debugSnippet) {
+    headers.set('X-CipherNest-Debug', debugSnippet);
+  }
 
-  return new Response(upstream.body, {
+  return new Response(bodyToReturn, {
     status: upstream.status,
     headers,
   });
