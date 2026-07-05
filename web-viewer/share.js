@@ -41,15 +41,38 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function main() {
-  const path = location.pathname; // /s/<encoded>
+  let path = location.pathname; // /s/<encoded>
+  let rawFragment = location.hash.replace(/^#/, '');
+
+  // Some link handlers (WhatsApp Desktop, Messenger, various URL wrappers)
+  // percent-encode the `#` fragment marker into `%23` so the whole fragment
+  // ends up embedded in the path. Detect and split.
+  const encodedHashIdx = path.indexOf('%23');
+  if (encodedHashIdx >= 0 && !rawFragment) {
+    rawFragment = decodeURIComponent(path.substring(encodedHashIdx + 3));
+    path = path.substring(0, encodedHashIdx);
+  }
+
   const segments = path.split('/').filter(Boolean);
   if (segments.length < 2 || segments[0] !== 's') {
     return showError('This page expects a share link of the form /s/...');
   }
-  const encodedDownload = segments[1];
-  const downloadUrl = b64UrlDecodeUtf8(encodedDownload);
+  // Percent-decode the encoded download URL segment before base64. Handles
+  // `%3D` for `=` padding, `%2F` for `/`, etc. — anything a URL-mangling
+  // intermediary might have introduced.
+  const encodedDownload = decodeURIComponent(segments[1]);
+  let downloadUrl;
+  try {
+    downloadUrl = b64UrlDecodeUtf8(encodedDownload);
+  } catch (e) {
+    return showError(
+      'This share link is malformed. Something between the sender and you ' +
+      'may have mangled the URL — try opening it directly in a browser ' +
+      "instead of a chat app's link preview. (base64 error: " + e.message + ')'
+    );
+  }
 
-  const fragParams = parseFragment(location.hash.replace(/^#/, ''));
+  const fragParams = parseFragment(rawFragment);
   const expStr = fragParams.exp;
   if (expStr) {
     const expMs = parseInt(expStr, 10);
