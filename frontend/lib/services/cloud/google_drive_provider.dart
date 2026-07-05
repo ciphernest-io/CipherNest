@@ -308,13 +308,22 @@ class GoogleDriveProvider implements CloudProvider {
       fileId,
     );
 
-    // Public, no-auth URL pattern. Works without API key for anyone with link.
-    // drive.usercontent.google.com is Google's direct-content host. Going
-    // through it with `confirm=t` skips the "Drive can't scan this file"
-    // HTML interstitial that the older drive.google.com/uc URL serves for
-    // anonymous downloads of binary blobs.
-    final downloadUrl =
-        'https://drive.usercontent.google.com/download?id=$fileId&export=download&authuser=0&confirm=t';
+    // Fetch Drive's canonical anonymous download URL. `webContentLink` is
+    // populated once the file has anyone/reader permission and works for
+    // truly-anonymous recipients (no Google session required). The
+    // previous hand-constructed URL used `authuser=0`, which asked Drive
+    // to "use the first Google account signed in on this browser"; for
+    // anonymous recipients that resolved to a sign-in HTML page instead
+    // of the encrypted bytes, breaking the web viewer.
+    final withLink = await api.files.get(
+      fileId,
+      $fields: 'webContentLink',
+    ) as drive.File;
+    final downloadUrl = withLink.webContentLink ??
+        // Fallback if Drive doesn't populate the field (rare edge case).
+        // This form works for small files anonymously; large files may
+        // require the confirmation-token dance which we don't do here.
+        'https://drive.google.com/uc?export=download&id=$fileId';
     return (cloudId: fileId, downloadUrl: downloadUrl);
   }
 
