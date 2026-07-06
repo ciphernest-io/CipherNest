@@ -138,7 +138,7 @@ function main() {
         return showError('Key derivation failed: ' + (e?.message || e));
       }
       try {
-        await decryptAndRender(downloadUrl, derived);
+        await decryptAndRender(downloadUrl, derived, { password: true });
       } catch (e) {
         console.error(e);
         showError(
@@ -182,7 +182,9 @@ function showPasswordPrompt(onSubmit) {
 // Pipeline
 // ---------------------------------------------------------------------------
 
-async function decryptAndRender(downloadUrl, shareKeyBytes) {
+async function decryptAndRender(downloadUrl, shareKeyBytes, opts) {
+  const passwordMode = opts && opts.password === true;
+
   setStatus('Fetching encrypted blob…', true);
   const blob = await fetchViaProxy(downloadUrl);
 
@@ -195,10 +197,17 @@ async function decryptAndRender(downloadUrl, shareKeyBytes) {
     ['decrypt']
   );
 
-  // Header layout: [4-byte big-endian length] [60-byte wrapped fileKey]
+  // Header layout differs by mode (see share_service.dart in the app):
+  //   Plain:    [4-byte length prefix][60-byte wrapped fileKey]
+  //   Password: [4-byte length prefix][16-byte salt][60-byte wrapped fileKey]
+  //
+  // The salt is duplicated into the header for password shares but we
+  // already used the URL fragment's p= copy to derive shareKey via
+  // Argon2id — skip past it here.
   const headerLen = readU32BE(blob, 0);
   const headerEnd = 4 + headerLen;
-  const wrappedFileKey = blob.subarray(4, headerEnd);
+  const wrappedStart = passwordMode ? 4 + 16 : 4;
+  const wrappedFileKey = blob.subarray(wrappedStart, headerEnd);
   const fileKeyBytes = await aesGcmDecrypt(shareKey, wrappedFileKey);
   const fileKey = await crypto.subtle.importKey(
     'raw',
