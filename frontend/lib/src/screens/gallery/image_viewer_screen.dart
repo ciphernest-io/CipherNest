@@ -22,6 +22,7 @@ import '../../../services/encryption_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/auto_sync_service.dart';
+import '../../../services/file_metadata_service.dart';
 import '../../../services/image_edit_service.dart';
 import '../../../services/video_streaming_server.dart';
 import '../share/share_dialog.dart';
@@ -279,42 +280,32 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     }
   }
 
-  Future<void> _renameCurrent() async {
-    if (_currentFiles.isEmpty) return;
-    final file = _currentFiles[_currentIndex];
-    final controller = TextEditingController(text: file.filename);
-    final newName = await showDialog<String>(
+  /// Opens the info-sheet's Edit dialog: rename + change captured date/time
+  /// in one flow. Returns true if either field was actually changed.
+  Future<bool> _showEditInfo(CnestFile file) async {
+    final result = await showDialog<_EditInfoResult>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Rename'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'New filename'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
+      builder: (_) => _EditInfoDialog(file: file),
     );
-    if (newName == null || newName.isEmpty || newName == file.filename) return;
-    await DatabaseService().renameFile(file.id, newName);
+    if (result == null) return false;
+    if (result.filename != file.filename) {
+      await DatabaseService().renameFile(file.id, result.filename);
+    }
+    if (result.captured != file.createdAt) {
+      await DatabaseService().updateCreatedAt(file.id, result.captured);
+    }
+    // Refresh the in-viewer copy so the AppBar title + info sheet reflect
+    // the changes without a pop-and-rebuild. Live-updated fields are
+    // filename + createdAt; everything else is copied over unchanged.
     final updated = CnestFile(
       id: file.id,
       cloudId: file.cloudId,
       thumbnailCloudId: file.thumbnailCloudId,
       provider: file.provider,
       accountId: file.accountId,
-      filename: newName,
+      filename: result.filename,
       sizeBytes: file.sizeBytes,
-      createdAt: file.createdAt,
+      createdAt: result.captured,
       isUploaded: file.isUploaded,
       localPath: file.localPath,
       assetId: file.assetId,
@@ -323,10 +314,8 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     );
     if (mounted) {
       setState(() => _currentFiles[_currentIndex] = updated);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Renamed')),
-      );
     }
+    return true;
   }
 
   /// Returns true if the current file is a video and the Edit button should
@@ -724,6 +713,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   }
 
   void _showDetailsSheet() {
+    final file = _currentFiles[_currentIndex];
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -732,45 +722,22 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) => DraggableScrollableSheet(
-        initialChildSize: 0.4,
-        minChildSize: 0.2,
-        maxChildSize: 0.6,
+        initialChildSize: 0.55,
+        minChildSize: 0.3,
+        maxChildSize: 0.85,
         expand: false,
-        builder: (_, controller) => ListView(
-          controller: controller,
-          padding: const EdgeInsets.all(24),
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 20),
-                decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            Text("Details", style: Theme.of(context).textTheme.headlineSmall),
-            const SizedBox(height: 20),
-            _DetailItem(
-              icon: themeIconData('file'),
-              title: "Filename",
-              value: _currentFiles[_currentIndex].filename,
-            ),
-            _DetailItem(
-              icon: themeIconData('calendar'),
-              title: "Created",
-              value: _currentFiles[_currentIndex].createdAt.toString().split(
-                '.',
-              )[0],
-            ),
-            _DetailItem(
-              icon: themeIconData('fingerprint'),
-              title: "ID",
-              value: _currentFiles[_currentIndex].id,
-            ),
-          ],
+        builder: (_, controller) => _InfoSheetBody(
+          file: file,
+          scrollController: controller,
+          onEdit: () async {
+            final changed = await _showEditInfo(file);
+            // Sheet's own BuildContext (`ctx`) — safe to pop once we know
+            // the sheet is still mounted. Bouncing it closed forces a
+            // fresh open to re-read the updated filename / capture date.
+            if (!changed) return;
+            if (!ctx.mounted) return;
+            Navigator.of(ctx).pop();
+          },
         ),
       ),
     );
@@ -1066,9 +1033,6 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         ),
         onSelected: (v) {
           switch (v) {
-            case 'rename':
-              _renameCurrent();
-              break;
             case 'copy':
               _copyToClipboard();
               break;
@@ -1080,8 +1044,10 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
               break;
           }
         },
+        // Rename lives in the info sheet's Edit button now — one place,
+        // not two. Same button also lets the user correct the captured
+        // date/time on an imported file.
         itemBuilder: (_) => const [
-          PopupMenuItem(value: 'rename', child: Text('Rename')),
           PopupMenuItem(value: 'copy', child: Text('Copy')),
           PopupMenuItem(value: 'print', child: Text('Print')),
           PopupMenuItem(value: 'wallpaper', child: Text('Set as wallpaper')),
@@ -1167,22 +1133,418 @@ class _SaveOptionTile extends StatelessWidget {
   }
 }
 
-class _DetailItem extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String value;
-  const _DetailItem({
-    required this.icon,
-    required this.title,
-    required this.value,
+/// Samsung Gallery-style info sheet:
+///
+///   Header line   — captured date/time in bold + `Edit` (placeholder)
+///   Filename
+///   Path (`/Internal storage/DCIM/Camera` — collapsed for readability)
+///
+///   Device model (bold)
+///   Row 1        — size · dimensions · megapixels/resolution-tier
+///   Row 2        — camera settings (photos) OR container info (videos)
+///
+///   Vault ID (small, muted — CipherNest extra, not on Samsung)
+///
+/// Every metadata field renders `null`-safe: missing EXIF just collapses
+/// that row instead of showing "unknown". Loads asynchronously so the
+/// sheet paints instantly and the rich rows fade in as extraction finishes.
+class _InfoSheetBody extends StatefulWidget {
+  final CnestFile file;
+  final ScrollController scrollController;
+  final VoidCallback onEdit;
+  const _InfoSheetBody({
+    required this.file,
+    required this.scrollController,
+    required this.onEdit,
   });
+
+  @override
+  State<_InfoSheetBody> createState() => _InfoSheetBodyState();
+}
+
+class _InfoSheetBodyState extends State<_InfoSheetBody> {
+  FileMetadata? _meta;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final meta = await FileMetadataService().extract(widget.file);
+    if (mounted) setState(() => _meta = meta);
+  }
+
+  static const _months = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
+  static const _weekdays = [
+    'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+    'Friday', 'Saturday', 'Sunday',
+  ];
+
+  String _fmtHeader(DateTime dt) {
+    final wd = _weekdays[dt.weekday - 1];
+    final month = _months[dt.month - 1];
+    final hour12 = dt.hour == 0 ? 12 : (dt.hour > 12 ? dt.hour - 12 : dt.hour);
+    final ampm = dt.hour < 12 ? 'am' : 'pm';
+    final mm = dt.minute.toString().padLeft(2, '0');
+    return '$wd, ${dt.day} $month ${dt.year} · $hour12:$mm $ampm';
+  }
+
+  String _fmtSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / 1024 / 1024).toStringAsFixed(2)} MB';
+    }
+    return '${(bytes / 1024 / 1024 / 1024).toStringAsFixed(2)} GB';
+  }
+
+  String _fmtDuration(Duration d) {
+    final m = d.inMinutes;
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  /// Samsung's "0.0ev" style — always signed, one decimal.
+  String _fmtExposureBias(double v) {
+    final sign = v >= 0 ? '' : '';
+    return '$sign${v.toStringAsFixed(1)}ev';
+  }
+
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      leading: Icon(icon, color: Theme.of(context).iconTheme.color),
-      title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-      subtitle: Text(value),
-      contentPadding: EdgeInsets.zero,
+    final cs = Theme.of(context).colorScheme;
+    final file = widget.file;
+    final meta = _meta;
+    // Fall back to the CnestFile's raw fields while metadata loads so the
+    // header/filename never flash empty.
+    final captured = meta?.captured ?? file.createdAt;
+
+    // Row 1 — universal facts. Photos: size · WxH · megapixels.
+    // Videos: size · WxH · resolution tier.
+    final row1 = <String>[
+      _fmtSize(file.sizeBytes),
+      if (meta?.width != null && meta?.height != null)
+        '${meta!.width}x${meta.height}',
+      if (meta?.isVideo == true && meta?.resolutionTier != null)
+        meta!.resolutionTier!
+      else if (meta?.megapixels != null)
+        '${meta!.megapixels}MP',
+    ];
+
+    // Row 2 — Samsung splits this line by media type:
+    //   Video: duration · videoCodec · audioCodec · fps
+    //   Photo: ISO · focal · exposure bias · aperture · shutter speed
+    // The video row shows only what the MP4 parser could pull; missing
+    // fields collapse gracefully (e.g. cloud-only video → just duration).
+    final row2 = <String>[
+      if (meta?.isVideo == true) ...[
+        if (meta?.duration != null) _fmtDuration(meta!.duration!),
+        if (meta?.videoCodec != null) meta!.videoCodec!,
+        if (meta?.audioCodec != null) meta!.audioCodec!,
+        if (meta?.fps != null) '${meta!.fps}fps',
+      ] else ...[
+        if (meta?.iso != null) 'ISO ${meta!.iso}',
+        if (meta?.focalLengthMm != null)
+          '${meta!.focalLengthMm!.round()}mm',
+        if (meta?.exposureBias != null)
+          _fmtExposureBias(meta!.exposureBias!),
+        if (meta?.aperture != null) 'F${meta!.aperture!.toStringAsFixed(1)}',
+        if (meta?.shutterSpeed != null) meta!.shutterSpeed!,
+      ],
+    ];
+
+    return ListView(
+      controller: widget.scrollController,
+      padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+      children: [
+        Center(
+          child: Container(
+            width: 40,
+            height: 4,
+            margin: const EdgeInsets.only(bottom: 20),
+            decoration: BoxDecoration(
+              color: cs.onSurface.withAlpha(60),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ),
+        // Header row: date · time (bold) + Edit
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Text(
+                _fmtHeader(captured),
+                style: TextStyle(
+                  color: cs.onSurface,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            // Rename + change captured date/time. Same button on Samsung's
+            // info page; we route it through the viewer so the AppBar
+            // title updates in place after a rename.
+            TextButton(
+              onPressed: widget.onEdit,
+              style: TextButton.styleFrom(
+                foregroundColor: cs.primary,
+                padding: EdgeInsets.zero,
+                minimumSize: const Size(48, 24),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text(
+                'Edit',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          file.filename,
+          style: TextStyle(
+            color: cs.onSurface.withAlpha(170),
+            fontSize: 14,
+          ),
+        ),
+        if (meta?.path != null) ...[
+          const SizedBox(height: 2),
+          Text(
+            meta!.path!,
+            style: TextStyle(
+              color: cs.onSurface.withAlpha(140),
+              fontSize: 14,
+            ),
+          ),
+        ],
+        const SizedBox(height: 24),
+        if (meta?.deviceModel != null && meta!.deviceModel!.isNotEmpty)
+          Text(
+            meta.deviceModel!,
+            style: TextStyle(
+              color: cs.onSurface,
+              fontSize: 17,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        if (row1.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          _InfoLine(items: row1, color: cs.onSurface.withAlpha(170)),
+        ],
+        if (row2.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          _InfoLine(items: row2, color: cs.onSurface.withAlpha(170)),
+        ],
+        const SizedBox(height: 24),
+        _AddTagChip(),
+        const SizedBox(height: 32),
+        // CipherNest-specific extras — grouped so they read as "vault
+        // metadata" separate from the camera info block above.
+        Text(
+          'Vault',
+          style: TextStyle(
+            color: cs.onSurface.withAlpha(140),
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 1.1,
+          ),
+        ),
+        const SizedBox(height: 6),
+        SelectableText(
+          file.id,
+          style: TextStyle(
+            color: cs.onSurface.withAlpha(140),
+            fontSize: 11,
+            fontFamily: 'monospace',
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Samsung uses a thin vertical divider between fields on the info line.
+/// We reproduce it with a low-opacity `|` character so we don't have to
+/// build a custom Wrap-with-dividers layout.
+class _InfoLine extends StatelessWidget {
+  final List<String> items;
+  final Color color;
+  const _InfoLine({required this.items, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) return const SizedBox.shrink();
+    final buf = StringBuffer(items.first);
+    for (var i = 1; i < items.length; i++) {
+      buf.write('  |  ');
+      buf.write(items[i]);
+    }
+    return Text(
+      buf.toString(),
+      style: TextStyle(color: color, fontSize: 14, height: 1.4),
+    );
+  }
+}
+
+/// Return value of the Edit Info dialog. Same shape whether the user
+/// changed one field, both, or neither — the caller diffs against the
+/// original and only writes what actually moved.
+class _EditInfoResult {
+  final String filename;
+  final DateTime captured;
+  const _EditInfoResult({required this.filename, required this.captured});
+}
+
+/// Rename + change captured date/time. Two fields, one Save button. The
+/// EXIF DateTimeOriginal inside the encrypted blob is deliberately NOT
+/// modified — that would require re-encrypting the whole file. The vault
+/// entry wins in-app; EXIF wins on export.
+class _EditInfoDialog extends StatefulWidget {
+  final CnestFile file;
+  const _EditInfoDialog({required this.file});
+  @override
+  State<_EditInfoDialog> createState() => _EditInfoDialogState();
+}
+
+class _EditInfoDialogState extends State<_EditInfoDialog> {
+  late final TextEditingController _nameCtrl;
+  late DateTime _captured;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl = TextEditingController(text: widget.file.filename);
+    _captured = widget.file.createdAt;
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _captured,
+      firstDate: DateTime(1970),
+      lastDate: DateTime.now().add(const Duration(days: 1)),
+    );
+    if (date == null) return;
+    if (!mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(_captured),
+    );
+    if (time == null) return;
+    setState(() {
+      _captured = DateTime(
+        date.year, date.month, date.day, time.hour, time.minute,
+      );
+    });
+  }
+
+  String _fmtDateTime(DateTime dt) {
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    final hour12 =
+        dt.hour == 0 ? 12 : (dt.hour > 12 ? dt.hour - 12 : dt.hour);
+    final ampm = dt.hour < 12 ? 'am' : 'pm';
+    final mm = dt.minute.toString().padLeft(2, '0');
+    return '${dt.day} ${months[dt.month - 1]} ${dt.year}, $hour12:$mm $ampm';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return AlertDialog(
+      title: const Text('Edit info'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _nameCtrl,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Name',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 14),
+          InkWell(
+            onTap: _pickDate,
+            child: InputDecorator(
+              decoration: const InputDecoration(
+                labelText: 'Captured',
+                border: OutlineInputBorder(),
+              ),
+              child: Text(
+                _fmtDateTime(_captured),
+                style: TextStyle(color: cs.onSurface, fontSize: 14),
+              ),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () {
+            final name = _nameCtrl.text.trim();
+            if (name.isEmpty) return;
+            Navigator.pop(
+              context,
+              _EditInfoResult(filename: name, captured: _captured),
+            );
+          },
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Placeholder chip matching Samsung's `# Add tag` control. Wired to a
+/// no-op for launch; tag storage is a v1.0.1 candidate.
+class _AddTagChip extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: cs.onSurface.withAlpha(80)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '#',
+              style: TextStyle(color: cs.onSurface.withAlpha(160), fontSize: 14),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'Add tag',
+              style: TextStyle(color: cs.onSurface.withAlpha(160), fontSize: 14),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -1451,10 +1813,24 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
       await _videoController!.initialize();
       _setupChewie();
     } catch (e) {
+      // Common failure modes:
+      //   PlatformException(VideoError) — codec/container mismatch. Look at
+      //     the underlying container extension.
+      //   SocketException / TimeoutException — cloud provider not reachable.
+      //   StateError('No cloud ID') — file never finished uploading.
+      // Full detail goes to debugPrint; user sees a friendlier line.
+      debugPrint('Video initialize failed: $e');
       if (mounted) {
         setState(() => _isBufferingVideo = false);
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Video Error: $e')));
+        final short = e.toString().length > 100
+            ? '${e.toString().substring(0, 100)}…'
+            : e.toString();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Couldn't play this video: $short"),
+            duration: const Duration(seconds: 4),
+          ),
+        );
       }
     }
   }

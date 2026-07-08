@@ -33,12 +33,14 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
   void initState() {
     super.initState();
     SyncService().syncNotifier.addListener(_onSyncComplete);
+    DatabaseService().addListener(_onSyncComplete);
     _refresh();
   }
 
   @override
   void dispose() {
     SyncService().syncNotifier.removeListener(_onSyncComplete);
+    DatabaseService().removeListener(_onSyncComplete);
     super.dispose();
   }
 
@@ -84,8 +86,11 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Delete file?'),
-        content: Text('Permanently delete "${file.filename}"?'),
+        title: const Text('Move to Recycle Bin?'),
+        content: Text(
+          '"${file.filename}" will be hidden here. You can restore it from '
+          'Recycle Bin for the next 30 days.',
+        ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -98,9 +103,7 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
       ),
     );
     if (confirm != true) return;
-    if (file.cloudId != null) {
-      await CloudService().deleteFile(file.cloudId!);
-    }
+    // Soft-delete only; Recycle Bin sweeper handles cloud purge.
     await DatabaseService().deleteFile(file.id);
     AutoSyncService.trackDeletion(file.filename, file.sizeBytes);
     DatabaseBackupService().scheduleBackup();

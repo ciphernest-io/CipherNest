@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/file_model.dart';
 import '../../utils/date_grouper.dart';
+import '../../../services/cache_manager_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/database_service.dart';
@@ -42,6 +44,10 @@ class PicturesTabState extends State<PicturesTab> {
   void initState() {
     super.initState();
     SyncService().syncNotifier.addListener(_onSyncComplete);
+    // DatabaseService fires notifyListeners on delete/restore/addFile so the
+    // grid rebuilds without a pull-to-refresh after any mutation, including
+    // ones initiated from other screens (album detail, image viewer).
+    DatabaseService().addListener(_onDatabaseChanged);
     _refresh();
     _loadColumnCount();
   }
@@ -87,10 +93,15 @@ class PicturesTabState extends State<PicturesTab> {
   @override
   void dispose() {
     SyncService().syncNotifier.removeListener(_onSyncComplete);
+    DatabaseService().removeListener(_onDatabaseChanged);
     super.dispose();
   }
 
   void _onSyncComplete() {
+    if (mounted) _refresh();
+  }
+
+  void _onDatabaseChanged() {
     if (mounted) _refresh();
   }
 
@@ -504,6 +515,16 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
             const ThumbnailSize(300, 300),
           );
           if (bytes != null) {
+            // Opportunistic reclaim: if we previously fetched + decrypted
+            // this file from the cloud (leaving `thumb_*.jpg` and
+            // `*_decrypted.jpg` in temp), those artifacts are dead weight
+            // now that MediaStore is serving us. Wipe them so the cache
+            // shrinks the moment the local gallery entry comes back.
+            unawaited(CacheManagerService().invalidateFile(
+              fileId: widget.file.id,
+              cloudId: widget.file.cloudId,
+              thumbnailCloudId: widget.file.thumbnailCloudId,
+            ));
             if (mounted) {
               setState(() {
                 _assetThumbBytes = bytes;
@@ -524,6 +545,13 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
     if (!_isVideo && widget.file.localPath != null) {
       final localFile = File(widget.file.localPath!);
       if (await localFile.exists()) {
+        // Same reclaim as rung 1 — local file is authoritative now, the
+        // encrypted-cache copy is redundant.
+        unawaited(CacheManagerService().invalidateFile(
+          fileId: widget.file.id,
+          cloudId: widget.file.cloudId,
+          thumbnailCloudId: widget.file.thumbnailCloudId,
+        ));
         if (mounted) setState(() => _loading = false);
         return;
       }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../services/auto_sync_worker.dart';
 import '../../../services/key_manager_service.dart';
 import '../../config/routes.dart';
 import '../../widgets/theme_icon.dart';
@@ -22,10 +23,9 @@ class QuickSettingsScreen extends StatefulWidget {
 
 class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
   static const _kBiometricEnabled = 'biometric_enabled_v1';
-  // Must match the key SyncService + Settings + the Workmanager callback
-  // all read. Previously we wrote a `_v1`-suffixed key which nobody read,
-  // so the Quick Settings toggle silently did nothing.
-  static const _kAutoSyncEnabled = 'auto_sync_enabled';
+  // Watermark is the "only sync photos taken after this moment" cutoff.
+  // Written when auto-sync is first enabled so we don't silently vault a
+  // decade of gallery history — Migration handles that on demand.
   static const _kAutoSyncWatermark = 'auto_sync_watermark';
   static const _kShownFlag = 'quick_settings_shown_v1';
 
@@ -80,12 +80,16 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
   }
 
   Future<void> _toggleAutoSync(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kAutoSyncEnabled, v);
+    // Quick Settings defaults to `background` when the user opts in — it's
+    // the "always on, minimal battery" pick most people expect when they
+    // enable auto-sync. Settings later exposes the foreground-only pick
+    // for anyone who wants the app-open-only cadence instead.
+    final mode = v ? AutoSyncMode.background : AutoSyncMode.off;
+    await AutoSyncScheduler.writeMode(mode);
     if (v) {
+      final prefs = await SharedPreferences.getInstance();
       // Watermark = "now" so only photos taken after this moment auto-sync.
-      // Older photos need to be pulled in via the Migration screen. Same
-      // behaviour as toggling auto-sync ON in Settings.
+      // Older photos need to be pulled in via the Migration screen.
       await prefs.setInt(
         _kAutoSyncWatermark,
         DateTime.now().millisecondsSinceEpoch,

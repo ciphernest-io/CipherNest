@@ -31,12 +31,14 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
   void initState() {
     super.initState();
     SyncService().syncNotifier.addListener(_onSyncComplete);
+    DatabaseService().addListener(_onSyncComplete);
     _refresh();
   }
 
   @override
   void dispose() {
     SyncService().syncNotifier.removeListener(_onSyncComplete);
+    DatabaseService().removeListener(_onSyncComplete);
     super.dispose();
   }
 
@@ -102,12 +104,15 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Delete Document?'),
-        content: Text('Permanently delete "${file.filename}"?'),
+        title: const Text('Move to Recycle Bin?'),
+        content: Text(
+          '"${file.filename}" will be hidden here. You can restore it from '
+          'Recycle Bin for the next 30 days.',
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           TextButton(
-            onPressed: () => Navigator.pop(ctx, true), 
+            onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Delete', style: TextStyle(color: Colors.red))
           ),
         ],
@@ -115,9 +120,9 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
     );
 
     if (confirm == true) {
-      if (file.cloudId != null) {
-        await CloudService().deleteFile(file.cloudId!);
-      }
+      // Soft-delete only. Recycle Bin sweeper handles the cloud-side purge
+      // after 30 days; DatabaseService.deleteFile also wipes the local
+      // cache and notifies listeners so this screen updates in-place.
       await DatabaseService().deleteFile(file.id);
       AutoSyncService.trackDeletion(file.filename, file.sizeBytes);
       DatabaseBackupService().scheduleBackup();

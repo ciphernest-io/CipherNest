@@ -134,18 +134,29 @@ class _MigrationScreenState extends State<MigrationScreen> {
   Future<void> _startMigration() async {
     setState(() => _phase = _MigrationPhase.migrating);
 
-    final result = await MigrationService().runMigration(
-      assets: _assets,
-      onProgress: (progress) {
-        if (mounted) setState(() => _progress = progress);
-      },
-    );
-
-    if (mounted) {
-      setState(() {
-        _result = result;
-        _phase = _MigrationPhase.complete;
-      });
+    try {
+      final result = await MigrationService().runMigration(
+        assets: _assets,
+        onProgress: (progress) {
+          if (mounted) setState(() => _progress = progress);
+        },
+      );
+      if (mounted) {
+        setState(() {
+          _result = result;
+          _phase = _MigrationPhase.complete;
+        });
+      }
+    } catch (e) {
+      // Most common: cloud reconnect needed. Surface as a snackbar and
+      // drop back to the choosing phase so the user can bail cleanly.
+      if (!mounted) return;
+      setState(() => _phase = _MigrationPhase.choosing);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Bad state: ', '')),
+        ),
+      );
     }
   }
 
@@ -191,7 +202,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Migrate Gallery'),
+          title: const Text('Import from Gallery'),
           automaticallyImplyLeading: _phase != _MigrationPhase.migrating,
           leading: _phase == _MigrationPhase.selectingAlbums ||
                   _phase == _MigrationPhase.ready
@@ -242,11 +253,40 @@ class _MigrationScreenState extends State<MigrationScreen> {
         ),
         const SizedBox(height: 8),
         Text(
-          'Choose what to migrate into CipherNest. '
-          'Files already in your vault will be skipped automatically.',
+          'Encrypt photos and videos from this phone into your vault. '
+          'Files already in your vault are skipped automatically.',
           style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 14),
         ),
-        const SizedBox(height: 32),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: cs.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: cs.outline.withAlpha(60)),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ThemeIcon('cloudArrowUp', color: cs.primary, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Importing directly from Google Drive or OneDrive '
+                  '(existing unencrypted photos already in the cloud) '
+                  'is coming in v2. For now, pull them to your device first '
+                  'and use one of the options below.',
+                  style: TextStyle(
+                    color: cs.onSurface.withAlpha(160),
+                    fontSize: 12,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
         _MigrationOption(
           icon: themeIconData('infinity'),
           title: 'Entire Gallery',

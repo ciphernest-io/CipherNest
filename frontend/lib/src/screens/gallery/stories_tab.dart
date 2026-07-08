@@ -9,6 +9,7 @@ import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
+import '../../../services/gallery_prefs.dart';
 import '../../../services/sync_service.dart';
 import 'image_viewer_screen.dart';
 
@@ -30,12 +31,19 @@ class _StoriesTabState extends State<StoriesTab> {
   void initState() {
     super.initState();
     SyncService().syncNotifier.addListener(_reload);
+    DatabaseService().addListener(_reload);
+    // Settings toggles for "show featured" / "show a year ago" write through
+    // GalleryPrefs; without this listener the toggle takes effect only on
+    // the next sync or DB mutation.
+    GalleryPrefs().changed.addListener(_reload);
     _reload();
   }
 
   @override
   void dispose() {
     SyncService().syncNotifier.removeListener(_reload);
+    DatabaseService().removeListener(_reload);
+    GalleryPrefs().changed.removeListener(_reload);
     super.dispose();
   }
 

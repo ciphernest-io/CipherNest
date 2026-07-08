@@ -4,6 +4,7 @@ import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 
 import '../services/recycle_bin_service.dart';
+import '../services/share_service.dart';
 import 'config/constants.dart';
 import 'config/routes.dart';
 import 'config/theme_controller.dart';
@@ -59,6 +60,11 @@ class _AppState extends State<App> {
     // share. The DB query is account-scoped and falls through quickly when
     // no account has been bound yet.
     unawaited(RecycleBinService().sweepRecycleBin());
+    // Same cadence for expired shares — revokes the cloud blob and removes
+    // the local row for anything past its `expires_at`. Without this call
+    // expired shares linger indefinitely on Drive/OneDrive and clutter the
+    // Active Shares screen with dead rows.
+    unawaited(ShareService().sweepExpired());
   }
 
   void _handleIncomingUri(Uri uri, {required bool isColdStart}) {

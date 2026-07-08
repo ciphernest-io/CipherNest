@@ -13,6 +13,8 @@ import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/cache_manager_service.dart';
 import '../../../services/auto_sync_service.dart';
+import '../../../services/auto_sync_worker.dart';
+import '../../../services/gallery_prefs.dart';
 import '../../../services/key_manager_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../config/theme_packs.dart';
@@ -33,8 +35,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isLoading = true;
   bool get _hasChanges => _cacheLimitGB != _originalLimitGB;
 
-  // Auto-Sync
-  bool _autoSyncEnabled = false;
+  // Auto-Sync — persisted mode. The SwitchListTile at the top toggles the
+  // whole feature on/off; the segmented picker below chooses between
+  // background and foreground-only modes.
+  AutoSyncMode _autoSyncMode = AutoSyncMode.off;
+  bool get _autoSyncEnabled => _autoSyncMode != AutoSyncMode.off;
   String _lastSyncDisplay = 'Never';
 
   // Gallery
@@ -52,6 +57,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadStats();
     _loadPreferences(); // ENABLED
     _loadBiometricCapability();
+    // Any cache mutation (invalidate on delete, LRU sweep on sync, wipe on
+    // recycle-bin permanent-delete) now bumps CacheManagerService's
+    // notifier. Without this listener the "Cache size" tile only re-scans
+    // when the screen is remounted — the user's report was "delete from
+    // Recycle Bin, back to Settings, cache still shows old size."
+    CacheManagerService().addListener(_loadStats);
+  }
+
+  @override
+  void dispose() {
+    CacheManagerService().removeListener(_loadStats);
+    super.dispose();
   }
 
   Future<void> _loadBiometricCapability() async {
@@ -95,13 +112,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // --- NEW: PERSISTENCE LOGIC ---
   Future<void> _loadPreferences() async {
     final prefs = await SharedPreferences.getInstance();
+    final mode = await AutoSyncScheduler.readMode();
     if (mounted) {
       final lastRunMs = prefs.getInt('auto_sync_last_run') ?? 0;
       setState(() {
         final val = prefs.getDouble('cache_limit') ?? 0.5;
         _cacheLimitGB = val;
         _originalLimitGB = val;
-        _autoSyncEnabled = prefs.getBool('auto_sync_enabled') ?? false;
+        _autoSyncMode = mode;
         _biometricEnabled = prefs.getBool('biometric_enabled_v1') ?? false;
         _showFeatured = prefs.getBool('gallery_show_featured') ?? true;
         _showYearAgo = prefs.getBool('gallery_show_year_ago') ?? true;
@@ -210,9 +228,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     }
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('auto_sync_enabled', enabled);
+    // Default to `background` when the user first enables the feature — it
+    // matches what Quick Settings sets and matches "always on" expectations.
+    // The mode picker below lets them switch to foreground-only later.
+    final mode = enabled ? AutoSyncMode.background : AutoSyncMode.off;
+    await AutoSyncScheduler.writeMode(mode);
     if (enabled) {
+      final prefs = await SharedPreferences.getInstance();
       // Set watermark to NOW — only photos taken after this moment auto-sync.
       // Existing gallery photos require the Migration feature instead.
       await prefs.setInt(
@@ -220,7 +242,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
         DateTime.now().millisecondsSinceEpoch,
       );
     }
-    if (mounted) setState(() => _autoSyncEnabled = enabled);
+    if (mounted) setState(() => _autoSyncMode = mode);
+  }
+
+  /// Switches between [AutoSyncMode.background] and [AutoSyncMode.foregroundOnly]
+  /// without changing whether auto-sync is enabled overall. Called from the
+  /// segmented picker that appears under the top-level toggle.
+  Future<void> _setAutoSyncMode(AutoSyncMode mode) async {
+    if (mode == _autoSyncMode || mode == AutoSyncMode.off) return;
+    await AutoSyncScheduler.writeMode(mode);
+    if (mounted) setState(() => _autoSyncMode = mode);
   }
 
   Future<void> _handleSyncNow() async {
@@ -246,14 +277,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _toggleFeatured(bool val) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('gallery_show_featured', val);
+    // Route through GalleryPrefs so the Stories tab hears about the change
+    // immediately instead of catching it on the next SyncService fire.
+    await GalleryPrefs().setShowFeatured(val);
     if (mounted) setState(() => _showFeatured = val);
   }
 
   Future<void> _toggleYearAgo(bool val) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('gallery_show_year_ago', val);
+    await GalleryPrefs().setShowYearAgo(val);
     if (mounted) setState(() => _showYearAgo = val);
   }
 
@@ -434,8 +465,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           ListTile(
             leading: ThemeIcon('images', color: Colors.cyanAccent),
-            title: const Text('Migrate Gallery', style: TextStyle(color: Colors.white)),
-            subtitle: const Text('Import existing photos into CipherNest', style: TextStyle(color: Colors.grey)),
+            title: const Text('Import from Gallery', style: TextStyle(color: Colors.white)),
+            subtitle: const Text('Encrypt photos already on this device', style: TextStyle(color: Colors.grey)),
             trailing: ThemeIcon('caretRight', size: 16, color: Colors.grey),
             onTap: () => Navigator.pushNamed(context, AppRoutes.migration),
           ),
@@ -462,14 +493,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
             activeThumbColor: Colors.cyanAccent,
             onChanged: _toggleAutoSync,
           ),
-          if (_autoSyncEnabled)
+          if (_autoSyncEnabled) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 4, 16, 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'When to sync',
+                    style: TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                  const SizedBox(height: 8),
+                  _AutoSyncModePicker(
+                    mode: _autoSyncMode,
+                    onChanged: _setAutoSyncMode,
+                  ),
+                ],
+              ),
+            ),
             ListTile(
               leading: const SizedBox(width: 24),
               title: const Text('Sync Now', style: TextStyle(color: Colors.cyanAccent)),
-              subtitle: const Text('New photos sync automatically on app open', style: TextStyle(color: Colors.grey, fontSize: 12)),
+              subtitle: const Text('Manually check for new photos right now', style: TextStyle(color: Colors.grey, fontSize: 12)),
               trailing: ThemeIcon('play', selected: true, color: Colors.cyanAccent),
               onTap: _handleSyncNow,
             ),
+          ],
 
           const Divider(color: Colors.white10),
 
@@ -592,6 +641,108 @@ class _SectionHeader extends StatelessWidget {
           fontSize: 12,
           fontWeight: FontWeight.bold,
           letterSpacing: 1.2,
+        ),
+      ),
+    );
+  }
+}
+
+/// Segmented picker for the auto-sync cadence. Two pills:
+///   Background   — periodic Workmanager task every ~6h, plus foreground.
+///   When I open  — foreground trigger only (SyncService.syncNow / pull).
+/// Off is handled by the top-level SwitchListTile, so this widget only
+/// renders when auto-sync is already enabled.
+class _AutoSyncModePicker extends StatelessWidget {
+  const _AutoSyncModePicker({
+    required this.mode,
+    required this.onChanged,
+  });
+
+  final AutoSyncMode mode;
+  final ValueChanged<AutoSyncMode> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: _ModePill(
+            label: 'Background',
+            sub: 'Every few hours',
+            selected: mode == AutoSyncMode.background,
+            onTap: () => onChanged(AutoSyncMode.background),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _ModePill(
+            label: 'When I open',
+            sub: 'App-open only',
+            selected: mode == AutoSyncMode.foregroundOnly,
+            onTap: () => onChanged(AutoSyncMode.foregroundOnly),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ModePill extends StatelessWidget {
+  const _ModePill({
+    required this.label,
+    required this.sub,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final String sub;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Material(
+      color: selected
+          ? cs.primary.withValues(alpha: 0.14)
+          : cs.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: selected
+                  ? cs.primary
+                  : cs.outline.withValues(alpha: 0.3),
+              width: selected ? 1.5 : 1,
+            ),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  color: selected ? cs.primary : cs.onSurface,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                sub,
+                style: TextStyle(
+                  color: cs.onSurface.withValues(alpha: 0.6),
+                  fontSize: 11,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

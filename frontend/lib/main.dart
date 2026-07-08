@@ -14,5 +14,10 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   Workmanager().initialize(callbackDispatcher, isInDebugMode: false);
   CacheManagerService().enforceCacheLimit();
+  // Fire-and-forget: re-registers the auto-sync periodic task if the user
+  // is on background mode. Idempotent — a no-op if the OS still has the
+  // task scheduled, a re-register if it dropped it (force-stop, OEM
+  // aggressive killer, plugin update).
+  AutoSyncScheduler.reconcileWithPersistedMode();
   runApp(const App());
 }

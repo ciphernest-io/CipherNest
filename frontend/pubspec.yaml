@@ -56,6 +56,11 @@ dependencies:
   video_player: ^2.10.1
   chewie: ^1.13.0
   video_thumbnail: ^0.5.6
+  # Pure-Dart EXIF reader — pulls camera/device details out of the encrypted
+  # image's plaintext bytes without a platform round-trip. Small (~40 KB
+  # compiled) and works on any Uint8List, so it slots into the Samsung-style
+  # info sheet with no permission gymnastics.
+  exif: ^3.3.0
   extended_image: ^10.0.1
   workmanager: ^0.9.0
   photo_manager: ^3.0.0

@@ -31,12 +31,14 @@ class _AudioScreenState extends State<AudioScreen> {
   void initState() {
     super.initState();
     SyncService().syncNotifier.addListener(_onSyncComplete);
+    DatabaseService().addListener(_onSyncComplete);
     _refresh();
   }
 
   @override
   void dispose() {
     SyncService().syncNotifier.removeListener(_onSyncComplete);
+    DatabaseService().removeListener(_onSyncComplete);
     _player.dispose();
     super.dispose();
   }
@@ -116,8 +118,11 @@ class _AudioScreenState extends State<AudioScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Delete Audio?'),
-        content: Text('Permanently delete "${file.filename}"?'),
+        title: const Text('Move to Recycle Bin?'),
+        content: Text(
+          '"${file.filename}" will be hidden here. You can restore it from '
+          'Recycle Bin for the next 30 days.',
+        ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -137,17 +142,15 @@ class _AudioScreenState extends State<AudioScreen> {
         _nowPlaying = null;
       }
 
-      if (file.cloudId != null) {
-        await CloudService().deleteFile(file.cloudId!);
-      }
-      if (file.thumbnailCloudId != null) {
-        await CloudService().deleteFile(file.thumbnailCloudId!);
-      }
+      // Soft-delete only; Recycle Bin sweeper handles cloud purge. Local
+      // cache wipe + notifyListeners already handled inside deleteFile.
       await DatabaseService().deleteFile(file.id);
       AutoSyncService.trackDeletion(file.filename, file.sizeBytes);
       DatabaseBackupService().scheduleBackup();
 
-      // Cleanup cached temp file
+      // Audio plaintext lives under a different naming convention than the
+      // image/video pipeline, so we wipe it here rather than in the shared
+      // cache invalidator.
       final tempDir = await getTemporaryDirectory();
       final cached = File('${tempDir.path}/${file.id}_audio.bin');
       if (await cached.exists()) await cached.delete();

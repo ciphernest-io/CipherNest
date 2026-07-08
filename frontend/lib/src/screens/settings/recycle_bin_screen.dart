@@ -1,12 +1,11 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 import '../../widgets/theme_icon.dart';
 
+import '../../../services/cache_manager_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/database_service.dart';
 import '../../models/file_model.dart';
+import '../gallery/image_viewer_screen.dart';
 import '../gallery/pictures_tab.dart' show GalleryGridItem;
 
 /// Tuple of soft-deleted files plus a map of id -> deleted_at millis. We
@@ -129,7 +128,9 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
     );
     if (confirm != true) return;
 
-    final tempDir = await getTemporaryDirectory();
+    // Cloud + DB purge, then route cache wipe through
+    // CacheManagerService.invalidateFile so its ChangeNotifier fires and
+    // the Settings cache-size tile updates immediately after this action.
     for (final f in picked) {
       try {
         if (f.cloudId != null) await CloudService().deleteFile(f.cloudId!);
@@ -142,20 +143,11 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
       try {
         await DatabaseService().permanentlyDeleteFile(f.id);
       } catch (_) {}
-
-      final artifacts = <File>[
-        if (f.cloudId != null) File('${tempDir.path}/thumb_${f.cloudId}.jpg'),
-        if (f.cloudId != null)
-          File('${tempDir.path}/${f.cloudId}_decrypted.jpg'),
-        File('${tempDir.path}/${f.id}_decrypted.mp4'),
-        File('${tempDir.path}/${f.id}_thumb.jpg'),
-        File('${tempDir.path}/${f.id}.cnest_decrypted'),
-      ];
-      for (final a in artifacts) {
-        try {
-          if (await a.exists()) await a.delete();
-        } catch (_) {}
-      }
+      await CacheManagerService().invalidateFile(
+        fileId: f.id,
+        cloudId: f.cloudId,
+        thumbnailCloudId: f.thumbnailCloudId,
+      );
     }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -284,7 +276,22 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
         final daysLeft = _daysLeft(file, snap.deletedAtById);
         return GestureDetector(
           onTap: () {
-            if (_selectionMode) _toggleSelected(file.id);
+            if (_selectionMode) {
+              _toggleSelected(file.id);
+              return;
+            }
+            // Open the standard viewer with the whole bin as the pageview
+            // source, starting at this tile. Restoration + hard-delete
+            // still route through this screen — the viewer is read-only
+            // for Recycle Bin entries.
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ImageViewerScreen(
+                  files: files,
+                  initialIndex: index,
+                ),
+              ),
+            );
           },
           onLongPress: () => _enterSelection(file.id),
           child: Stack(

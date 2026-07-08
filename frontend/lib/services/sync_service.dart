@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'auto_sync_service.dart';
+import 'auto_sync_worker.dart';
+import 'cache_manager_service.dart';
 import 'cloud/cloud_service.dart';
 import 'database_service.dart';
 
@@ -51,14 +53,25 @@ class SyncService {
 
       _lastSyncTime = DateTime.now();
 
-      // 5. If auto-sync is enabled, upload new gallery photos (foreground)
-      final prefs = await SharedPreferences.getInstance();
-      if (prefs.getBool('auto_sync_enabled') == true) {
+      // 5. If auto-sync is enabled in any mode, upload new gallery photos
+      //    on this foreground pass. `background` mode also gets the same
+      //    treatment — the periodic worker handles app-closed intervals,
+      //    but running here too shortens the window between "you took a
+      //    photo" and "it's in the vault" when the app is already open.
+      final mode = await AutoSyncScheduler.readMode();
+      if (mode != AutoSyncMode.off) {
         await AutoSyncService().runFullSync();
       }
 
       // 6. Notify all subscribed screens
       syncNotifier.value++;
+
+      // 7. Enforce the cache cap. Every sync surfaces fresh thumbnails and
+      //    (for pull-to-refresh in the viewer) decrypted plaintext — without
+      //    a periodic sweep here, the cap only fires on app boot and when
+      //    the user manually taps Save & Apply in Settings. Fire-and-forget:
+      //    the sweep is best-effort and shouldn't block the caller.
+      unawaited(CacheManagerService().enforceCacheLimit());
     } catch (e) {
       debugPrint('SyncService error: $e');
     } finally {

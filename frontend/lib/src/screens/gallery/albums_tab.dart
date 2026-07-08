@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:photo_manager/photo_manager.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../config/routes.dart';
@@ -25,12 +26,17 @@ class _AlbumsTabState extends State<AlbumsTab> {
   void initState() {
     super.initState();
     SyncService().syncNotifier.addListener(_reload);
+    // Rebuild album covers when files are added, deleted, or restored —
+    // getAlbumCoverFile now filters is_deleted and falls back to the next
+    // non-deleted file automatically.
+    DatabaseService().addListener(_reload);
     _reload();
   }
 
   @override
   void dispose() {
     SyncService().syncNotifier.removeListener(_reload);
+    DatabaseService().removeListener(_reload);
     super.dispose();
   }
 
@@ -175,6 +181,29 @@ class _AlbumCardState extends State<_AlbumCard> {
     final coverFile =
         await DatabaseService().getAlbumCoverFile(widget.album);
     if (coverFile == null) return;
+
+    // MediaStore path first: if the file was ingested with an assetId
+    // (auto-sync + manual upload with the S19 resolver), we can pull the
+    // OS-generated thumbnail bytes without writing anything to our own
+    // cache directory. Zero new bytes on disk, instant paint. This is
+    // what removes the "browsing Albums grows the cache" symptom.
+    if (coverFile.assetId != null) {
+      try {
+        final asset = await AssetEntity.fromId(coverFile.assetId!);
+        if (asset != null) {
+          final thumb =
+              await asset.thumbnailDataWithSize(const ThumbnailSize(300, 300));
+          if (thumb != null && mounted) {
+            setState(() => _coverBytes = thumb);
+            return;
+          }
+        }
+      } catch (e) {
+        // Fall through to the encrypted-cache path below. The MediaStore
+        // entry may have been deleted or moved since we ingested it.
+        debugPrint('Album cover MediaStore lookup failed: $e');
+      }
+    }
 
     final targetId = coverFile.thumbnailCloudId ?? coverFile.cloudId;
     if (targetId == null) return;

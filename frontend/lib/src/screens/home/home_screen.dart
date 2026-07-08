@@ -5,8 +5,9 @@ import '../../widgets/theme_icon.dart';
 import 'package:uuid/uuid.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart'; 
 import 'package:printing/printing.dart';
-import 'package:file_picker/file_picker.dart'; 
+import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:photo_manager/photo_manager.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:video_thumbnail/video_thumbnail.dart'; // NEW IMPORT
@@ -47,11 +48,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _initSession();
     SyncService().syncNotifier.addListener(_refreshStats);
+    // Any file mutation anywhere in the app (delete, upload, restore, album
+    // move, edit) bumps DatabaseService's notifier — so vault usage updates
+    // in place instead of only refreshing on cold start or after a full
+    // sync round-trip. Also covers "user was on Settings deleting files,
+    // popped back to Home, expects to see the new count immediately."
+    DatabaseService().addListener(_refreshStats);
   }
 
   @override
   void dispose() {
     SyncService().syncNotifier.removeListener(_refreshStats);
+    DatabaseService().removeListener(_refreshStats);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -59,6 +67,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      // Immediate local recompute — SQLite is fast, don't make the user
+      // wait for the cloud sync round-trip. syncNow's completion will
+      // bump the numbers again if the cloud state moved.
+      _refreshStats();
       SyncService().syncNow();
     }
   }
@@ -148,6 +160,109 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     } catch (e) {
       return null;
     }
+  }
+
+  /// Resolves a FilePicker pick to the corresponding photo_manager
+  /// AssetEntity so the vault entry ties back to the phone's gallery.
+  /// Three tiers, tried in order:
+  ///
+  ///   1. `pickedIdentifier` — on Android, file_picker exposes the
+  ///      `content://media/external/images/media/<id>` URI it opened. The
+  ///      trailing integer IS the MediaStore id photo_manager keys on, so
+  ///      `AssetEntity.fromId(id.toString())` returns the entity directly.
+  ///      Zero enumeration; ~10 ms.
+  ///
+  ///   2. Global filename scan — pull the "all photos" album (the first
+  ///      hit from `getAssetPathList` with no time filter) and walk it
+  ///      until an entry's `title` matches the picked filename. Skips the
+  ///      per-asset `await file.length()` — matching by name across the
+  ///      whole gallery is enough in practice; collisions are effectively
+  ///      zero because Android generates unique camera filenames.
+  ///
+  ///   3. Fallback — if the picker returned a direct `/storage/…` path
+  ///      we can at least store that as `localPath`, even without an
+  ///      assetId. Better than sending grid renders to the cloud.
+  Future<_GalleryAssetMatch?> _resolveGalleryAsset({
+    required String filename,
+    required int fileSize,
+    required String fallbackPath,
+    String? pickedIdentifier,
+  }) async {
+    // TIER 1 — content URI → MediaStore id.
+    if (pickedIdentifier != null) {
+      final id = _extractMediaStoreId(pickedIdentifier);
+      if (id != null) {
+        try {
+          final asset = await AssetEntity.fromId(id);
+          if (asset != null) {
+            final f = await asset.file;
+            if (f != null) {
+              return _GalleryAssetMatch(
+                assetId: asset.id,
+                localPath: f.path,
+              );
+            }
+          }
+        } catch (e) {
+          debugPrint('AssetEntity.fromId($id) failed: $e');
+        }
+      }
+    }
+
+    // TIER 2 — filename scan across the whole gallery.
+    try {
+      final perm = await PhotoManager.requestPermissionExtend();
+      if (perm.isAuth) {
+        final albums = await PhotoManager.getAssetPathList(
+          type: RequestType.common,
+        );
+        // `getAssetPathList` returns the "all photos" super-album first on
+        // Android; walking it saves the per-album iteration the old code did.
+        for (final album in albums) {
+          final count = await album.assetCountAsync;
+          if (count == 0) continue;
+          // Bump the scan width — 200 was too tight for anything not
+          // taken in the last week or so.
+          final assets = await album.getAssetListRange(
+            start: 0,
+            end: count.clamp(0, 2000),
+          );
+          for (final a in assets) {
+            if (a.title == filename) {
+              final f = await a.file;
+              if (f != null) {
+                return _GalleryAssetMatch(
+                  assetId: a.id,
+                  localPath: f.path,
+                );
+              }
+            }
+          }
+          // First (usually largest) album is enough — it's the aggregate
+          // "Recent" / "All" album on both Samsung and stock Android.
+          break;
+        }
+      }
+    } catch (e) {
+      debugPrint('_resolveGalleryAsset filename scan failed: $e');
+    }
+
+    // TIER 3 — direct-path fallback.
+    if (fallbackPath.startsWith('/storage/') ||
+        fallbackPath.startsWith('/sdcard/')) {
+      return _GalleryAssetMatch(assetId: null, localPath: fallbackPath);
+    }
+    return null;
+  }
+
+  /// Pulls the trailing numeric id out of a `content://media/...` URI.
+  /// Returns null if the URI doesn't look MediaStore-shaped.
+  String? _extractMediaStoreId(String uri) {
+    if (!uri.startsWith('content://media/')) return null;
+    final trailing = uri.split('/').last;
+    // Guard against query strings / fragments picked up by trailing.
+    final digits = RegExp(r'^\d+').firstMatch(trailing)?.group(0);
+    return digits;
   }
 
   Future<void> _handleUpload({required _UploadCategory category}) async {
@@ -260,13 +375,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // Detect if picked from local storage vs a cloud content provider
       final isLocalFile = pickedPath.startsWith('/storage/') || pickedPath.startsWith('/sdcard/');
 
+      // Try to resolve to a photo_manager AssetEntity so the vault entry
+      // ties back to the phone's gallery. Two wins: (1) smart albums like
+      // "Camera" can match by MediaStore bucket rather than filename hacks,
+      // and (2) the grid uses MediaStore thumbnails via assetId — no need
+      // to decrypt + cache a copy just to render a preview. Only relevant
+      // for media picks; other types have no MediaStore entry.
+      String? matchedAssetId;
+      String? matchedLocalPath;
+      if (isMedia) {
+        final match = await _resolveGalleryAsset(
+          filename: filename,
+          fileSize: fileSize,
+          fallbackPath: pickedPath,
+          // FilePicker fills `identifier` with the source content:// URI
+          // on Android when the picker returns a MediaStore-backed file.
+          // That URI carries the MediaStore id, which is the fastest and
+          // most reliable resolve path.
+          pickedIdentifier: pickedFile.identifier,
+        );
+        matchedAssetId = match?.assetId;
+        matchedLocalPath = match?.localPath;
+      }
+
       final newFile = CnestFile(
         id: fileId,
         filename: filename,
         sizeBytes: fileSize,
         createdAt: DateTime.now(),
         isUploaded: false,
-        localPath: isLocalFile ? pickedPath : null,
+        localPath: matchedLocalPath ?? (isLocalFile ? pickedPath : null),
+        assetId: matchedAssetId,
         type: type,
         provider: 0,
         accountId: currentEmail,
@@ -664,7 +803,14 @@ class _VaultUsageCard extends StatelessWidget {
     final docs = stats?['docs'] ?? 0;
     final audio = stats?['audio'] ?? 0;
     final other = stats?['other'] ?? 0;
-    final total = images + docs + audio + other;
+    final trashBytes = stats?['trash_bytes'] ?? 0;
+    final trashCount = stats?['trash_count'] ?? 0;
+    // Live (non-trash) usage plus trash — the honest number for what's
+    // actually costing the user's cloud quota right now. The Recycle Bin
+    // sweeper doesn't touch Drive until the 30-day TTL, so a "just deleted
+    // 6 MB" file is still on the wire.
+    final live = images + docs + audio + other;
+    final total = live + trashBytes;
     final count = stats?['total_count'] ?? 0;
 
     final segments = <_UsageSegment>[
@@ -672,6 +818,8 @@ class _VaultUsageCard extends StatelessWidget {
       _UsageSegment('Documents', docs, Colors.amber.shade400),
       _UsageSegment('Audio', audio, Colors.tealAccent.shade400),
       _UsageSegment('Other', other, Colors.pinkAccent.shade100),
+      if (trashBytes > 0)
+        _UsageSegment('Recycle Bin', trashBytes, cs.onSurface.withAlpha(90)),
     ].where((s) => s.bytes > 0).toList();
     final tokens = ThemeController().tokens;
 
@@ -716,7 +864,10 @@ class _VaultUsageCard extends StatelessWidget {
           Text(
             stats == null
                 ? 'Loading…'
-                : '$count file${count == 1 ? '' : 's'} encrypted on this account',
+                : trashCount > 0
+                    ? '$count file${count == 1 ? '' : 's'} · '
+                        '$trashCount in Recycle Bin'
+                    : '$count file${count == 1 ? '' : 's'} encrypted on this account',
             style: TextStyle(
               color: cs.onSurface.withAlpha(140),
               fontSize: 12,
@@ -773,6 +924,16 @@ class _VaultUsageCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Result of resolving a picked file against the phone's gallery — used by
+/// _handleUpload to tie manually-uploaded photos back to a MediaStore
+/// asset so smart albums and local-first thumbnails work the same as they
+/// do for auto-synced files.
+class _GalleryAssetMatch {
+  final String? assetId;
+  final String? localPath;
+  const _GalleryAssetMatch({this.assetId, this.localPath});
 }
 
 class _UsageSegment {

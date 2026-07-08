@@ -86,12 +86,23 @@ class MigrationService {
       }
     }
 
-    // Deduplicate — skip files already in the DB
-    final existingKeys = <String>{};
+    // Deduplicate — skip files already in the DB. Two independent keys are
+    // recorded per existing file:
+    //   assetId    (photo_manager's MediaStore id; stable and unique)
+    //   filename|size|day  (fallback for rows migrated before the assetId
+    //                       column was added; the extra `day` component
+    //                       keeps two IMG_20250101.jpg's at 1.2 MB from
+    //                       colliding just because they share a name+size)
+    // A candidate is skipped iff EITHER key hits.
+    final existingAssetIds = <String>{};
+    final existingFallbackKeys = <String>{};
     final images = await DatabaseService().getFilesByType(CnestFileType.image);
     final docs = await DatabaseService().getFilesByType(CnestFileType.document);
     for (final f in [...images, ...docs]) {
-      existingKeys.add('${f.filename}|${f.sizeBytes}');
+      final aid = f.assetId;
+      if (aid != null && aid.isNotEmpty) existingAssetIds.add(aid);
+      final day = f.createdAt.toIso8601String().substring(0, 10);
+      existingFallbackKeys.add('${f.filename}|${f.sizeBytes}|$day');
     }
 
     // Deduplicate within results (same file in multiple albums)
@@ -103,13 +114,18 @@ class MigrationService {
       if (seenIds.contains(asset.id)) continue;
       seenIds.add(asset.id);
 
+      // Fast path: MediaStore id already matches a stored vault file.
+      if (existingAssetIds.contains(asset.id)) continue;
+
       final file = await asset.file;
       if (file == null) continue;
 
       final name = asset.title ?? file.path.split('/').last;
       final size = await file.length();
+      final day = asset.createDateTime.toIso8601String().substring(0, 10);
+      final fallbackKey = '$name|$size|$day';
 
-      if (!existingKeys.contains('$name|$size')) {
+      if (!existingFallbackKeys.contains(fallbackKey)) {
         unsynced.add(asset);
         totalBytes += size;
       }
@@ -135,7 +151,14 @@ class MigrationService {
     final email = CloudService().currentEmail;
     if (email == null) {
       _isRunning = false;
-      return MigrationResult(synced: 0, failed: 0, skipped: 0);
+      // Not a silent no-op any more — this only fires when a cloud
+      // reconnect is needed. Screen catches the exception and can route
+      // to reconnect / show a friendly error.
+      debugPrint('MigrationService.runMigration: no active cloud account');
+      throw StateError(
+        'Migration cannot start: no active cloud account. '
+        'Reconnect from Settings and try again.',
+      );
     }
 
     int synced = 0;
@@ -261,7 +284,9 @@ class MigrationService {
       }
     }
 
-    // Create DB record — store gallery path for local-first loading
+    // Create DB record — store gallery path for local-first loading and
+    // MediaStore asset id so the next migration scan can dedupe by it
+    // (fixes the collision on IMG_*.jpg-with-same-size we had before).
     final newFile = CnestFile(
       id: fileId,
       filename: filename,
@@ -269,6 +294,7 @@ class MigrationService {
       createdAt: asset.createDateTime,
       isUploaded: false,
       localPath: file.path,
+      assetId: asset.id,
       type: isImage ? CnestFileType.image : CnestFileType.document,
       provider: 0,
       accountId: email,

@@ -5,10 +5,7 @@ import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/auto_sync_service.dart';
-import '../../../services/cloud/cloud_service.dart';
 import '../../../services/sync_service.dart';
-import 'dart:io';
-import 'package:path_provider/path_provider.dart';
 import 'pictures_tab.dart';
 import 'image_viewer_screen.dart';
 
@@ -27,14 +24,23 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   @override
   void initState() {
     super.initState();
-    SyncService().syncNotifier.addListener(_reload);
+    SyncService().syncNotifier.addListener(_onNotify);
+    // Rebuild the album's file grid when any file is deleted or restored
+    // anywhere in the app (e.g. from Gallery view). getFilesForAlbum now
+    // filters is_deleted so the removed row drops out automatically.
+    DatabaseService().addListener(_onNotify);
     _reload();
   }
 
   @override
   void dispose() {
-    SyncService().syncNotifier.removeListener(_reload);
+    SyncService().syncNotifier.removeListener(_onNotify);
+    DatabaseService().removeListener(_onNotify);
     super.dispose();
+  }
+
+  void _onNotify() {
+    if (mounted) _reload();
   }
 
   Future<void> _reload() async {
@@ -90,8 +96,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Delete Photo?'),
-        content: const Text('This will permanently delete the file from your vault.'),
+        title: const Text('Move to Recycle Bin?'),
+        content: const Text(
+          'The photo will be hidden here and everywhere else in the vault. '
+          'You can restore it from Recycle Bin for the next 30 days.',
+        ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -104,29 +113,21 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     );
     if (confirm != true) return;
 
+    // Soft-delete only. The cloud blob survives so Recycle Bin can restore
+    // instantly; the 30-day sweeper (recycle_bin_service.dart) is what
+    // eventually purges the ciphertext. DatabaseService.deleteFile also
+    // wipes the local cache and bumps notifyListeners, so this screen
+    // rebuilds without a pull-to-refresh.
     try {
-      if (file.cloudId != null) await CloudService().deleteFile(file.cloudId!);
-      if (file.thumbnailCloudId != null) {
-        await CloudService().deleteFile(file.thumbnailCloudId!);
-      }
       await DatabaseService().deleteFile(file.id);
       AutoSyncService.trackDeletion(file.filename, file.sizeBytes);
       DatabaseBackupService().scheduleBackup();
 
-      final tempDir = await getTemporaryDirectory();
-      for (final path in [
-        '${tempDir.path}/thumb_${file.cloudId}.jpg',
-        '${tempDir.path}/${file.cloudId}_decrypted.jpg',
-        '${tempDir.path}/${file.id}_decrypted.mp4',
-      ]) {
-        final f = File(path);
-        if (await f.exists()) await f.delete();
-      }
-
       _reload();
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Photo deleted')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Moved to Recycle Bin')),
+        );
       }
     } catch (e) {
       if (mounted) {

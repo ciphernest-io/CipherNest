@@ -53,6 +53,21 @@ class VideoStreamingServer {
   int? _port;
   final Map<String, _StreamingSession> _sessions = {};
 
+  /// Maximum plaintext bytes returned in a single HTTP response, regardless
+  /// of how much the client requested. When ExoPlayer opens the URL it sends
+  /// `Range: bytes=0-`, which the pre-fix code interpreted as "download the
+  /// entire remaining file, decrypt it, then respond." For a 100 MB video on
+  /// a typical mobile connection that's 10+ seconds of wall-clock silence,
+  /// well beyond the player's initial-response timeout — hence the "video
+  /// loads for ages, then errors out" symptom.
+  ///
+  /// Capping to 2 MB (4 × 512 KB chunks) means the first response arrives
+  /// in ~200 ms on a 10 MB/s link. HTTP allows the server to reply with a
+  /// smaller range than requested via `Content-Range: bytes X-Y/total`; the
+  /// player just issues follow-up range requests as it plays — which is
+  /// exactly how chunked streaming is supposed to work.
+  static const int _maxResponseBytes = 4 * EncryptionService.plaintextChunkSize;
+
   /// Starts the server (idempotent). Returns the bound port.
   Future<int> start() async {
     if (_server != null && _port != null) return _port!;
@@ -98,10 +113,17 @@ class VideoStreamingServer {
 
     // Download just the header (64 bytes is enough; we use a slightly larger
     // window to be safe against unusual encrypted-key sizes).
+    final headerStart = DateTime.now();
     final headerBytes = await CloudService().downloadRange(
       file.cloudId!,
       0,
       EncryptionService.headerSize - 1,
+    );
+    final headerElapsed = DateTime.now().difference(headerStart).inMilliseconds;
+    debugPrint(
+      'VideoStreamingServer beginSession ${file.id}: '
+      'header fetched in ${headerElapsed}ms '
+      '(${plaintextSize ~/ 1024 ~/ 1024} MB video, $totalChunks chunks)',
     );
     final fileKey = await EncryptionService.decryptFileKeyFromHeader(headerBytes);
 
@@ -165,8 +187,18 @@ class VideoStreamingServer {
       );
     }
 
+    // Cap the response size. HTTP allows the server to return less than the
+    // requested range — the client follows up with more range requests as it
+    // needs more bytes. Without this, ExoPlayer's initial `bytes=0-` request
+    // triggers a full-file download-and-decrypt before the first byte lands.
+    final requestedLen = rangeEnd - rangeStart + 1;
+    if (requestedLen > _maxResponseBytes) {
+      rangeEnd = rangeStart + _maxResponseBytes - 1;
+      isPartial = true;
+    }
+
     final headers = <String, String>{
-      'Content-Type': 'video/mp4',
+      'Content-Type': _contentTypeForFilename(session.file.filename),
       'Accept-Ranges': 'bytes',
       'Content-Length': '${rangeEnd - rangeStart + 1}',
     };
@@ -178,16 +210,51 @@ class VideoStreamingServer {
       return Response(isPartial ? 206 : 200, headers: headers);
     }
 
+    final started = DateTime.now();
     try {
       final bytes = await _serveRange(session, rangeStart, rangeEnd);
+      final elapsed = DateTime.now().difference(started).inMilliseconds;
+      debugPrint(
+        'VideoStreamingServer served $fileId bytes $rangeStart-$rangeEnd '
+        '(${bytes.length} B) in ${elapsed}ms',
+      );
       return Response(
         isPartial ? 206 : 200,
         body: bytes,
         headers: headers,
       );
-    } catch (e) {
-      debugPrint('VideoStreamingServer range error: $e');
+    } catch (e, st) {
+      debugPrint('VideoStreamingServer range error for $fileId '
+          'bytes $rangeStart-$rangeEnd: $e\n$st');
       return Response.internalServerError(body: 'Range fetch failed: $e');
+    }
+  }
+
+  /// Best-effort MIME type from filename extension. Serving `video/mp4` for
+  /// every video (as the pre-fix code did) confuses ExoPlayer when the
+  /// underlying container is actually `.mov`, `.mkv`, or `.webm` — the parser
+  /// sees the wrong magic bytes at offset 0 and gives up.
+  String _contentTypeForFilename(String filename) {
+    final dot = filename.lastIndexOf('.');
+    final ext = dot < 0 ? '' : filename.substring(dot + 1).toLowerCase();
+    switch (ext) {
+      case 'mp4':
+      case 'm4v':
+        return 'video/mp4';
+      case 'mov':
+        return 'video/quicktime';
+      case 'mkv':
+        return 'video/x-matroska';
+      case 'webm':
+        return 'video/webm';
+      case 'avi':
+        return 'video/x-msvideo';
+      case '3gp':
+        return 'video/3gpp';
+      default:
+        // Unknown extension — let the player sniff. `application/octet-stream`
+        // is safer than misidentifying as mp4.
+        return 'application/octet-stream';
     }
   }
 

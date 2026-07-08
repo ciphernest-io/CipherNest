@@ -1,21 +1,29 @@
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import '../src/models/file_model.dart';
 import '../src/models/album_model.dart';
 import '../src/models/share_model.dart';
+import 'cache_manager_service.dart';
 import 'cloud/account_registry.dart';
 
-class DatabaseService {
+/// [DatabaseService] extends [ChangeNotifier] so screens can rebuild in-place
+/// when files are added, deleted, restored, or moved between albums. Every
+/// mutating write ends with [notifyListeners]; every list-rendering screen
+/// subscribes with [addListener] in initState and unsubscribes in dispose.
+/// This kills the pull-to-refresh requirement after a delete.
+class DatabaseService extends ChangeNotifier {
   static final DatabaseService _instance = DatabaseService._internal();
   factory DatabaseService() => _instance;
   DatabaseService._internal();
 
   Database? _database;
-  String? _currentAccountId; 
+  String? _currentAccountId;
 
   void setCurrentAccount(String email) {
     _currentAccountId = email;
+    notifyListeners();
   }
 
   Future<Database> get database async {
@@ -199,6 +207,7 @@ class DatabaseService {
       fileWithAccount.toMap(),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    notifyListeners();
   }
 
   Future<void> markAsUploaded(String id, String cloudId, String? thumbId) async {
@@ -213,6 +222,7 @@ class DatabaseService {
       where: 'id = ?',
       whereArgs: [id],
     );
+    notifyListeners();
   }
 
   /// Patches the size of an existing row. Used after the in-app editor
@@ -226,14 +236,27 @@ class DatabaseService {
       where: 'id = ?',
       whereArgs: [id],
     );
+    notifyListeners();
   }
 
   /// Soft-delete: hides the row from every gallery query and stamps the
   /// deletion time so the Recycle Bin can show "X days left" and the sweep
   /// can purge it after the TTL. The encrypted cloud blob is left alone so
   /// restores are instant and offline.
+  ///
+  /// Additionally: wipes the decrypted-cache artifacts for this file so the
+  /// grid stops rendering its thumbnail instantly, and bumps [notifyListeners]
+  /// so every subscribed screen re-queries in place (no pull-to-refresh
+  /// required).
   Future<void> deleteFile(String id) async {
     final db = await database;
+    final rows = await db.query(
+      'files',
+      columns: ['cloud_id', 'thumbnail_cloud_id'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
     await db.update(
       'files',
       {
@@ -243,6 +266,14 @@ class DatabaseService {
       where: 'id = ?',
       whereArgs: [id],
     );
+    if (rows.isNotEmpty) {
+      await CacheManagerService().invalidateFile(
+        fileId: id,
+        cloudId: rows.first['cloud_id'] as String?,
+        thumbnailCloudId: rows.first['thumbnail_cloud_id'] as String?,
+      );
+    }
+    notifyListeners();
   }
 
   /// Hard delete — used by the Recycle Bin "Delete forever" path and by the
@@ -251,6 +282,7 @@ class DatabaseService {
   Future<void> permanentlyDeleteFile(String id) async {
     final db = await database;
     await db.delete('files', where: 'id = ?', whereArgs: [id]);
+    notifyListeners();
   }
 
   /// Soft-deleted rows for the current account, most-recently-trashed first.
@@ -293,6 +325,7 @@ class DatabaseService {
       where: 'id = ?',
       whereArgs: [id],
     );
+    notifyListeners();
   }
 
   /// Ids of soft-deleted rows whose [deleted_at] is older than [ttl]. Used
@@ -338,6 +371,23 @@ class DatabaseService {
       where: 'id = ?',
       whereArgs: [id],
     );
+    notifyListeners();
+  }
+
+  /// Patches the "captured" timestamp — surfaced by the info sheet's Edit
+  /// affordance so users can correct a wrong date on an imported file. The
+  /// EXIF DateTimeOriginal inside the encrypted blob is not modified (that
+  /// would require re-encrypting), which is deliberate: the vault entry
+  /// wins in the app, EXIF wins if the user ever exports.
+  Future<void> updateCreatedAt(String id, DateTime captured) async {
+    final db = await database;
+    await db.update(
+      'files',
+      {'created_at': captured.millisecondsSinceEpoch},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    notifyListeners();
   }
 
   Future<List<CnestFile>> getFavorites() async {
@@ -495,11 +545,18 @@ class DatabaseService {
         'audio': 0,
         'other': 0,
         'total_count': 0,
+        'trash_bytes': 0,
+        'trash_count': 0,
       };
     }
 
+    // is_uploaded = 1 excludes files that are still mid-encrypt/mid-upload.
+    // Without this, the vault-usage card jumps to the full file size the
+    // instant the user picks it, then stays the same after upload finishes
+    // — creating the illusion that a failed upload still counts.
     final countResult = await db.rawQuery(
-      'SELECT COUNT(*) as count FROM files WHERE account_id = ? AND is_deleted = 0',
+      'SELECT COUNT(*) as count FROM files '
+      'WHERE account_id = ? AND is_deleted = 0 AND is_uploaded = 1',
       [_currentAccountId],
     );
     final count = Sqflite.firstIntValue(countResult) ?? 0;
@@ -507,7 +564,7 @@ class DatabaseService {
     final result = await db.rawQuery('''
       SELECT type, SUM(size_bytes) as total_size
       FROM files
-      WHERE account_id = ? AND is_deleted = 0
+      WHERE account_id = ? AND is_deleted = 0 AND is_uploaded = 1
       GROUP BY type
     ''', [_currentAccountId]);
 
@@ -535,12 +592,28 @@ class DatabaseService {
       }
     }
 
+    // Recycle Bin size — files that are soft-deleted but still costing
+    // Drive/OneDrive quota until the 30-day sweeper hard-deletes them.
+    // Surfaced separately so the vault-usage card can be honest about the
+    // "0 B" case when items are actually still occupying cloud storage.
+    final trashResult = await db.rawQuery(
+      'SELECT COUNT(*) as cnt, SUM(size_bytes) as bytes FROM files '
+      'WHERE account_id = ? AND is_deleted = 1 AND is_uploaded = 1',
+      [_currentAccountId],
+    );
+    final trashCount = Sqflite.firstIntValue(trashResult) ?? 0;
+    final trashBytes = (trashResult.isNotEmpty
+        ? trashResult.first['bytes'] as int?
+        : null) ?? 0;
+
     return {
       'images': imageBytes,
       'docs': docBytes,
       'audio': audioBytes,
       'other': otherBytes,
       'total_count': count,
+      'trash_bytes': trashBytes,
+      'trash_count': trashCount,
     };
   }
 
@@ -663,10 +736,14 @@ class DatabaseService {
 
     if (album.isSmart) return _smartAlbumFiles(db, album.smartQuery ?? '');
 
+    // Filter f.is_deleted = 0 so soft-deleted files stop appearing in
+    // albums after a normal Delete action. The join-table row survives
+    // (kept in case the file is restored from Recycle Bin), so this
+    // filter is the single source of truth for album membership.
     final maps = await db.rawQuery('''
       SELECT f.* FROM files f
       INNER JOIN album_files af ON af.file_id = f.id
-      WHERE af.album_id = ? AND f.account_id = ?
+      WHERE af.album_id = ? AND f.account_id = ? AND f.is_deleted = 0
       ORDER BY f.created_at DESC
     ''', [album.id, _currentAccountId]);
     return maps.map((m) => CnestFile.fromMap(m)).toList();
@@ -676,14 +753,18 @@ class DatabaseService {
     final db = await database;
     if (_currentAccountId == null) return null;
 
-    // Explicit cover set
+    // Explicit cover set — but skip it if the referenced file has been
+    // soft-deleted since the user picked it. Falls through to the "most
+    // recent non-deleted file" path below.
     if (album.coverFileId != null) {
       final rows = await db.query('files',
-          where: 'id = ?', whereArgs: [album.coverFileId], limit: 1);
+          where: 'id = ? AND is_deleted = 0',
+          whereArgs: [album.coverFileId],
+          limit: 1);
       if (rows.isNotEmpty) return CnestFile.fromMap(rows.first);
     }
 
-    // Fallback: most recent file in the album
+    // Fallback: most recent non-deleted file in the album.
     if (album.isSmart) {
       final files = await _smartAlbumFiles(db, album.smartQuery ?? '', limit: 1);
       return files.isNotEmpty ? files.first : null;
@@ -692,7 +773,7 @@ class DatabaseService {
     final maps = await db.rawQuery('''
       SELECT f.* FROM files f
       INNER JOIN album_files af ON af.file_id = f.id
-      WHERE af.album_id = ? AND f.account_id = ?
+      WHERE af.album_id = ? AND f.account_id = ? AND f.is_deleted = 0
       ORDER BY f.created_at DESC LIMIT 1
     ''', [album.id, _currentAccountId]);
     return maps.isNotEmpty ? CnestFile.fromMap(maps.first) : null;
@@ -722,15 +803,41 @@ class DatabaseService {
   }
 
   String? _smartAlbumWhere(String query) {
+    // `is_deleted = 0` filter on every branch — the pre-S19 versions of
+    // these queries returned soft-deleted files, so a photo the user had
+    // moved to the Recycle Bin still showed up in All Photos.
+    const notDeleted = 'is_deleted = 0';
     switch (query) {
       case 'all_images':
-        return 'type = 0';
+        return 'type = 0 AND $notDeleted';
       case 'camera':
-        return "type = 0 AND (LOWER(filename) LIKE '%img_%' OR LOWER(filename) LIKE '%dcim%' OR LOWER(filename) LIKE '%camera%')";
+        // Filename-based heuristic — good enough until we ingest bucket_name
+        // from photo_manager (Samsung Camera stores photos as YYYYMMDD_HHMMSS.jpg
+        // with no IMG_ prefix; the old query missed those entirely).
+        //   IMG_*   — Samsung old / Google / OnePlus / iPhone naming
+        //   PXL_*   — Pixel Camera
+        //   DSC*    — DSLRs
+        //   20YY-* / 20YYMMDD_* / 20YY_* — Samsung Camera modern naming
+        return "type = 0 AND $notDeleted AND ("
+            "LOWER(filename) LIKE 'img_%' OR "
+            "LOWER(filename) LIKE 'pxl_%' OR "
+            "LOWER(filename) LIKE 'dsc%' OR "
+            "filename LIKE '20__-__-__%' OR "
+            "filename LIKE '20______\\_%' ESCAPE '\\' OR "
+            "filename LIKE '20______-%' OR "
+            "LOWER(filename) LIKE '%dcim%' OR "
+            "LOWER(filename) LIKE '%camera%'"
+            ")";
       case 'screenshots':
-        return "type = 0 AND LOWER(filename) LIKE '%screenshot%'";
+        return "type = 0 AND $notDeleted AND LOWER(filename) LIKE '%screenshot%'";
       case 'videos':
-        return "type = 0 AND (LOWER(filename) LIKE '%.mp4' OR LOWER(filename) LIKE '%.mov' OR LOWER(filename) LIKE '%.avi' OR LOWER(filename) LIKE '%.mkv')";
+        return "type = 0 AND $notDeleted AND ("
+            "LOWER(filename) LIKE '%.mp4' OR "
+            "LOWER(filename) LIKE '%.mov' OR "
+            "LOWER(filename) LIKE '%.avi' OR "
+            "LOWER(filename) LIKE '%.mkv' OR "
+            "LOWER(filename) LIKE '%.webm'"
+            ")";
       default:
         return null;
     }
@@ -747,9 +854,13 @@ class DatabaseService {
     final minMs = yearAgo.subtract(Duration(days: dayRange)).millisecondsSinceEpoch;
     final maxMs = yearAgo.add(Duration(days: dayRange)).millisecondsSinceEpoch;
 
+    // is_deleted = 0 — soft-deleted photos must not resurface as "a year
+    // ago" memories. Without this filter, deleting an old embarrassing
+    // photo has no effect on next year's Stories tab.
     final maps = await db.query(
       'files',
-      where: 'type = 0 AND account_id = ? AND created_at BETWEEN ? AND ?',
+      where: 'type = 0 AND account_id = ? AND is_deleted = 0 '
+          'AND created_at BETWEEN ? AND ?',
       whereArgs: [_currentAccountId, minMs, maxMs],
       orderBy: 'created_at DESC',
     );
