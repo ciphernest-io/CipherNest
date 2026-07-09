@@ -402,6 +402,20 @@ class DatabaseService extends ChangeNotifier {
     return maps.map((m) => CnestFile.fromMap(m)).toList();
   }
 
+  /// Rows whose upload never completed (no cloud copy yet). When their local
+  /// source is also gone they are phantom entries: nothing to decrypt,
+  /// nothing to download. Auto-sync's healing pass re-uploads or purges them.
+  Future<List<CnestFile>> getPendingUploads() async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final maps = await db.query(
+      'files',
+      where: 'is_uploaded = 0 AND account_id = ? AND is_deleted = 0',
+      whereArgs: [_currentAccountId],
+    );
+    return maps.map((m) => CnestFile.fromMap(m)).toList();
+  }
+
   Future<List<CnestFile>> getFilesByType(CnestFileType type) async {
     final db = await database;
     if (_currentAccountId == null) return [];

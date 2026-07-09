@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -54,6 +56,12 @@ class AutoSyncService {
       DatabaseService().setCurrentAccount(account.id);
       final email = account.email;
 
+      // Heal phantom rows from interrupted past runs: rows inserted before
+      // an upload that never completed. With the gallery copy still present
+      // we can re-upload; with it gone the row is pure dead weight (broken
+      // tile in the grid, nothing recoverable behind it).
+      await _healPendingUploads(email);
+
       // Get unsynced assets
       final assets = await getUnsyncedAssets();
       if (assets.isEmpty) return AutoSyncResult(synced: 0, failed: 0, skipped: 0);
@@ -75,12 +83,16 @@ class AutoSyncService {
         onProgress?.call(synced + failed + skipped, total);
       }
 
-      // Advance watermark so next run only picks up newer photos
+      // Advance the watermark only on a clean run. Failed assets' rows are
+      // rolled back, so keeping the old watermark makes the next run rescan
+      // the same window and retry them (DB dedup skips the successes).
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(
-        'auto_sync_watermark',
-        DateTime.now().millisecondsSinceEpoch,
-      );
+      if (failed == 0) {
+        await prefs.setInt(
+          'auto_sync_watermark',
+          DateTime.now().millisecondsSinceEpoch,
+        );
+      }
       await prefs.setInt(
         'auto_sync_last_run',
         DateTime.now().millisecondsSinceEpoch,
@@ -233,48 +245,120 @@ class AutoSyncService {
     );
     await DatabaseService().addFile(newFile);
 
-    // Encrypt and upload main file
-    final mainCloudFilename = '$fileId.cnest';
-    String? mainCloudId;
+    try {
+      // Encrypt and upload main file
+      final mainCloudFilename = '$fileId.cnest';
+      String? mainCloudId;
 
-    if (isVideo) {
-      final encryptedSize = EncryptionService.calculateEncryptedSize(fileSize);
-      final encryptedStream = EncryptionService.encryptStream(file.openRead());
-      mainCloudId = await CloudService().uploadEncryptedFile(
-        filename: mainCloudFilename,
-        type: CnestFileType.image,
-        originalName: filename,
-        stream: encryptedStream,
-        size: encryptedSize,
-      );
-    } else {
-      final fileBytes = await file.readAsBytes();
-      final encrypted = await EncryptionService.encryptFile(fileBytes);
-      mainCloudId = await CloudService().uploadEncryptedFile(
-        filename: mainCloudFilename,
-        type: isImage ? CnestFileType.image : CnestFileType.document,
-        originalName: filename,
-        bytes: encrypted,
-      );
+      if (isVideo) {
+        final encryptedSize =
+            EncryptionService.calculateEncryptedSize(fileSize);
+        final encryptedStream =
+            EncryptionService.encryptStream(file.openRead());
+        mainCloudId = await CloudService().uploadEncryptedFile(
+          filename: mainCloudFilename,
+          type: CnestFileType.image,
+          originalName: filename,
+          stream: encryptedStream,
+          size: encryptedSize,
+        );
+      } else {
+        final fileBytes = await file.readAsBytes();
+        final encrypted = await EncryptionService.encryptFile(fileBytes);
+        mainCloudId = await CloudService().uploadEncryptedFile(
+          filename: mainCloudFilename,
+          type: isImage ? CnestFileType.image : CnestFileType.document,
+          originalName: filename,
+          bytes: encrypted,
+        );
+      }
+
+      if (mainCloudId == null) throw Exception('Upload failed for $filename');
+
+      // Encrypt and upload thumbnail
+      String? thumbCloudId;
+      if (thumbnailBytes != null) {
+        final encryptedThumb =
+            await EncryptionService.encryptFile(thumbnailBytes);
+        thumbCloudId = await CloudService().uploadEncryptedFile(
+          filename: '${fileId}_thumb.cnest',
+          type: CnestFileType.image,
+          bytes: encryptedThumb,
+        );
+      }
+
+      // Mark as uploaded
+      await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId);
+
+      return true;
+    } catch (e) {
+      // Roll the row back — same contract as the manual upload path. A
+      // phantom row (cloud_id NULL) renders as a broken tile once the
+      // gallery copy is deleted, and its filename|size key blocks this
+      // asset from ever being retried by the dedup scan.
+      try {
+        await DatabaseService().permanentlyDeleteFile(fileId);
+      } catch (rollbackErr) {
+        debugPrint('Auto-sync rollback failed for $filename: $rollbackErr');
+      }
+      rethrow;
     }
+  }
 
-    if (mainCloudId == null) throw Exception('Upload failed for $filename');
+  /// Rows younger than this are skipped by the healing pass — they may
+  /// belong to an upload that is in flight right now (a manual upload's row
+  /// is created with createdAt = now, moments before its upload finishes).
+  static const _pendingGraceWindow = Duration(minutes: 15);
 
-    // Encrypt and upload thumbnail
-    String? thumbCloudId;
-    if (thumbnailBytes != null) {
-      final encryptedThumb = await EncryptionService.encryptFile(thumbnailBytes);
-      thumbCloudId = await CloudService().uploadEncryptedFile(
-        filename: '${fileId}_thumb.cnest',
-        type: CnestFileType.image,
-        bytes: encryptedThumb,
-      );
+  /// Re-uploads or purges rows whose upload never completed (cloud_id NULL).
+  /// These come from pre-rollback versions of [_syncAsset] that were
+  /// interrupted mid-upload: the row masquerades as a synced photo while the
+  /// gallery copy exists, then turns into a broken tile once it's deleted.
+  Future<void> _healPendingUploads(String email) async {
+    final pending = await DatabaseService().getPendingUploads();
+    for (final row in pending) {
+      if (DateTime.now().difference(row.createdAt) < _pendingGraceWindow) {
+        continue;
+      }
+
+      AssetEntity? asset;
+      if (row.assetId != null) {
+        try {
+          asset = await AssetEntity.fromId(row.assetId!);
+        } catch (_) {
+          // MediaStore entry gone — treat like a missing local file.
+        }
+      }
+
+      if (asset != null) {
+        // Source still on device — replace the phantom with a fresh sync.
+        try {
+          await DatabaseService().permanentlyDeleteFile(row.id);
+          await _syncAsset(asset, email);
+        } catch (e) {
+          debugPrint('Heal re-upload failed for ${row.filename}: $e');
+        }
+        continue;
+      }
+
+      final localExists =
+          row.localPath != null && File(row.localPath!).existsSync();
+      if (localExists) {
+        // Local file without a MediaStore entry (rare: manual pick whose
+        // asset resolve failed). Leave it — it still renders from disk and
+        // the user can re-upload manually.
+        continue;
+      }
+
+      // Nothing on device, nothing in the cloud: pure phantom. Purge so the
+      // gallery stops showing a broken tile and the asset key stops
+      // blocking future syncs.
+      try {
+        await DatabaseService().permanentlyDeleteFile(row.id);
+      } catch (e) {
+        debugPrint('Heal purge failed for ${row.filename}: $e');
+      }
     }
-
-    // Mark as uploaded
-    await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId);
-
-    return true;
   }
 
   /// Records a file as intentionally deleted so auto-sync won't re-upload it

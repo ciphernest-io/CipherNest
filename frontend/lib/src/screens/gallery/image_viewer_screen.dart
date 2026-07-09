@@ -13,6 +13,7 @@ import 'package:printing/printing.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:video_player/video_player.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:chewie/chewie.dart';
 import '../../config/theme.dart';
 import '../../config/theme_controller.dart';
@@ -54,6 +55,16 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   // fight the user's drag.
   bool _userScrollingStrip = false;
   static final Set<String> _activeDownloads = {};
+  // Zoom state of the focused page. While zoomed, page-swipe and
+  // swipe-down-to-dismiss are disabled so drags pan the image instead.
+  bool _isZoomed = false;
+  // Swipe-up-for-details tracking: cumulative deltas of a single-finger
+  // drag. A second finger (pinch) or a zoomed image locks the sheet out
+  // for the rest of the gesture.
+  int _activePointers = 0;
+  double _dragDx = 0;
+  double _dragDy = 0;
+  bool _sheetTriggered = false;
 
   @override
   void initState() {
@@ -166,6 +177,33 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   }
 
   Future<void> _prewarmThumb(CnestFile file) async {
+    // Local videos: pre-extract a frame into the shared thumb cache while
+    // the user is still on a neighboring page — extraction takes a few
+    // hundred ms, which is exactly the filmstrip lag being hidden here.
+    final ext = file.filename.split('.').last.toLowerCase();
+    final isVideo = const {'mp4', 'mov', 'avi', 'mkv'}.contains(ext);
+    if (isVideo &&
+        file.cloudId != null &&
+        file.localPath != null &&
+        File(file.localPath!).existsSync()) {
+      try {
+        final cacheDir = await getTemporaryDirectory();
+        final thumbFile = File('${cacheDir.path}/thumb_${file.cloudId}.jpg');
+        if (!await thumbFile.exists()) {
+          final bytes = await VideoThumbnail.thumbnailData(
+            video: file.localPath!,
+            imageFormat: ImageFormat.JPEG,
+            maxWidth: 300,
+            quality: 60,
+          );
+          if (bytes != null) await thumbFile.writeAsBytes(bytes);
+        }
+      } catch (_) {
+        // Best-effort prewarm.
+      }
+      return;
+    }
+
     // MediaStore thumbs are served from Android's cache, so just touching the
     // API warms the path. Skip the actual byte copy here — Filmstrip and the
     // viewer placeholder will request them lazily.
@@ -577,6 +615,14 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   Future<void> _printCurrent() async {
     if (_currentFiles.isEmpty) return;
     final messenger = ScaffoldMessenger.of(context);
+    // Video bytes can't be laid out as a PDF image — same "Invalid image
+    // data" failure as the thumbnail path.
+    if (_currentIsVideo) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text("Videos can't be printed")),
+      );
+      return;
+    }
     try {
       final bytes = await _currentImageBytes();
       if (bytes == null) throw Exception('Could not load image');
@@ -800,7 +846,19 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                       ),
                       const PopupMenuItem(value: 'print', child: Text('Print')),
                     ],
-                    onSelected: (val) {},
+                    onSelected: (val) {
+                      switch (val) {
+                        case 'copy':
+                          _copyToClipboard();
+                          break;
+                        case 'wall':
+                          _setAsWallpaper();
+                          break;
+                        case 'print':
+                          _printCurrent();
+                          break;
+                      }
+                    },
                   ),
                 ],
               )
@@ -822,26 +880,61 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                   bottom: 0,
                   right: photoRightPadding,
                   child: Listener(
+                    onPointerDown: (_) {
+                      _activePointers++;
+                      _dragDx = 0;
+                      _dragDy = 0;
+                      // Multi-touch means pinch — never the details sheet.
+                      if (_activePointers > 1) _sheetTriggered = true;
+                    },
                     onPointerMove: (event) {
-                      // Raw detection: if we move UP significantly, trigger sheet
-                      if (event.delta.dy < -10) {
+                      if (_sheetTriggered || _isZoomed || _activePointers != 1) {
+                        return;
+                      }
+                      _dragDx += event.delta.dx;
+                      _dragDy += event.delta.dy;
+                      // Deliberate swipe-up: far enough, and clearly more
+                      // vertical than horizontal.
+                      if (_dragDy < -60 && _dragDy.abs() > _dragDx.abs() * 1.5) {
+                        _sheetTriggered = true;
                         _showDetailsSheet();
                       }
+                    },
+                    onPointerUp: (_) {
+                      _activePointers = max(0, _activePointers - 1);
+                      if (_activePointers == 0) _sheetTriggered = false;
+                    },
+                    onPointerCancel: (_) {
+                      _activePointers = max(0, _activePointers - 1);
+                      if (_activePointers == 0) _sheetTriggered = false;
                     },
                     child: GestureDetector(
                       onTap: () =>
                           setState(() => _showControls = !_showControls),
                       child: Dismissible(
                         key: const Key('viewer_dismiss'),
-                        direction:
-                            DismissDirection.down, // Only swipe down to dismiss
+                        // Swipe down to dismiss — unless zoomed in, when the
+                        // drag must pan the image instead.
+                        direction: _isZoomed
+                            ? DismissDirection.none
+                            : DismissDirection.down,
                         onDismissed: (direction) =>
                             Navigator.pop(context, _hasDeleted),
                         child: PageView.builder(
                           controller: _pageController,
+                          // While zoomed, horizontal drags pan the image, not
+                          // the pager.
+                          physics: _isZoomed
+                              ? const NeverScrollableScrollPhysics()
+                              : null,
                           itemCount: _currentFiles.length,
                           onPageChanged: (index) {
-                            setState(() => _currentIndex = index);
+                            setState(() {
+                              _currentIndex = index;
+                              // New page starts unzoomed (the old page resets
+                              // its own transform on losing focus).
+                              _isZoomed = false;
+                            });
                             // FIX: Sync filmstrip when swiping main photo
                             _scrollToIndex(index);
                           },
@@ -856,6 +949,21 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                                 onLoaded: (loadedIdx) =>
                                     _handleCurrentPhotoLoaded(loadedIdx),
                                 isFocused: index == _currentIndex,
+                                onZoomChanged: (zoomed) {
+                                  if (_isZoomed == zoomed) return;
+                                  // Post-frame: the child can report during
+                                  // its didUpdateWidget, mid-build.
+                                  WidgetsBinding.instance
+                                      .addPostFrameCallback((_) {
+                                    if (!mounted || _isZoomed == zoomed) return;
+                                    setState(() => _isZoomed = zoomed);
+                                  });
+                                },
+                                onVideoPlayingChanged: (playing) {
+                                  if (playing && _showControls) {
+                                    setState(() => _showControls = false);
+                                  }
+                                },
                               ),
                             );
                           },
@@ -1026,33 +1134,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
           onPressed: _openEditor,
           color: overlayColor,
         ),
-      PopupMenuButton<String>(
-        icon: Icon(
-          themeIconData('dotsThreeVertical'),
-          color: overlayColor,
-        ),
-        onSelected: (v) {
-          switch (v) {
-            case 'copy':
-              _copyToClipboard();
-              break;
-            case 'print':
-              _printCurrent();
-              break;
-            case 'wallpaper':
-              _setAsWallpaper();
-              break;
-          }
-        },
-        // Rename lives in the info sheet's Edit button now — one place,
-        // not two. Same button also lets the user correct the captured
-        // date/time on an imported file.
-        itemBuilder: (_) => const [
-          PopupMenuItem(value: 'copy', child: Text('Copy')),
-          PopupMenuItem(value: 'print', child: Text('Print')),
-          PopupMenuItem(value: 'wallpaper', child: Text('Set as wallpaper')),
-        ],
-      ),
+      // Copy/Print/Wallpaper moved to the AppBar's overflow menu — one
+      // overflow surface, not two. Rename lives in the info sheet's Edit
+      // button for the same reason.
       IconButton(
         icon: ThemeIcon('trash'),
         onPressed: _handleDelete,
@@ -1554,6 +1638,8 @@ class _SinglePhotoView extends StatefulWidget {
   final int index;
   final Function(int) onLoaded;
   final bool isFocused;
+  final ValueChanged<bool> onZoomChanged;
+  final ValueChanged<bool> onVideoPlayingChanged;
 
   const _SinglePhotoView({
     super.key,
@@ -1561,6 +1647,8 @@ class _SinglePhotoView extends StatefulWidget {
     required this.index,
     required this.onLoaded,
     required this.isFocused,
+    required this.onZoomChanged,
+    required this.onVideoPlayingChanged,
   });
 
   @override
@@ -1573,11 +1661,11 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
   Uint8List? _thumbImage;
   // Rung 1 placeholder bytes — MediaStore thumbnail.
   Uint8List? _assetThumbBytes;
-  // Drives the cross-fade from placeholder to full image. Flipped 0 → 1 in a
-  // post-frame callback after _fullImage is set so the AnimatedOpacity actually
-  // animates instead of snapping.
-  double _fullOpacity = 0.0;
   bool _isLoadingFull = true;
+  // Nothing local, nothing cached, nothing in the cloud — a phantom entry
+  // (e.g. interrupted auto-sync upload whose gallery copy was later
+  // deleted). Renders a broken-image state instead of spinning forever.
+  bool _loadFailed = false;
   bool _isVideo = false;
 
   // Video Player State
@@ -1586,29 +1674,72 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
   bool _isPlayingVideo = false;
   bool _isBufferingVideo = false;
 
+  // One shared zoom surface for placeholder + full image, so the transform
+  // survives the cross-fade and the parent can watch the zoom level.
+  final TransformationController _zoomCtrl = TransformationController();
+  bool _lastReportedZoom = false;
+
   @override
   bool get wantKeepAlive => true;
 
   @override
   void initState() {
     super.initState();
+    _zoomCtrl.addListener(_reportZoom);
     _checkFileType();
     _loadImages();
+  }
+
+  void _reportZoom() {
+    final zoomed = _zoomCtrl.value.getMaxScaleOnAxis() > 1.01;
+    if (zoomed == _lastReportedZoom) return;
+    _lastReportedZoom = zoomed;
+    widget.onZoomChanged(zoomed);
+  }
+
+  /// Reads a previously persisted video frame from the shared thumb cache.
+  Future<Uint8List?> _cachedVideoFrame() async {
+    if (widget.file.cloudId == null) return null;
+    final dir = await getTemporaryDirectory();
+    final f = File('${dir.path}/thumb_${widget.file.cloudId}.jpg');
+    if (!await f.exists()) return null;
+    try {
+      return await f.readAsBytes();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Fire-and-forget: shares an obtained video frame with the filmstrip,
+  /// grid, and future viewer opens via the standard thumb-cache path.
+  void _persistVideoFrame(Uint8List bytes) {
+    final cloudId = widget.file.cloudId;
+    if (cloudId == null) return;
+    getTemporaryDirectory().then((dir) async {
+      try {
+        await File('${dir.path}/thumb_$cloudId.jpg').writeAsBytes(bytes);
+      } catch (_) {
+        // Best-effort cache write.
+      }
+    });
   }
 
   @override
   void didUpdateWidget(_SinglePhotoView oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    // If we just lost focus (user swiped away), pause the video
+    // If we just lost focus (user swiped away), pause the video and reset
+    // zoom so the page is pristine when the user swipes back.
     if (oldWidget.isFocused && !widget.isFocused) {
       _videoController?.pause();
+      _zoomCtrl.value = Matrix4.identity();
     }
   }
 
   // CRITICAL: Cleanup player when swiping away to free memory
   @override
   void dispose() {
+    _zoomCtrl.dispose();
     _disposeVideoPlayer();
     super.dispose();
   }
@@ -1678,7 +1809,6 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
             _fullImage = bytes;
             _isLoadingFull = false;
           });
-          _triggerCrossFade();
           widget.onLoaded(widget.index);
         }
         return;
@@ -1705,33 +1835,47 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
           _fullImage = bytes;
           _isLoadingFull = false;
         });
-        _triggerCrossFade();
         widget.onLoaded(widget.index);
       }
       return;
     }
 
-    if (widget.file.cloudId != null) {
-      try {
-        final encryptedBytes = await CloudService().downloadFile(
-          widget.file.cloudId!,
-        );
-        if (!mounted) return;
-        final decryptedBytes = await EncryptionService.decryptFile(
-          encryptedBytes,
-        );
-        await fullFile.writeAsBytes(decryptedBytes);
+    if (widget.file.cloudId == null) {
+      // Phantom entry — no local copy (checked above), nothing cached, and
+      // the upload never completed. Nothing exists to show; ending the
+      // spinner here is what prevents the infinite loader.
+      if (mounted) {
+        setState(() {
+          _isLoadingFull = false;
+          _loadFailed = true;
+        });
+      }
+      return;
+    }
 
-        if (mounted) {
-          setState(() {
-            _fullImage = decryptedBytes;
-            _isLoadingFull = false;
-          });
-          _triggerCrossFade();
-          widget.onLoaded(widget.index);
-        }
-      } catch (e) {
-        if (mounted) setState(() => _isLoadingFull = false);
+    try {
+      final encryptedBytes = await CloudService().downloadFile(
+        widget.file.cloudId!,
+      );
+      if (!mounted) return;
+      final decryptedBytes = await EncryptionService.decryptFile(
+        encryptedBytes,
+      );
+      await fullFile.writeAsBytes(decryptedBytes);
+
+      if (mounted) {
+        setState(() {
+          _fullImage = decryptedBytes;
+          _isLoadingFull = false;
+        });
+        widget.onLoaded(widget.index);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoadingFull = false;
+          _loadFailed = true;
+        });
       }
     }
   }
@@ -1740,6 +1884,18 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
   /// rest are skipped. Rung 2 (local original) doesn't set state — build()
   /// renders it directly via Image.file when localPath exists.
   Future<void> _loadPlaceholder() async {
+    // RUNG 0 (videos only) — the shared disk thumb cache. MediaStore
+    // regenerates video thumbs lazily (slow) and frame extraction is slower
+    // still; whichever produced a frame before persisted it here, making
+    // every later open instant.
+    if (_isVideo) {
+      final cached = await _cachedVideoFrame();
+      if (cached != null) {
+        if (mounted) setState(() => _assetThumbBytes = cached);
+        return;
+      }
+    }
+
     // RUNG 1 — Android's MediaStore via photo_manager.
     if (widget.file.assetId != null) {
       try {
@@ -1749,6 +1905,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
             const ThumbnailSize(300, 300),
           );
           if (bytes != null) {
+            if (_isVideo) _persistVideoFrame(bytes);
             if (mounted) setState(() => _assetThumbBytes = bytes);
             return;
           }
@@ -1758,11 +1915,27 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
       }
     }
 
-    // RUNG 2 — local original. No state to set; the build() picks it up if
-    // localPath resolves to an existing file.
+    // RUNG 2 — local original. Images: no state to set; build() renders the
+    // file directly. Videos: the raw file is NOT decodable as an image
+    // ("Invalid image data") — extract a real frame from it instead.
     if (widget.file.localPath != null &&
         File(widget.file.localPath!).existsSync()) {
-      return;
+      if (!_isVideo) return;
+      try {
+        final bytes = await VideoThumbnail.thumbnailData(
+          video: widget.file.localPath!,
+          imageFormat: ImageFormat.JPEG,
+          maxWidth: 300,
+          quality: 60,
+        );
+        if (bytes != null) {
+          _persistVideoFrame(bytes);
+          if (mounted) setState(() => _assetThumbBytes = bytes);
+          return;
+        }
+      } catch (_) {
+        // Frame extraction failed — fall through to the cloud thumb.
+      }
     }
 
     // RUNG 3 — decrypted thumb on disk (or fetch + decrypt now).
@@ -1775,13 +1948,6 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     }
     // Fire-and-forget — when it arrives, build() picks it up.
     _downloadThumbnail(thumbFile);
-  }
-
-  void _triggerCrossFade() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      setState(() => _fullOpacity = 1.0);
-    });
   }
 
   // --- VIDEO PLAYER INITIALIZATION ---
@@ -1854,6 +2020,9 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
       _isPlayingVideo = true;
       _isBufferingVideo = false;
     });
+    // Chewie brings its own controls — tell the viewer to drop its chrome
+    // so the two control sets don't stack on top of each other.
+    widget.onVideoPlayingChanged(true);
   }
 
   @override
@@ -1879,55 +2048,71 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     return Stack(
       fit: StackFit.expand,
       children: [
-        // A. Placeholder — first rung that's ready wins.
-        if (_assetThumbBytes != null)
-          InteractiveViewer(
-            minScale: 1.0,
-            maxScale: 4.0,
-            child: Image.memory(
-              _assetThumbBytes!,
-              fit: BoxFit.contain,
-              gaplessPlayback: true,
-            ),
-          )
-        else if (hasLocal && _fullImage == null)
-          InteractiveViewer(
-            minScale: 1.0,
-            maxScale: 4.0,
-            child: Image.file(
-              localFile,
-              fit: BoxFit.contain,
-              cacheWidth: 300,
-              gaplessPlayback: true,
-            ),
-          )
-        else if (_thumbImage != null)
-          InteractiveViewer(
-            minScale: 1.0,
-            maxScale: 4.0,
-            child: Image.memory(
-              _thumbImage!,
-              fit: BoxFit.contain,
-              gaplessPlayback: true,
-            ),
-          ),
+        // A+B. One zoom surface for placeholder AND full image — separate
+        // InteractiveViewers would each carry their own transform, so the
+        // zoom level could jump when the cross-fade swaps layers. Disabled
+        // for videos: their placeholder isn't zoomable, taps go to play.
+        InteractiveViewer(
+          transformationController: _zoomCtrl,
+          panEnabled: !_isVideo,
+          scaleEnabled: !_isVideo,
+          minScale: 1.0,
+          maxScale: 4.0,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // Placeholder — first rung that's ready wins. Local originals
+              // are only decodable for images; a video's rung-2 frame is
+              // extracted in _loadPlaceholder and arrives as _assetThumbBytes.
+              if (_assetThumbBytes != null)
+                Image.memory(
+                  _assetThumbBytes!,
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                  errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                )
+              else if (hasLocal && !_isVideo)
+                // Stays in the tree even after _fullImage arrives — removing
+                // it while the full JPEG was still decoding was the black
+                // flicker on local-gallery photos.
+                Image.file(
+                  localFile,
+                  fit: BoxFit.contain,
+                  cacheWidth: 300,
+                  gaplessPlayback: true,
+                  errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                )
+              else if (_thumbImage != null)
+                Image.memory(
+                  _thumbImage!,
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                  errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                ),
 
-        // B. Full Image — cross-fades over the placeholder.
-        if (!_isVideo && _fullImage != null)
-          InteractiveViewer(
-            minScale: 1.0,
-            maxScale: 4.0,
-            child: AnimatedOpacity(
-              opacity: _fullOpacity,
-              duration: ThemeController().tokens.dur,
-              curve: ThemeController().tokens.easeOut,
-              child: Image.memory(
-                _fullImage!,
-                fit: BoxFit.contain,
-                gaplessPlayback: true,
-              ),
-            ),
+              // Full image — fades in over the placeholder only once its
+              // first frame is actually DECODED. Fading on "bytes arrived"
+              // (the old _fullOpacity flip) ran the animation while the
+              // JPEG was still decoding — nothing to paint yet.
+              if (!_isVideo && _fullImage != null)
+                Image.memory(
+                  _fullImage!,
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                  errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                  frameBuilder: (context, child, frame, wasSync) {
+                    if (wasSync) return child;
+                    return AnimatedOpacity(
+                      opacity: frame == null ? 0.0 : 1.0,
+                      duration: ThemeController().tokens.dur,
+                      curve: ThemeController().tokens.easeOut,
+                      child: child,
+                    );
+                  },
+                ),
+            ],
           ),
+        ),
 
         // C. Video Play Button (Click to start inline player)
         if (_isVideo && !_isBufferingVideo)
@@ -1954,6 +2139,22 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
         if ((!_isVideo && _isLoadingFull && _fullImage == null) ||
             _isBufferingVideo)
           const Center(child: CircularProgressIndicator(color: Colors.white)),
+
+        // E. Broken state — nothing local, nothing cached, nothing in the
+        // cloud (or the download failed). Matches the grid's broken tile.
+        if (!_isVideo &&
+            _loadFailed &&
+            _fullImage == null &&
+            _assetThumbBytes == null &&
+            _thumbImage == null &&
+            !hasLocal)
+          Center(
+            child: Icon(
+              themeIconData('imageBroken'),
+              color: Colors.white38,
+              size: 64,
+            ),
+          ),
       ],
     );
   }
@@ -1971,6 +2172,15 @@ class _FilmstripItemState extends State<_FilmstripItem> {
   Uint8List? _assetThumbBytes;
   String? _diskThumbPath;
 
+  // Thumbnail cloud-IDs currently being fetched, across all strip items —
+  // fast strip scrolling must not download the same thumb twice.
+  static final Set<String> _inflightThumbs = {};
+
+  bool get _isVideo {
+    final ext = widget.file.filename.split('.').last.toLowerCase();
+    return const {'mp4', 'mov', 'avi', 'mkv'}.contains(ext);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1978,6 +2188,19 @@ class _FilmstripItemState extends State<_FilmstripItem> {
   }
 
   Future<void> _load() async {
+    // Rung 0 (videos only) — the shared disk thumb cache, where the viewer,
+    // prewarm pass, or an earlier strip build persisted a frame. MediaStore
+    // video thumbs materialize lazily, which is why video cells used to lag
+    // behind photo cells here.
+    if (_isVideo && widget.file.cloudId != null) {
+      final cacheDir = await getTemporaryDirectory();
+      final cached = File('${cacheDir.path}/thumb_${widget.file.cloudId}.jpg');
+      if (await cached.exists()) {
+        if (mounted) setState(() => _diskThumbPath = cached.path);
+        return;
+      }
+    }
+
     // Rung 1 — MediaStore.
     if (widget.file.assetId != null) {
       try {
@@ -1994,32 +2217,90 @@ class _FilmstripItemState extends State<_FilmstripItem> {
       } catch (_) {}
     }
 
-    // Rung 2 — local original handled by build() directly.
+    // Rung 2 — local original. Images render via build() directly; videos
+    // need a real frame extracted (raw video bytes aren't an image).
     if (widget.file.localPath != null &&
         File(widget.file.localPath!).existsSync()) {
-      if (mounted) setState(() {});
-      return;
+      if (!_isVideo) {
+        if (mounted) setState(() {});
+        return;
+      }
+      try {
+        final bytes = await VideoThumbnail.thumbnailData(
+          video: widget.file.localPath!,
+          imageFormat: ImageFormat.JPEG,
+          maxWidth: 300,
+          quality: 60,
+        );
+        if (bytes != null) {
+          _persistFrame(bytes);
+          if (mounted) setState(() => _assetThumbBytes = bytes);
+          return;
+        }
+      } catch (_) {
+        // Fall through to the cloud thumb.
+      }
     }
 
-    // Rung 3 — cached decrypted thumb on disk.
+    // Rung 3 — cached decrypted thumb on disk, or fetch it now. Without the
+    // fetch, cloud-only files beyond the viewer's ±2 prewarm window render
+    // as permanent grey squares in the strip.
     if (widget.file.cloudId == null) return;
     final cacheDir = await getTemporaryDirectory();
     final f = File('${cacheDir.path}/thumb_${widget.file.cloudId}.jpg');
     if (await f.exists()) {
       if (mounted) setState(() => _diskThumbPath = f.path);
+      return;
+    }
+    await _downloadThumb(f);
+  }
+
+  /// Fire-and-forget: extraction is expensive, so share the frame with the
+  /// viewer/grid via the standard thumb-cache path. 300px so the cache entry
+  /// is also good enough as the viewer's placeholder.
+  void _persistFrame(Uint8List bytes) {
+    final cloudId = widget.file.cloudId;
+    if (cloudId == null) return;
+    getTemporaryDirectory().then((dir) async {
+      try {
+        await File('${dir.path}/thumb_$cloudId.jpg').writeAsBytes(bytes);
+      } catch (_) {
+        // Best-effort cache write.
+      }
+    });
+  }
+
+  Future<void> _downloadThumb(File target) async {
+    final thumbId = widget.file.thumbnailCloudId;
+    if (thumbId == null || _inflightThumbs.contains(thumbId)) return;
+    _inflightThumbs.add(thumbId);
+    try {
+      final encrypted = await CloudService().downloadFile(thumbId);
+      final decrypted = await EncryptionService.decryptFile(encrypted);
+      await target.writeAsBytes(decrypted);
+      if (mounted) setState(() => _diskThumbPath = target.path);
+    } catch (_) {
+      // Cell stays grey; a rebuild retries.
+    } finally {
+      _inflightThumbs.remove(thumbId);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    Widget fallback(_, _, _) => Container(color: Colors.grey[800]);
+
     if (_assetThumbBytes != null) {
       return Image.memory(
         _assetThumbBytes!,
         fit: BoxFit.cover,
         gaplessPlayback: true,
+        errorBuilder: fallback,
       );
     }
-    if (widget.file.localPath != null) {
+    // Local originals are only decodable for images — a video's frame is
+    // extracted in _load and arrives via _assetThumbBytes above.
+    if (!_isVideo && widget.file.localPath != null) {
       final f = File(widget.file.localPath!);
       if (f.existsSync()) {
         return Image.file(
@@ -2027,6 +2308,7 @@ class _FilmstripItemState extends State<_FilmstripItem> {
           fit: BoxFit.cover,
           cacheWidth: 120,
           gaplessPlayback: true,
+          errorBuilder: fallback,
         );
       }
     }
@@ -2036,6 +2318,7 @@ class _FilmstripItemState extends State<_FilmstripItem> {
         fit: BoxFit.cover,
         cacheWidth: 120,
         gaplessPlayback: true,
+        errorBuilder: fallback,
       );
     }
     return Container(color: Colors.grey[800]);

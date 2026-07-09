@@ -494,6 +494,28 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
   String? _diskThumbPath;
   bool _loading = true;
   bool _isVideo = false;
+  bool _wipedCorruptThumb = false;
+
+  /// A corrupt cached thumb (partial write, interrupted decrypt) would
+  /// otherwise error-paint forever. Delete it once and re-fetch; if the
+  /// re-fetch is corrupt too, we settle for the plain placeholder.
+  void _handleCorruptDiskThumb() {
+    if (_wipedCorruptThumb || _diskThumbPath == null) return;
+    _wipedCorruptThumb = true;
+    final path = _diskThumbPath!;
+    Future.microtask(() async {
+      try {
+        await File(path).delete();
+      } catch (_) {}
+      if (mounted) {
+        setState(() {
+          _diskThumbPath = null;
+          _loading = true;
+        });
+        _loadThumbnail();
+      }
+    });
+  }
 
   @override
   void initState() {
@@ -608,10 +630,17 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
+    Widget errorTile(_, _, _) =>
+        Container(color: cs.surfaceContainerHighest);
+
     // Rung 1 — MediaStore bytes.
     if (_assetThumbBytes != null) {
       return Stack(fit: StackFit.expand, children: [
-        Image.memory(_assetThumbBytes!, fit: BoxFit.cover),
+        Image.memory(
+          _assetThumbBytes!,
+          fit: BoxFit.cover,
+          errorBuilder: errorTile,
+        ),
         if (_isVideo) _videoOverlay(cs),
       ]);
     }
@@ -626,6 +655,7 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
             fit: BoxFit.cover,
             cacheWidth: 300,
             gaplessPlayback: true,
+            errorBuilder: errorTile,
           ),
           if (_isVideo) _videoOverlay(cs),
         ]);
@@ -640,6 +670,10 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
           fit: BoxFit.cover,
           cacheWidth: 300,
           gaplessPlayback: true,
+          errorBuilder: (context, error, stackTrace) {
+            _handleCorruptDiskThumb();
+            return errorTile(context, error, stackTrace);
+          },
         ),
         if (_isVideo) _videoOverlay(cs),
       ]);
