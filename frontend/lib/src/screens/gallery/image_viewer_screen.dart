@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -14,8 +15,6 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
-import 'package:chewie/chewie.dart';
-import '../../config/theme.dart';
 import '../../config/theme_controller.dart';
 import '../../models/file_model.dart';
 import '../../../services/cloud/cloud_service.dart';
@@ -66,6 +65,55 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   double _dragDy = 0;
   bool _sheetTriggered = false;
 
+  // --- Active-video binding, reported by the focused page. The dock uses it
+  // to render the Samsung-style pill (play/pause + time), the mute toggle,
+  // and the in-strip scrubber.
+  VideoPlayerController? _activeVideo;
+  Future<void> Function()? _activeVideoInit;
+  int? _activeVideoIndex;
+  // Samsung behavior: every video starts playing muted when you land on it.
+  bool _videoMuted = true;
+  // Tapping the centered video thumb expands it into a per-second frame
+  // strip; the bar then scrolls under a FIXED center playhead to scrub.
+  // Collapses on page change or when the scrub exits the segment.
+  bool _videoExpanded = false;
+
+  // --- Center-locked filmstrip geometry (Samsung) ---
+  // Photos are 3:4, videos 4:3 (same height, wider), the expanded video is
+  // one tile per second (capped). Slots have VARIABLE widths, so all offset
+  // math walks slot widths instead of assuming a uniform extent.
+  static const double _stripBarHeight = 56.0;
+  static const double _thumbH = 40.0;
+  static const double _photoSlot = 36.0; // 30 wide thumb + 6 margins
+  static const double _videoSlot = 59.0; // 53 wide (4:3 of 40) + 6
+  static const double _frameTileW = 44.0; // expanded per-second tile
+  static const double _vSlot = 36.0; // landscape rail: uniform slots
+  Axis _stripAxis = Axis.horizontal;
+  // Captured by the strip's LayoutBuilder each build; the offset math needs
+  // the real leading pad + viewport (pad clamps to 0 on small screens).
+  double _stripLeadPad = 0;
+  double _stripViewport = 0;
+
+  static bool _isVideoFile(CnestFile f) {
+    final ext = f.filename.split('.').last.toLowerCase();
+    return const {'mp4', 'mov', 'avi', 'mkv'}.contains(ext);
+  }
+
+  /// Samsung shows ~1 frame per second, capped (52 s video → 12 frames).
+  static int _expandedFrameCount(Duration d) =>
+      d.inSeconds.clamp(1, 12).toInt();
+
+  double _slotWidth(int index) {
+    if (_stripAxis == Axis.vertical) return _vSlot;
+    final f = _currentFiles[index];
+    if (!_isVideoFile(f)) return _photoSlot;
+    if (_videoExpanded && index == _currentIndex && _activeVideo != null) {
+      return _expandedFrameCount(_activeVideo!.value.duration) * _frameTileW +
+          6;
+    }
+    return _videoSlot;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -80,21 +128,44 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     );
   }
 
+  /// Content-x where slot [index] begins (excluding the leading pad).
+  double _slotStart(int index) {
+    double x = 0;
+    for (var i = 0; i < index; i++) {
+      x += _slotWidth(i);
+    }
+    return x;
+  }
+
+  /// Scroll offset that puts slot [index]'s center under the bar's center.
+  double _stripOffsetFor(int index) {
+    final raw = _stripLeadPad +
+        _slotStart(index) +
+        _slotWidth(index) / 2 -
+        _stripViewport / 2;
+    return max(0.0, raw);
+  }
+
+  /// Which slot's center is nearest the bar's center at scroll [offset].
+  int _indexForStripOffset(double offset) {
+    if (_currentFiles.isEmpty) return 0;
+    final centerX = offset + _stripViewport / 2 - _stripLeadPad;
+    double x = 0;
+    for (var i = 0; i < _currentFiles.length; i++) {
+      final w = _slotWidth(i);
+      if (centerX < x + w) return i;
+      x += w;
+    }
+    return _currentFiles.length - 1;
+  }
+
   void _scrollToIndex(int index) {
     if (!_filmStripController.hasClients) return;
     // While the user is driving the strip, do NOT animateTo — it would fight
     // their drag/fling and cause stuttering.
     if (_userScrollingStrip) return;
-    const itemSize = 48.0;
-    // Strip is horizontal in portrait, vertical in landscape — center it
-    // against whichever axis the user actually sees it scrolling along.
-    final size = MediaQuery.of(context).size;
-    final isLandscape = size.width > size.height;
-    final viewportExtent = isLandscape ? size.height : size.width;
-    final offset = (index * itemSize) - (viewportExtent / 2) + (itemSize / 2);
-
     _filmStripController.animateTo(
-      offset,
+      _stripOffsetFor(index),
       duration: const Duration(milliseconds: 300),
       curve: Curves.easeOut,
     );
@@ -103,21 +174,113 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   /// Reads the strip's current scroll position, finds the item closest to
   /// screen-center, and jumps the main PageView to it. Called on every
   /// ScrollUpdateNotification while the user is dragging or the strip is
-  /// settling from a fling.
+  /// settling from a fling — this is what makes scrolling the bar *change*
+  /// the displayed photo instead of just panning past it.
   void _syncMainPageFromStrip() {
     if (!_filmStripController.hasClients || !_pageController.hasClients) return;
-    const itemSize = 48.0;
-    final size = MediaQuery.of(context).size;
-    final isLandscape = size.width > size.height;
-    final viewportExtent = isLandscape ? size.height : size.width;
-    final offset = _filmStripController.offset;
-    final centerIndex =
-        ((offset + viewportExtent / 2 - itemSize / 2) / itemSize).round();
-    final clamped = centerIndex.clamp(0, _currentFiles.length - 1);
+    final clamped = _indexForStripOffset(_filmStripController.offset);
     if (clamped == _currentIndex) return;
     // jumpToPage triggers onPageChanged which updates _currentIndex, but
     // _scrollToIndex inside that callback is suppressed by _userScrollingStrip.
     _pageController.jumpToPage(clamped);
+  }
+
+  /// Strip scroll dispatch: normally it drives page selection; while a video
+  /// is EXPANDED the same drag scrubs playback under the fixed center
+  /// playhead, and exiting the segment collapses back to selection mode.
+  void _handleStripScrollUpdate() {
+    if (!_videoExpanded || _stripAxis == Axis.vertical) {
+      _syncMainPageFromStrip();
+      return;
+    }
+    final controller = _activeVideo;
+    if (controller == null || !_filmStripController.hasClients) {
+      _syncMainPageFromStrip();
+      return;
+    }
+    final centerX =
+        _filmStripController.offset + _stripViewport / 2 - _stripLeadPad;
+    final segStart = _slotStart(_currentIndex) + 3;
+    final duration = controller.value.duration;
+    final segWidth = _expandedFrameCount(duration) * _frameTileW;
+    if (centerX < segStart - 12 || centerX > segStart + segWidth + 12) {
+      // Scrubbed past the segment — collapse and let selection take over.
+      setState(() => _videoExpanded = false);
+      _syncMainPageFromStrip();
+      return;
+    }
+    if (duration <= Duration.zero) return;
+    final fraction = ((centerX - segStart) / segWidth).clamp(0.0, 1.0);
+    controller.seekTo(duration * fraction);
+  }
+
+  /// After a drag/fling settles, lock the strip onto the nearest item so the
+  /// current photo always sits exactly centered. (Not while a video is
+  /// expanded — the scrub position IS the resting position.)
+  void _snapStripToNearest() {
+    if (!_filmStripController.hasClients || _videoExpanded) return;
+    final index = _indexForStripOffset(_filmStripController.offset);
+    final target = _stripOffsetFor(index);
+    if ((target - _filmStripController.offset).abs() < 0.5) return;
+    _filmStripController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 150),
+      curve: Curves.easeOut,
+    );
+  }
+
+  /// Scroll offset that puts playback-fraction [fraction] of the expanded
+  /// segment under the fixed center playhead.
+  double _stripOffsetForVideoFraction(double fraction) {
+    final controller = _activeVideo;
+    if (controller == null) return 0;
+    final segStart = _slotStart(_currentIndex) + 3;
+    final segWidth =
+        _expandedFrameCount(controller.value.duration) * _frameTileW;
+    final raw =
+        _stripLeadPad + segStart + fraction * segWidth - _stripViewport / 2;
+    if (!_filmStripController.hasClients) return max(0.0, raw);
+    return raw.clamp(
+      0.0,
+      _filmStripController.position.maxScrollExtent,
+    );
+  }
+
+  void _expandCurrentVideo() {
+    final controller = _activeVideo;
+    if (controller == null || _videoExpanded) return;
+    setState(() => _videoExpanded = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_videoExpanded) return;
+      final duration = controller.value.duration;
+      final fraction = duration.inMilliseconds == 0
+          ? 0.0
+          : (controller.value.position.inMilliseconds /
+                  duration.inMilliseconds)
+              .clamp(0.0, 1.0);
+      if (_filmStripController.hasClients) {
+        _filmStripController.jumpTo(_stripOffsetForVideoFraction(fraction));
+      }
+    });
+  }
+
+  /// While an expanded video PLAYS, the bar glides under the fixed playhead
+  /// (Samsung: the playhead never moves; the film moves).
+  void _onActiveVideoTick() {
+    if (!mounted || !_videoExpanded || _userScrollingStrip) return;
+    final controller = _activeVideo;
+    if (controller == null || !controller.value.isPlaying) return;
+    if (!_filmStripController.hasClients) return;
+    final duration = controller.value.duration;
+    if (duration <= Duration.zero) return;
+    final fraction = (controller.value.position.inMilliseconds /
+            duration.inMilliseconds)
+        .clamp(0.0, 1.0);
+    _filmStripController.animateTo(
+      _stripOffsetForVideoFraction(fraction),
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.linear,
+    );
   }
 
   // --- PRE-FETCHING (Keep exactly as before) ---
@@ -934,6 +1097,10 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                               // New page starts unzoomed (the old page resets
                               // its own transform on losing focus).
                               _isZoomed = false;
+                              // Samsung: expansion never survives a page
+                              // change, and every video lands muted.
+                              _videoExpanded = false;
+                              _videoMuted = true;
                             });
                             // FIX: Sync filmstrip when swiping main photo
                             _scrollToIndex(index);
@@ -959,11 +1126,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                                     setState(() => _isZoomed = zoomed);
                                   });
                                 },
-                                onVideoPlayingChanged: (playing) {
-                                  if (playing && _showControls) {
-                                    setState(() => _showControls = false);
-                                  }
-                                },
+                                onVideoBinding: _onVideoBinding,
                               ),
                             );
                           },
@@ -986,29 +1149,97 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     );
   }
 
-  // ---- Portrait: filmstrip across the top of the bottom dock, action row
-  // beneath it. Identical behaviour to the original layout.
+  // ---- Portrait: (video pill row when a video is current), gallery bar,
+  // floating action bar. Only the action bar has a translucent background —
+  // the pill and the bar float directly over the photo (Samsung).
   Widget _buildPortraitControls(ThemeData theme, Color overlayColor) {
+    final tokens = ThemeController().tokens;
     return Positioned(
       bottom: 0,
       left: 0,
       right: 0,
-      child: Container(
-        color: theme.colorScheme.surface.withOpacity(0.9),
-        child: SafeArea(
-          top: false,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox(
-                height: 56,
-                child: _buildFilmstrip(axis: Axis.horizontal),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_currentIsVideo)
+              _buildVideoPillRow(overlayColor, vertical: false),
+            SizedBox(
+              height: _stripBarHeight,
+              child: Stack(
+                clipBehavior: Clip.none,
+                alignment: Alignment.center,
+                children: [
+                  Positioned.fill(
+                    child: _buildFilmstrip(axis: Axis.horizontal),
+                  ),
+                  // Fixed center playhead: in expanded mode the FILM moves,
+                  // the line doesn't (Samsung).
+                  if (_videoExpanded && _activeVideo != null)
+                    IgnorePointer(
+                      child: Container(
+                        width: 2.5,
+                        height: _thumbH + 14,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                ],
               ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+            ),
+            Container(
+              margin: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surface.withValues(alpha: 0.88),
+                borderRadius: BorderRadius.circular(tokens.rPill),
+              ),
+              child: _buildActionButtons(
+                overlayColor: overlayColor,
+                vertical: false,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ---- Landscape: 80 px right-side rail. Vertical strip is kept simple
+  // (uniform slots, no expansion) — landscape polish is post-launch scope.
+  Widget _buildLandscapeControls(ThemeData theme, Color overlayColor) {
+    final tokens = ThemeController().tokens;
+    return Positioned(
+      right: 0,
+      top: 0,
+      bottom: 0,
+      child: SizedBox(
+        width: 80,
+        child: SafeArea(
+          left: false,
+          child: Column(
+            children: [
+              if (_currentIsVideo)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: _buildVideoPillRow(overlayColor, vertical: true),
+                ),
+              Expanded(
+                child: _buildFilmstrip(axis: Axis.vertical),
+              ),
+              Container(
+                margin: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surface.withValues(alpha: 0.88),
+                  borderRadius: BorderRadius.circular(tokens.rPill),
+                ),
                 child: _buildActionButtons(
                   overlayColor: overlayColor,
-                  vertical: false,
+                  vertical: true,
                 ),
               ),
             ],
@@ -1018,85 +1249,354 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     );
   }
 
-  // ---- Landscape: 80 px right-side rail. Filmstrip scrolls vertically on
-  // top, action buttons stack below it. Both live inside SafeArea so the
-  // gesture-nav bar / display cutout don't clip them.
-  Widget _buildLandscapeControls(ThemeData theme, Color overlayColor) {
-    return Positioned(
-      right: 0,
-      top: 0,
-      bottom: 0,
-      child: SizedBox(
-        width: 80,
-        child: Container(
-          color: theme.colorScheme.surface.withOpacity(0.9),
-          child: SafeArea(
-            left: false,
-            child: Column(
-              children: [
-                Expanded(
-                  child: _buildFilmstrip(axis: Axis.vertical),
-                ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: _buildActionButtons(
-                    overlayColor: overlayColor,
-                    vertical: true,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+  // ---- Samsung-style video controls: frame-capture on the left, the
+  // play/pause + time pill centered, mute on the right. All translucent,
+  // floating straight over the photo.
+  Widget _buildVideoPillRow(Color overlayColor, {required bool vertical}) {
+    final pill = _VideoPill(
+      controller: _activeVideo,
+      vertical: vertical,
+      onPlayPause: _handlePlayPause,
+    );
+    final capture = _GlassIconButton(
+      icon: 'screenshotFrame',
+      onTap: _captureVideoFrame,
+    );
+    final mute = _GlassIconButton(
+      icon: _videoMuted ? 'speakerSlash' : 'speakerHigh',
+      onTap: _toggleMute,
+    );
+    if (vertical) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          pill,
+          const SizedBox(height: 6),
+          capture,
+          const SizedBox(height: 6),
+          mute,
+        ],
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      child: Row(
+        children: [
+          SizedBox(width: 44, child: Center(child: capture)),
+          Expanded(child: Center(child: pill)),
+          SizedBox(width: 44, child: Center(child: mute)),
+        ],
       ),
     );
   }
 
+  /// Samsung's frame-capture button: grabs the frame at the current playback
+  /// position and saves it to the vault as a new encrypted image. The
+  /// plaintext frame lives only in memory — never public storage.
+  Future<void> _captureVideoFrame() async {
+    final file = _currentFiles[_currentIndex];
+    final controller = _activeVideo;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      String? source;
+      if (file.localPath != null && File(file.localPath!).existsSync()) {
+        source = file.localPath;
+      } else {
+        // Loopback streaming URL — the extractor range-requests our server,
+        // which serves from its decrypted chunk cache.
+        source = controller?.dataSource;
+      }
+      if (source == null) throw Exception('video is still loading');
+
+      final bytes = await VideoThumbnail.thumbnailData(
+        video: source,
+        imageFormat: ImageFormat.JPEG,
+        timeMs: controller?.value.position.inMilliseconds ?? 0,
+        quality: 90,
+      );
+      if (bytes == null) throw Exception('could not extract the frame');
+
+      final saved = await ImageEditService().saveEdit(
+        source: file,
+        editedBytes: bytes,
+        replaceOriginal: false,
+        copyLabel: 'frame',
+      );
+      if (!mounted) return;
+      setState(() {
+        final insertAt = (_currentIndex + 1).clamp(0, _currentFiles.length);
+        _currentFiles.insert(insertAt, saved);
+        _hasDeleted = true; // reuse the gallery-refresh flag
+      });
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Frame saved to vault')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Capture failed: $e')));
+    }
+  }
+
+  Future<void> _handlePlayPause() async {
+    final controller = _activeVideo;
+    if (controller == null) {
+      // Not initialized yet — ask the focused page to spin up playback.
+      await _activeVideoInit?.call();
+      await _activeVideo?.setVolume(_videoMuted ? 0 : 1);
+      return;
+    }
+    final value = controller.value;
+    if (value.isPlaying) {
+      controller.pause();
+    } else {
+      if (value.duration > Duration.zero && value.position >= value.duration) {
+        await controller.seekTo(Duration.zero);
+      }
+      controller.play();
+    }
+  }
+
+  void _toggleMute() {
+    setState(() => _videoMuted = !_videoMuted);
+    _activeVideo?.setVolume(_videoMuted ? 0 : 1);
+  }
+
+  /// The focused page reports its video controller + init handler here.
+  /// (index, null, null) means that page's video is gone — only honored if
+  /// it's the page we're currently bound to, so a disposing off-screen page
+  /// can't clobber the new page's binding.
+  void _onVideoBinding(
+    int index,
+    VideoPlayerController? controller,
+    Future<void> Function()? initHandler,
+  ) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (controller == null && initHandler == null) {
+        if (_activeVideoIndex == index) {
+          _activeVideo?.removeListener(_onActiveVideoTick);
+          setState(() {
+            _activeVideo = null;
+            _activeVideoInit = null;
+            _activeVideoIndex = null;
+            _videoExpanded = false;
+          });
+        }
+        return;
+      }
+      if (index != _currentIndex) return;
+      if (identical(_activeVideo, controller) &&
+          _activeVideoInit == initHandler) {
+        return;
+      }
+      _activeVideo?.removeListener(_onActiveVideoTick);
+      setState(() {
+        _activeVideo = controller;
+        _activeVideoInit = initHandler;
+        _activeVideoIndex = index;
+      });
+      controller?.addListener(_onActiveVideoTick);
+      controller?.setVolume(_videoMuted ? 0 : 1);
+    });
+  }
+
   Widget _buildFilmstrip({required Axis axis}) {
-    return NotificationListener<ScrollNotification>(
-      onNotification: (notification) {
-        if (notification is ScrollStartNotification &&
-            notification.dragDetails != null) {
-          _userScrollingStrip = true;
-        } else if (notification is ScrollEndNotification) {
-          _userScrollingStrip = false;
-        }
-        if (notification is ScrollUpdateNotification && _userScrollingStrip) {
-          _syncMainPageFromStrip();
-        }
-        return false;
+    _stripAxis = axis;
+    // Small-element radius comes from the active theme pack (Hackerman is
+    // square, Burrow is round, etc.) — capped so tiny thumbs stay legible.
+    final double thumbRadius = min(ThemeController().tokens.rIc, 10.0);
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final viewport = axis == Axis.horizontal
+            ? constraints.maxWidth
+            : constraints.maxHeight;
+        _stripViewport = viewport;
+        final leadPad = _currentFiles.isEmpty
+            ? 0.0
+            : max(0.0, (viewport - _slotWidth(0)) / 2);
+        final trailPad = _currentFiles.isEmpty
+            ? 0.0
+            : max(0.0,
+                (viewport - _slotWidth(_currentFiles.length - 1)) / 2);
+        _stripLeadPad = leadPad;
+
+        return NotificationListener<ScrollNotification>(
+          onNotification: (notification) {
+            if (notification is ScrollStartNotification &&
+                notification.dragDetails != null) {
+              _userScrollingStrip = true;
+            } else if (notification is ScrollEndNotification) {
+              final wasUser = _userScrollingStrip;
+              _userScrollingStrip = false;
+              if (wasUser) _snapStripToNearest();
+            }
+            if (notification is ScrollUpdateNotification &&
+                _userScrollingStrip) {
+              _handleStripScrollUpdate();
+            }
+            return false;
+          },
+          child: ListView.builder(
+            controller: _filmStripController,
+            scrollDirection: axis,
+            itemCount: _currentFiles.length,
+            clipBehavior: Clip.none,
+            padding: axis == Axis.horizontal
+                ? EdgeInsets.only(left: leadPad, right: trailPad)
+                : EdgeInsets.only(top: leadPad, bottom: trailPad),
+            itemBuilder: (context, index) =>
+                _buildStripSlot(index, axis, thumbRadius),
+          ),
+        );
       },
-      child: ListView.builder(
-        controller: _filmStripController,
-        scrollDirection: axis,
-        itemCount: _currentFiles.length,
-        padding: axis == Axis.horizontal
-            ? const EdgeInsets.symmetric(horizontal: 8, vertical: 8)
-            : const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        itemBuilder: (context, index) {
-          final isSelected = index == _currentIndex;
-          return GestureDetector(
-            onTap: () => _pageController.jumpToPage(index),
-            child: Container(
-              // Match width on horizontal strip, height on vertical strip —
-              // _scrollToIndex assumes a 48 px item extent on whichever axis.
-              width: axis == Axis.horizontal ? 40 : null,
-              height: axis == Axis.vertical ? 40 : null,
-              margin: axis == Axis.horizontal
-                  ? const EdgeInsets.symmetric(horizontal: 4)
-                  : const EdgeInsets.symmetric(vertical: 4),
-              decoration: BoxDecoration(
-                border: isSelected
-                    ? Border.all(color: AppColors.primary, width: 2)
-                    : null,
-              ),
-              child: _FilmstripItem(
-                key: ValueKey(_currentFiles[index].id),
-                file: _currentFiles[index],
+    );
+  }
+
+  Widget _buildStripSlot(int index, Axis axis, double radius) {
+    final file = _currentFiles[index];
+    final isVideo = _isVideoFile(file);
+    final isSelected = index == _currentIndex;
+    final horizontal = axis == Axis.horizontal;
+    final expandedHere = horizontal &&
+        _videoExpanded &&
+        isSelected &&
+        isVideo &&
+        _activeVideo != null;
+
+    if (expandedHere) {
+      final controller = _activeVideo!;
+      final frames = _expandedFrameCount(controller.value.duration);
+      String? source;
+      if (file.localPath != null && File(file.localPath!).existsSync()) {
+        source = file.localPath;
+      } else {
+        source = controller.dataSource;
+      }
+      return SizedBox(
+        width: _slotWidth(index),
+        child: Center(
+          child: _ExpandedVideoStrip(
+            key: ValueKey('expanded_${file.id}_$frames'),
+            file: file,
+            source: source,
+            duration: controller.value.duration,
+            frameCount: frames,
+            tileWidth: _frameTileW,
+            // Slightly taller than the regular thumbs — Samsung's expanded
+            // film pops out of the row.
+            height: _thumbH + 6,
+            radius: radius,
+            onScrubFraction: (fraction) {
+              final d = controller.value.duration;
+              if (d > Duration.zero) controller.seekTo(d * fraction);
+            },
+          ),
+        ),
+      );
+    }
+
+    // Photos 3:4, videos 4:3 — same height, videos wider.
+    final double thumbW = horizontal ? (isVideo ? 53 : 30) : 27;
+    final double thumbH = horizontal ? _thumbH : 36;
+    // The centered item pops via scale so slot widths stay stable for the
+    // offset math.
+    final scale = isSelected ? 1.12 : 1.0;
+    // Unexpanded playhead: rides over the current video's small thumb while
+    // it plays, taller than the thumb (extends above and below).
+    final showInlinePlayhead =
+        horizontal && isVideo && isSelected && _activeVideo != null;
+
+    return SizedBox(
+      width: horizontal ? _slotWidth(index) : null,
+      height: horizontal ? null : _vSlot,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          if (!isSelected) {
+            _pageController.jumpToPage(index);
+            return;
+          }
+          if (isVideo) _expandCurrentVideo();
+        },
+        child: Center(
+          child: AnimatedScale(
+            duration: const Duration(milliseconds: 150),
+            curve: Curves.easeOut,
+            scale: scale,
+            child: SizedBox(
+              width: thumbW,
+              height: thumbH,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Positioned.fill(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(radius),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          _FilmstripItem(
+                            key: ValueKey(file.id),
+                            file: file,
+                          ),
+                          if (isVideo)
+                            Positioned(
+                              right: 2,
+                              bottom: 2,
+                              child: Container(
+                                width: 13,
+                                height: 13,
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.5),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Center(
+                                  child: Icon(
+                                    themeIconData('play', selected: true),
+                                    size: 9,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (showInlinePlayhead)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: ValueListenableBuilder<VideoPlayerValue>(
+                          valueListenable: _activeVideo!,
+                          builder: (_, value, _) {
+                            final total = value.duration.inMilliseconds;
+                            final fraction = total == 0
+                                ? 0.0
+                                : (value.position.inMilliseconds / total)
+                                    .clamp(0.0, 1.0);
+                            return Align(
+                              alignment: Alignment(fraction * 2 - 1, 0),
+                              child: OverflowBox(
+                                maxHeight: thumbH + 10,
+                                child: Container(
+                                  width: 2.5,
+                                  height: thumbH + 8,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(2),
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
-          );
-        },
+          ),
+        ),
       ),
     );
   }
@@ -1106,6 +1606,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     required bool vertical,
   }) {
     final fav = _currentFiles[_currentIndex].isFavorite;
+    // Samsung Gallery's order: favorite, edit, info, share, delete.
     final children = <Widget>[
       IconButton(
         icon: Icon(
@@ -1116,6 +1617,13 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         onPressed: _toggleFavorite,
         color: fav ? Colors.redAccent : overlayColor,
       ),
+      // Edit — hidden for videos to keep the row balanced.
+      if (!_currentIsVideo)
+        IconButton(
+          icon: ThemeIcon('pencilSimple'),
+          onPressed: _openEditor,
+          color: overlayColor,
+        ),
       IconButton(
         icon: ThemeIcon('info'),
         onPressed: _showDetailsSheet,
@@ -1127,14 +1635,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
             ShareDialog.show(context, _currentFiles[_currentIndex]),
         color: overlayColor,
       ),
-      // Edit — hidden for videos to keep the row balanced.
-      if (!_currentIsVideo)
-        IconButton(
-          icon: ThemeIcon('pencilSimple'),
-          onPressed: _openEditor,
-          color: overlayColor,
-        ),
-      // Copy/Print/Wallpaper moved to the AppBar's overflow menu — one
+      // Copy/Print/Wallpaper live in the AppBar's overflow menu — one
       // overflow surface, not two. Rename lives in the info sheet's Edit
       // button for the same reason.
       IconButton(
@@ -1639,7 +2140,15 @@ class _SinglePhotoView extends StatefulWidget {
   final Function(int) onLoaded;
   final bool isFocused;
   final ValueChanged<bool> onZoomChanged;
-  final ValueChanged<bool> onVideoPlayingChanged;
+
+  /// Reports this page's video controller + init handler to the screen so
+  /// the dock (pill / mute / scrubber) can drive playback. (index, null,
+  /// null) = this page's video is gone.
+  final void Function(
+    int index,
+    VideoPlayerController? controller,
+    Future<void> Function()? initHandler,
+  ) onVideoBinding;
 
   const _SinglePhotoView({
     super.key,
@@ -1648,7 +2157,7 @@ class _SinglePhotoView extends StatefulWidget {
     required this.onLoaded,
     required this.isFocused,
     required this.onZoomChanged,
-    required this.onVideoPlayingChanged,
+    required this.onVideoBinding,
   });
 
   @override
@@ -1656,7 +2165,7 @@ class _SinglePhotoView extends StatefulWidget {
 }
 
 class _SinglePhotoViewState extends State<_SinglePhotoView>
-    with AutomaticKeepAliveClientMixin {
+    with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
   Uint8List? _fullImage;
   Uint8List? _thumbImage;
   // Rung 1 placeholder bytes — MediaStore thumbnail.
@@ -1670,14 +2179,24 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
 
   // Video Player State
   VideoPlayerController? _videoController;
-  ChewieController? _chewieController;
   bool _isPlayingVideo = false;
   bool _isBufferingVideo = false;
+  // Mid-playback rebuffering (a chunk arrived late). ExoPlayer just freezes
+  // the frame; without this flag a slow chunk reads as "paused".
+  bool _isVideoStalled = false;
 
   // One shared zoom surface for placeholder + full image, so the transform
   // survives the cross-fade and the parent can watch the zoom level.
   final TransformationController _zoomCtrl = TransformationController();
   bool _lastReportedZoom = false;
+
+  // Double-tap zoom animation (Samsung: 2.5x centered on the tap point).
+  late final AnimationController _zoomAnim = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 220),
+  );
+  Animation<Matrix4>? _zoomTween;
+  TapDownDetails? _doubleTapDetails;
 
   @override
   bool get wantKeepAlive => true;
@@ -1685,16 +2204,59 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
   @override
   void initState() {
     super.initState();
-    _zoomCtrl.addListener(_reportZoom);
+    _zoomAnim.addListener(_applyZoomAnim);
     _checkFileType();
+    if (_isVideo && widget.isFocused) {
+      // Hand the dock a way to start playback before any controller exists,
+      // then autoplay muted — Samsung behavior on landing on a video.
+      widget.onVideoBinding(widget.index, null, _initializeVideo);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && widget.isFocused) unawaited(_initializeVideo());
+      });
+    }
     _loadImages();
   }
 
+  /// Reported only when a gesture/animation ENDS — reporting live from a
+  /// TransformationController listener rebuilt PageView/Dismissible
+  /// mid-pinch, which cancelled the scale gesture (the "zoom is dead" bug).
   void _reportZoom() {
     final zoomed = _zoomCtrl.value.getMaxScaleOnAxis() > 1.01;
     if (zoomed == _lastReportedZoom) return;
     _lastReportedZoom = zoomed;
     widget.onZoomChanged(zoomed);
+  }
+
+  void _applyZoomAnim() {
+    final tween = _zoomTween;
+    if (tween == null) return;
+    _zoomCtrl.value = tween.value;
+    if (_zoomAnim.isCompleted) _reportZoom();
+  }
+
+  void _animateZoomTo(Matrix4 target) {
+    _zoomTween = Matrix4Tween(begin: _zoomCtrl.value, end: target).animate(
+      CurvedAnimation(parent: _zoomAnim, curve: Curves.easeOutCubic),
+    );
+    _zoomAnim.forward(from: 0);
+  }
+
+  void _handleDoubleTap() {
+    if (_isVideo) return;
+    if (_zoomCtrl.value.getMaxScaleOnAxis() > 1.01) {
+      _animateZoomTo(Matrix4.identity());
+      return;
+    }
+    final pos = _doubleTapDetails?.localPosition;
+    if (pos == null) return;
+    const scale = 2.5;
+    // Keeps the tapped point stationary: x' = s·x − p·(s−1) equals p at x=p.
+    final target = Matrix4.identity()
+      ..setEntry(0, 0, scale)
+      ..setEntry(1, 1, scale)
+      ..setEntry(0, 3, -pos.dx * (scale - 1))
+      ..setEntry(1, 3, -pos.dy * (scale - 1));
+    _animateZoomTo(target);
   }
 
   /// Reads a previously persisted video frame from the shared thumb cache.
@@ -1728,28 +2290,51 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
   void didUpdateWidget(_SinglePhotoView oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    // If we just lost focus (user swiped away), pause the video and reset
-    // zoom so the page is pristine when the user swipes back.
+    // Lost focus (user swiped away): pause the video, reset zoom, and
+    // release the dock binding so the new page can claim it.
     if (oldWidget.isFocused && !widget.isFocused) {
       _videoController?.pause();
       _zoomCtrl.value = Matrix4.identity();
+      _reportZoom();
+      if (_isVideo) widget.onVideoBinding(widget.index, null, null);
+    }
+    // Gained focus: (re)bind this page's video to the dock and resume the
+    // muted autoplay (a fresh init or a paused controller's play()).
+    if (!oldWidget.isFocused && widget.isFocused && _isVideo) {
+      widget.onVideoBinding(widget.index, _videoController, _initializeVideo);
+      if (_videoController == null) {
+        unawaited(_initializeVideo());
+      } else {
+        _videoController!.play();
+      }
     }
   }
 
   // CRITICAL: Cleanup player when swiping away to free memory
   @override
   void dispose() {
+    _zoomAnim.dispose();
     _zoomCtrl.dispose();
     _disposeVideoPlayer();
     super.dispose();
   }
 
+  void _onVideoControllerValue() {
+    final value = _videoController?.value;
+    if (value == null) return;
+    final stalled = value.isBuffering;
+    if (stalled != _isVideoStalled && mounted) {
+      setState(() => _isVideoStalled = stalled);
+    }
+  }
+
   void _disposeVideoPlayer() {
-    _chewieController?.dispose();
+    if (_isVideo) widget.onVideoBinding(widget.index, null, null);
+    _videoController?.removeListener(_onVideoControllerValue);
     _videoController?.dispose();
-    _chewieController = null;
     _videoController = null;
     _isPlayingVideo = false;
+    _isVideoStalled = false;
     // Drop cached file key + session metadata
     VideoStreamingServer().endSession(widget.file.id);
   }
@@ -1951,33 +2536,50 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
   }
 
   // --- VIDEO PLAYER INITIALIZATION ---
+  // Raw video_player, no Chewie: all controls live in the viewer's own dock
+  // (pill + mute + in-strip scrubber) so photo and video chrome behave as
+  // one unit.
   Future<void> _initializeVideo() async {
+    if (_isBufferingVideo || _videoController != null) return;
     setState(() => _isBufferingVideo = true);
 
     try {
       // LOCAL-FIRST: if the original is on device, play it directly.
       // Zero network, zero decryption.
+      VideoPlayerController? controller;
       if (widget.file.localPath != null) {
         final localFile = File(widget.file.localPath!);
         if (await localFile.exists()) {
-          _videoController = VideoPlayerController.file(localFile);
-          await _videoController!.initialize();
-          _setupChewie();
-          return;
+          controller = VideoPlayerController.file(localFile);
         }
       }
 
       // CLOUD STREAMING: spin up local proxy server, point player at it.
       // Player issues HTTP range requests; server fetches encrypted chunks
       // on demand, decrypts only what's needed, returns plaintext slices.
-      if (widget.file.cloudId == null) throw Exception('No cloud ID');
+      if (controller == null) {
+        if (widget.file.cloudId == null) throw Exception('No cloud ID');
+        final url = await VideoStreamingServer().beginSession(widget.file);
+        if (!mounted) return;
+        controller = VideoPlayerController.networkUrl(Uri.parse(url));
+      }
 
-      final url = await VideoStreamingServer().beginSession(widget.file);
+      _videoController = controller;
+      controller.addListener(_onVideoControllerValue);
+      await controller.initialize();
       if (!mounted) return;
 
-      _videoController = VideoPlayerController.networkUrl(Uri.parse(url));
-      await _videoController!.initialize();
-      _setupChewie();
+      setState(() {
+        _isPlayingVideo = true;
+        _isBufferingVideo = false;
+      });
+      if (widget.isFocused) {
+        widget.onVideoBinding(widget.index, controller, _initializeVideo);
+      }
+      // Start silent — the parent binding applies the real mute state a
+      // frame later, and every landing is muted-by-default anyway.
+      await controller.setVolume(0);
+      await controller.play();
     } catch (e) {
       // Common failure modes:
       //   PlatformException(VideoError) — codec/container mismatch. Look at
@@ -1986,6 +2588,9 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
       //   StateError('No cloud ID') — file never finished uploading.
       // Full detail goes to debugPrint; user sees a friendlier line.
       debugPrint('Video initialize failed: $e');
+      _videoController?.removeListener(_onVideoControllerValue);
+      _videoController?.dispose();
+      _videoController = null;
       if (mounted) {
         setState(() => _isBufferingVideo = false);
         final short = e.toString().length > 100
@@ -2001,41 +2606,34 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     }
   }
 
-  void _setupChewie() {
-    if (!mounted || _videoController == null) return;
-    _chewieController = ChewieController(
-      videoPlayerController: _videoController!,
-      autoPlay: true,
-      looping: false,
-      aspectRatio: _videoController!.value.aspectRatio,
-      showControls: true,
-      materialProgressColors: ChewieProgressColors(
-        playedColor: Colors.white,
-        handleColor: Colors.white,
-        backgroundColor: Colors.grey,
-        bufferedColor: Colors.white38,
-      ),
-    );
-    setState(() {
-      _isPlayingVideo = true;
-      _isBufferingVideo = false;
-    });
-    // Chewie brings its own controls — tell the viewer to drop its chrome
-    // so the two control sets don't stack on top of each other.
-    widget.onVideoPlayingChanged(true);
-  }
-
   @override
   Widget build(BuildContext context) {
     super.build(context);
 
-    // VIDEO PLAYER MODE
-    if (_isPlayingVideo && _chewieController != null) {
-      return Center(
-        child: AspectRatio(
-          aspectRatio: _videoController!.value.aspectRatio,
-          child: Chewie(controller: _chewieController!),
-        ),
+    // VIDEO PLAYER MODE — bare VideoPlayer; every control (play/pause,
+    // time, mute, scrubber) lives in the viewer's dock, so a tap on the
+    // video toggles ALL chrome as one unit, Samsung-style.
+    if (_isPlayingVideo &&
+        _videoController != null &&
+        _videoController!.value.isInitialized) {
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          Center(
+            child: AspectRatio(
+              aspectRatio: _videoController!.value.aspectRatio,
+              child: VideoPlayer(_videoController!),
+            ),
+          ),
+          // Rebuffering overlay — the slow-chunk wait must read as
+          // "loading", never as a silent pause on a frozen frame.
+          if (_isVideoStalled)
+            const IgnorePointer(
+              child: Center(
+                child: CircularProgressIndicator(color: Colors.white),
+              ),
+            ),
+        ],
       );
     }
 
@@ -2051,14 +2649,21 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
         // A+B. One zoom surface for placeholder AND full image — separate
         // InteractiveViewers would each carry their own transform, so the
         // zoom level could jump when the cross-fade swaps layers. Disabled
-        // for videos: their placeholder isn't zoomable, taps go to play.
-        InteractiveViewer(
-          transformationController: _zoomCtrl,
-          panEnabled: !_isVideo,
-          scaleEnabled: !_isVideo,
-          minScale: 1.0,
-          maxScale: 4.0,
-          child: Stack(
+        // for videos: their placeholder isn't zoomable.
+        // Zoom is reported on interaction END (not live): a mid-pinch parent
+        // rebuild cancels the scale gesture. Double-tap = Samsung 2.5x.
+        GestureDetector(
+          onDoubleTapDown:
+              _isVideo ? null : (details) => _doubleTapDetails = details,
+          onDoubleTap: _isVideo ? null : _handleDoubleTap,
+          child: InteractiveViewer(
+            transformationController: _zoomCtrl,
+            panEnabled: !_isVideo,
+            scaleEnabled: !_isVideo,
+            minScale: 1.0,
+            maxScale: 4.0,
+            onInteractionEnd: (_) => _reportZoom(),
+            child: Stack(
             fit: StackFit.expand,
             children: [
               // Placeholder — first rung that's ready wins. Local originals
@@ -2111,29 +2716,12 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
                   },
                 ),
             ],
+            ),
           ),
         ),
 
-        // C. Video Play Button (Click to start inline player)
-        if (_isVideo && !_isBufferingVideo)
-          Center(
-            child: GestureDetector(
-              onTap: _initializeVideo,
-              child: Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
-                ),
-                child: Icon(
-                  themeIconData('play', selected: true),
-                  size: 50,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-          ),
+        // (The old giant center play button is gone — playback starts from
+        // the dock's pill, same as Samsung Gallery.)
 
         // D. Spinner (For Image or Video Buffering)
         if ((!_isVideo && _isLoadingFull && _fullImage == null) ||
@@ -2322,5 +2910,232 @@ class _FilmstripItemState extends State<_FilmstripItem> {
       );
     }
     return Container(color: Colors.grey[800]);
+  }
+}
+
+/// Samsung-style playback pill: play/pause glyph + "mm:ss / mm:ss". Without
+/// a controller (video not started) it's just the play glyph — tapping it
+/// asks the dock to initialize playback.
+class _VideoPill extends StatelessWidget {
+  final VideoPlayerController? controller;
+  final bool vertical;
+  final VoidCallback onPlayPause;
+  const _VideoPill({
+    required this.controller,
+    required this.vertical,
+    required this.onPlayPause,
+  });
+
+  static String _fmt(Duration d) {
+    final m = d.inMinutes.toString().padLeft(2, '0');
+    final s = (d.inSeconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = controller;
+    final Widget content = c == null
+        ? ThemeIcon('play', selected: true, size: 20, color: Colors.white)
+        : ValueListenableBuilder<VideoPlayerValue>(
+            valueListenable: c,
+            builder: (_, value, _) {
+              final icon = ThemeIcon(
+                value.isPlaying ? 'pause' : 'play',
+                selected: true,
+                size: 20,
+                color: Colors.white,
+              );
+              final position = Text(
+                _fmt(value.position),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: vertical ? 10 : 13,
+                  fontWeight: FontWeight.w600,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              );
+              final total = Text(
+                vertical ? _fmt(value.duration) : ' / ${_fmt(value.duration)}',
+                style: TextStyle(
+                  color: Colors.white60,
+                  fontSize: vertical ? 9 : 13,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              );
+              if (vertical) {
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [icon, const SizedBox(height: 2), position, total],
+                );
+              }
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [icon, const SizedBox(width: 8), position, total],
+              );
+            },
+          );
+
+    return GestureDetector(
+      onTap: onPlayPause,
+      child: Container(
+        padding: vertical
+            ? const EdgeInsets.symmetric(horizontal: 8, vertical: 10)
+            : const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: content,
+      ),
+    );
+  }
+}
+
+/// Round translucent icon button — mute toggle, frame capture (Samsung's
+/// circular glass buttons flanking the playback pill).
+class _GlassIconButton extends StatelessWidget {
+  final String icon;
+  final VoidCallback onTap;
+  const _GlassIconButton({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 38,
+        height: 38,
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.55),
+          shape: BoxShape.circle,
+        ),
+        child: Center(
+          child: ThemeIcon(
+            icon,
+            selected: true,
+            size: 18,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The expanded video segment inside the gallery bar: one tile per second
+/// of video (capped at 12, spread evenly across the full duration),
+/// extracted lazily and cached. Scrubbing happens by scrolling the bar under
+/// the fixed center playhead; tapping a tile seeks straight to it.
+class _ExpandedVideoStrip extends StatefulWidget {
+  final CnestFile file;
+  final String? source;
+  final Duration duration;
+  final int frameCount;
+  final double tileWidth;
+  final double height;
+  final double radius;
+  final ValueChanged<double> onScrubFraction;
+
+  const _ExpandedVideoStrip({
+    super.key,
+    required this.file,
+    required this.source,
+    required this.duration,
+    required this.frameCount,
+    required this.tileWidth,
+    required this.height,
+    required this.radius,
+    required this.onScrubFraction,
+  });
+
+  @override
+  State<_ExpandedVideoStrip> createState() => _ExpandedVideoStripState();
+}
+
+class _ExpandedVideoStripState extends State<_ExpandedVideoStrip> {
+  // Frames survive collapse/expand cycles and page swipes — extraction costs
+  // one MediaMetadataRetriever pass per frame, so never pay twice.
+  static final Map<String, List<Uint8List?>> _frameCache = {};
+  static final Set<String> _extracting = {};
+
+  String get _cacheKey => '${widget.file.id}#${widget.frameCount}';
+
+  @override
+  void initState() {
+    super.initState();
+    _ensureFrames();
+  }
+
+  Future<void> _ensureFrames() async {
+    final key = _cacheKey;
+    _frameCache.putIfAbsent(
+      key,
+      () => List<Uint8List?>.filled(widget.frameCount, null),
+    );
+    if (_extracting.contains(key)) return;
+    final source = widget.source;
+    if (source == null) return;
+    final frames = _frameCache[key]!;
+    if (!frames.contains(null)) return;
+    _extracting.add(key);
+    try {
+      final totalMs = widget.duration.inMilliseconds;
+      for (var i = 0; i < widget.frameCount; i++) {
+        if (frames[i] != null) continue;
+        try {
+          final bytes = await VideoThumbnail.thumbnailData(
+            video: source,
+            imageFormat: ImageFormat.JPEG,
+            timeMs: (totalMs * (i + 0.5) / widget.frameCount).round(),
+            maxWidth: 120,
+            quality: 50,
+          );
+          frames[i] = bytes;
+        } catch (_) {
+          // Tile stays dark; keep extracting the rest.
+        }
+        if (mounted) setState(() {});
+      }
+    } finally {
+      _extracting.remove(key);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final frames = _frameCache[_cacheKey]!;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (d) => widget.onScrubFraction(
+        (d.localPosition.dx / (widget.frameCount * widget.tileWidth))
+            .clamp(0.0, 1.0),
+      ),
+      child: SizedBox(
+        width: widget.frameCount * widget.tileWidth,
+        height: widget.height,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(widget.radius),
+          child: Row(
+            children: [
+              for (var i = 0; i < widget.frameCount; i++)
+                SizedBox(
+                  width: widget.tileWidth,
+                  height: widget.height,
+                  child: frames[i] != null
+                      ? Image.memory(
+                          frames[i]!,
+                          fit: BoxFit.cover,
+                          gaplessPlayback: true,
+                          errorBuilder: (_, _, _) =>
+                              Container(color: Colors.grey[900]),
+                        )
+                      : Container(color: Colors.grey[900]),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }

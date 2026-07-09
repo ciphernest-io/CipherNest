@@ -617,11 +617,25 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
   }
 
   Widget _videoOverlay(ColorScheme cs) {
-    return Center(
-      child: Icon(
-        themeIconData('playCircle', selected: true),
-        color: cs.onSurface.withAlpha(180),
-        size: 40,
+    // Small corner badge. A big centered play glyph reads as a tappable
+    // control and covers the thumbnail — this just *labels* it as a video.
+    return Positioned(
+      left: 5,
+      bottom: 5,
+      child: Container(
+        width: 22,
+        height: 22,
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.55),
+          shape: BoxShape.circle,
+        ),
+        child: Center(
+          child: Icon(
+            themeIconData('play', selected: true),
+            size: 13,
+            color: Colors.white,
+          ),
+        ),
       ),
     );
   }

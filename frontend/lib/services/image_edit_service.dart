@@ -33,6 +33,7 @@ class ImageEditService {
     required CnestFile source,
     required Uint8List editedBytes,
     required bool replaceOriginal,
+    String copyLabel = 'edited',
   }) async {
     // 1. Thumbnail. Same parameters auto_sync_service.dart uses.
     final thumbBytes = await FlutterImageCompress.compressWithList(
@@ -52,7 +53,7 @@ class ImageEditService {
     final fileId = replaceOriginal ? source.id : const Uuid().v4();
     final editedFilename = replaceOriginal
         ? source.filename
-        : _copyFilename(source.filename);
+        : _copyFilename(source.filename, copyLabel);
 
     // For "save as copy" we must add the DB row BEFORE upload so the row
     // exists for markAsUploaded to update. For "replace original" the row
@@ -163,11 +164,11 @@ class ImageEditService {
     }
   }
 
-  String _copyFilename(String original) {
+  String _copyFilename(String original, String label) {
     final dot = original.lastIndexOf('.');
     final stem = dot < 0 ? original : original.substring(0, dot);
-    // Edited images are always re-encoded as JPG by the editor + the thumb
-    // compressor, so force a .jpg extension regardless of source format.
-    return '$stem (edited).jpg';
+    // Copies are always re-encoded as JPG (editor output / captured video
+    // frame), so force a .jpg extension regardless of source format.
+    return '$stem ($label).jpg';
   }
 }

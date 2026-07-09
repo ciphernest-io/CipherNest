@@ -54,6 +54,8 @@ class CacheManagerService extends ChangeNotifier {
   ///   `{fileId}_decrypted.mp4`         (video plaintext is keyed by local id)
   ///   `thumb_{thumbnailCloudId}.jpg`   (only when a separate thumbnail blob
   ///                                     was uploaded to the cloud)
+  ///   `video_{cloudId}.plain`          (streaming server's plaintext chunk
+  ///                                     cache + its `.done` marker)
   ///
   /// Best-effort. A missing file is not an error. A failing delete is logged
   /// but ignored — the LRU sweep in [enforceCacheLimit] will pick it up on
@@ -74,6 +76,9 @@ class CacheManagerService extends ChangeNotifier {
           File('${tempDir.path}/${fileId}_decrypted.mp4'),
         if (thumbnailCloudId != null)
           File('${tempDir.path}/thumb_$thumbnailCloudId.jpg'),
+        if (cloudId != null) File('${tempDir.path}/video_$cloudId.plain'),
+        if (cloudId != null)
+          File('${tempDir.path}/video_$cloudId.plain.done'),
       ];
       for (final f in candidates) {
         try {

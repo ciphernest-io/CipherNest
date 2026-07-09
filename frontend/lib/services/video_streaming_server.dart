@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 
@@ -21,6 +23,26 @@ class _StreamingSession {
   final int totalChunks;
   final int lastChunkEncryptedSize;
 
+  /// On-disk plaintext chunk cache. Chunks are written at their exact
+  /// plaintext offset as they arrive, so any cached chunk is served without
+  /// a network round-trip — replays, seek-backs, and overlapping requests
+  /// cost nothing. Lives in the temp dir under the cache manager's LRU
+  /// sweep (priority 1: large plaintext, evicted first) and is wiped by
+  /// aggressive-delete via CacheManagerService.invalidateFile.
+  final File cacheFile;
+
+  /// Sidecar written once every chunk is on disk. Its presence lets the
+  /// NEXT session for this video play entirely from disk, zero network.
+  final File completeMarker;
+
+  RandomAccessFile? writeHandle;
+  final Set<int> cachedChunks = {};
+  bool complete;
+
+  /// Serializes downloads + cache writes across player requests and the
+  /// prefetcher so overlapping ranges are never downloaded twice.
+  Future<void> _fetchQueue = Future.value();
+
   _StreamingSession({
     required this.file,
     required this.fileKey,
@@ -28,7 +50,26 @@ class _StreamingSession {
     required this.encryptedSize,
     required this.totalChunks,
     required this.lastChunkEncryptedSize,
+    required this.cacheFile,
+    required this.completeMarker,
+    required this.complete,
   });
+
+  bool hasChunk(int chunkIndex) =>
+      complete || cachedChunks.contains(chunkIndex);
+
+  Future<T> enqueue<T>(Future<T> Function() action) {
+    final run = _fetchQueue.then((_) => action());
+    _fetchQueue = run.then((_) {}, onError: (_) {});
+    return run;
+  }
+
+  Future<void> dispose() async {
+    try {
+      await writeHandle?.close();
+    } catch (_) {}
+    writeHandle = null;
+  }
 
   /// Encrypted byte offset where chunk [chunkIndex] starts (0-based).
   int chunkEncryptedStart(int chunkIndex) {
@@ -68,6 +109,13 @@ class VideoStreamingServer {
   /// exactly how chunked streaming is supposed to work.
   static const int _maxResponseBytes = 4 * EncryptionService.plaintextChunkSize;
 
+  /// How many chunks the server keeps fetched AHEAD of the last-served
+  /// position (~4 MB). Without read-ahead the pipeline is purely reactive:
+  /// the player drains its buffer, asks for the next slice, and only then
+  /// does a cloud round-trip start — a visible freeze every ~2 MB of video.
+  /// With it, the player's next request is almost always a disk-cache hit.
+  static const int _prefetchChunks = 8;
+
   /// Starts the server (idempotent). Returns the bound port.
   Future<int> start() async {
     if (_server != null && _port != null) return _port!;
@@ -88,6 +136,9 @@ class VideoStreamingServer {
     await _server?.close(force: true);
     _server = null;
     _port = null;
+    for (final session in _sessions.values) {
+      await session.dispose();
+    }
     _sessions.clear();
   }
 
@@ -127,21 +178,58 @@ class VideoStreamingServer {
     );
     final fileKey = await EncryptionService.decryptFileKeyFromHeader(headerBytes);
 
-    _sessions[file.id] = _StreamingSession(
+    // Disk cache: a `.done` marker from an earlier session means the whole
+    // plaintext is already on disk — playback needs zero network. A marker
+    // whose cache file was evicted (LRU sweep) is stale; discard it.
+    final tempDir = await getTemporaryDirectory();
+    final cacheFile = File('${tempDir.path}/video_${file.cloudId}.plain');
+    final completeMarker = File('${cacheFile.path}.done');
+    bool complete = false;
+    if (await completeMarker.exists()) {
+      if (await cacheFile.exists() &&
+          await cacheFile.length() == plaintextSize) {
+        complete = true;
+      } else {
+        try {
+          await completeMarker.delete();
+        } catch (_) {}
+      }
+    }
+
+    final session = _StreamingSession(
       file: file,
       fileKey: fileKey,
       plaintextSize: plaintextSize,
       encryptedSize: encryptedSize,
       totalChunks: totalChunks,
       lastChunkEncryptedSize: lastChunkEncryptedSize,
+      cacheFile: cacheFile,
+      completeMarker: completeMarker,
+      complete: complete,
+    );
+    if (!complete) {
+      // FileMode.write truncates. Partial caches from older sessions carry
+      // no chunk map, so they can't be trusted anyway — start fresh.
+      session.writeHandle = await cacheFile.open(mode: FileMode.write);
+    }
+
+    await _sessions[file.id]?.dispose();
+    _sessions[file.id] = session;
+
+    // Warm the pipeline — the player's first request is always `bytes=0-`.
+    unawaited(
+      _ensureChunks(session, 0, math.min(_prefetchChunks, totalChunks) - 1)
+          .catchError((e) => debugPrint('VideoStreamingServer warmup: $e')),
     );
 
     return 'http://127.0.0.1:$port/${file.id}';
   }
 
-  /// Drops the cached file key for a session. Call from dispose().
+  /// Drops the cached file key for a session. Call from dispose(). The disk
+  /// cache is intentionally left behind — that's what makes replays instant.
   void endSession(String fileId) {
-    _sessions.remove(fileId);
+    final session = _sessions.remove(fileId);
+    if (session != null) unawaited(session.dispose());
   }
 
   // ---------------------------------------------------------------------------
@@ -218,6 +306,21 @@ class VideoStreamingServer {
         'VideoStreamingServer served $fileId bytes $rangeStart-$rangeEnd '
         '(${bytes.length} B) in ${elapsed}ms',
       );
+
+      // Read-ahead: keep the cache _prefetchChunks ahead of playback so the
+      // player's next request lands on disk instead of on the network.
+      final lastServedChunk =
+          rangeEnd ~/ EncryptionService.plaintextChunkSize;
+      final prefetchEnd =
+          math.min(lastServedChunk + _prefetchChunks, session.totalChunks - 1);
+      if (prefetchEnd > lastServedChunk) {
+        unawaited(
+          _ensureChunks(session, lastServedChunk + 1, prefetchEnd).catchError(
+            (e) => debugPrint('VideoStreamingServer prefetch: $e'),
+          ),
+        );
+      }
+
       return Response(
         isPartial ? 206 : 200,
         body: bytes,
@@ -258,8 +361,8 @@ class VideoStreamingServer {
     }
   }
 
-  /// Computes which encrypted chunks cover the plaintext range, downloads
-  /// them, decrypts, and returns the precise plaintext slice.
+  /// Serves a plaintext range from the disk cache, first making sure every
+  /// chunk covering it has been fetched + decrypted + written.
   Future<Uint8List> _serveRange(
     _StreamingSession session,
     int pStart,
@@ -268,32 +371,96 @@ class VideoStreamingServer {
     final chunkSize = EncryptionService.plaintextChunkSize;
     final firstChunk = pStart ~/ chunkSize;
     final lastChunk = pEnd ~/ chunkSize;
-    final chunkCount = lastChunk - firstChunk + 1;
 
-    final encryptedStart = session.chunkEncryptedStart(firstChunk);
-    final encryptedEnd =
-        session.chunkEncryptedStart(lastChunk) + session.chunkEncryptedSize(lastChunk) - 1;
+    await _ensureChunks(session, firstChunk, lastChunk);
 
-    final encryptedBytes = await CloudService().downloadRange(
-      session.file.cloudId!,
-      encryptedStart,
-      encryptedEnd,
-    );
+    final raf = await session.cacheFile.open(mode: FileMode.read);
+    try {
+      await raf.setPosition(pStart);
+      final bytes = await raf.read(pEnd - pStart + 1);
+      if (bytes.length != pEnd - pStart + 1) {
+        throw Exception(
+          'Cache short-read: got ${bytes.length} of ${pEnd - pStart + 1}',
+        );
+      }
+      return bytes;
+    } finally {
+      await raf.close();
+    }
+  }
 
-    final lastChunkEncSize = (lastChunk == session.totalChunks - 1)
-        ? session.lastChunkEncryptedSize
-        : null;
+  /// Downloads, decrypts, and persists every not-yet-cached chunk in
+  /// [first]..[last]. Serialized per session so concurrent player requests
+  /// and the prefetcher never download the same chunk twice. Contiguous
+  /// missing chunks are fetched as one cloud range request.
+  Future<void> _ensureChunks(_StreamingSession session, int first, int last) {
+    if (first > last) return Future.value();
+    return session.enqueue(() async {
+      // Collect contiguous runs of missing chunks.
+      final runs = <List<int>>[];
+      int? runStart;
+      for (int i = first; i <= last; i++) {
+        if (session.hasChunk(i)) {
+          if (runStart != null) {
+            runs.add([runStart, i - 1]);
+            runStart = null;
+          }
+        } else {
+          runStart ??= i;
+        }
+      }
+      if (runStart != null) runs.add([runStart, last]);
+      if (runs.isEmpty) return;
 
-    final plaintext = await EncryptionService.decryptChunkRange(
-      encryptedBytes,
-      session.fileKey,
-      chunkCount,
-      lastChunkEncryptedSize: lastChunkEncSize,
-    );
+      final raf = session.writeHandle;
+      if (raf == null) return; // complete cache — nothing can be missing
 
-    // Slice to exact requested range
-    final sliceStart = pStart - firstChunk * chunkSize;
-    final sliceLen = pEnd - pStart + 1;
-    return Uint8List.sublistView(plaintext, sliceStart, sliceStart + sliceLen);
+      for (final run in runs) {
+        final runFirst = run[0];
+        final runLast = run[1];
+        final encryptedStart = session.chunkEncryptedStart(runFirst);
+        final encryptedEnd = session.chunkEncryptedStart(runLast) +
+            session.chunkEncryptedSize(runLast) -
+            1;
+
+        final encryptedBytes = await CloudService().downloadRange(
+          session.file.cloudId!,
+          encryptedStart,
+          encryptedEnd,
+        );
+
+        final lastChunkEncSize = (runLast == session.totalChunks - 1)
+            ? session.lastChunkEncryptedSize
+            : null;
+
+        final plaintext = await EncryptionService.decryptChunkRange(
+          encryptedBytes,
+          session.fileKey,
+          runLast - runFirst + 1,
+          lastChunkEncryptedSize: lastChunkEncSize,
+        );
+
+        await raf.setPosition(runFirst * EncryptionService.plaintextChunkSize);
+        await raf.writeFrom(plaintext);
+        for (int i = runFirst; i <= runLast; i++) {
+          session.cachedChunks.add(i);
+        }
+      }
+      await raf.flush();
+
+      if (!session.complete &&
+          session.cachedChunks.length == session.totalChunks) {
+        session.complete = true;
+        try {
+          await session.completeMarker.writeAsBytes(const []);
+          debugPrint(
+            'VideoStreamingServer: ${session.file.id} fully cached on disk',
+          );
+        } catch (_) {
+          // Marker is an optimization; failing to write it just means the
+          // next session re-downloads.
+        }
+      }
+    });
   }
 }
