@@ -413,6 +413,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       await DatabaseService().addFile(newFile);
 
+      // Audio: the picker usually hands us a throwaway cache copy, so no
+      // durable localPath survives. Keep a plaintext copy in the private
+      // audio cache so a track uploaded from this device plays locally
+      // without a cloud round-trip. The cache GC may evict it later;
+      // playback then falls back to streaming.
+      if (type == CnestFileType.audio && fileBytes != null) {
+        final plainCopy = fileBytes;
+        final audioFileId = fileId;
+        getTemporaryDirectory().then((dir) async {
+          try {
+            await File('${dir.path}/${audioFileId}_audio.bin')
+                .writeAsBytes(plainCopy);
+          } catch (_) {
+            // Best-effort cache write.
+          }
+        });
+      }
+
       // --- 5. ENCRYPT & UPLOAD ---
       String mainCloudFilename = '$fileId.cnest';
       Future<String?> mainUploadFuture;
@@ -550,7 +568,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onTap: () => Navigator.pushNamed(context, AppRoutes.documents),
       ),
       _DashboardCard(
-        title: 'Audio',
+        title: 'Music',
         icon: 'musicNote',
         color: cs.primary,
         onTap: () => Navigator.pushNamed(context, AppRoutes.audio),

@@ -10,6 +10,7 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 
 import '../src/models/file_model.dart';
 import 'cloud/cloud_service.dart';
+import 'database_service.dart';
 import 'encryption_service.dart';
 
 /// Per-video streaming session state. Created on `beginSession`, lives until
@@ -147,6 +148,19 @@ class VideoStreamingServer {
   /// video player should connect to.
   Future<String> beginSession(CnestFile file) async {
     final port = await start();
+    await _openSession(file);
+    return 'http://127.0.0.1:$port/${file.id}';
+  }
+
+  /// URL for [file] WITHOUT opening a session — the session is created
+  /// lazily by [_route] on the first request. This is how the music queue
+  /// can hold hundreds of cloud tracks without hundreds of header fetches.
+  Future<String> urlFor(CnestFile file) async {
+    final port = await start();
+    return 'http://127.0.0.1:$port/${file.id}';
+  }
+
+  Future<_StreamingSession> _openSession(CnestFile file) async {
     if (file.cloudId == null) {
       throw Exception('File has no cloud_id, cannot stream');
     }
@@ -222,7 +236,32 @@ class VideoStreamingServer {
           .catchError((e) => debugPrint('VideoStreamingServer warmup: $e')),
     );
 
-    return 'http://127.0.0.1:$port/${file.id}';
+    return session;
+  }
+
+  /// In-flight lazy opens, so parallel range requests for the same file
+  /// don't fetch the header twice.
+  final Map<String, Future<_StreamingSession?>> _lazyOpens = {};
+
+  /// Session for [fileId], creating one on demand from the vault DB — used
+  /// by URLs minted with [urlFor] where no beginSession ever ran.
+  Future<_StreamingSession?> _sessionFor(String fileId) {
+    final existing = _sessions[fileId];
+    if (existing != null) return Future.value(existing);
+    return _lazyOpens.putIfAbsent(fileId, () async {
+      try {
+        final file = await DatabaseService().getFileById(fileId);
+        if (file == null || file.cloudId == null) return null;
+        return await _openSession(file);
+      } catch (e) {
+        debugPrint('VideoStreamingServer lazy open $fileId failed: $e');
+        return null;
+      } finally {
+        // The result is in _sessions now (or failed) — clear the gate so a
+        // later retry can attempt a fresh open.
+        _lazyOpens.remove(fileId);
+      }
+    });
   }
 
   /// Drops the cached file key for a session. Call from dispose(). The disk
@@ -242,7 +281,7 @@ class VideoStreamingServer {
     }
     // Path is /<file_id>
     final fileId = request.url.path;
-    final session = _sessions[fileId];
+    final session = await _sessionFor(fileId);
     if (session == null) {
       return Response.notFound('No active session for $fileId');
     }
@@ -354,6 +393,21 @@ class VideoStreamingServer {
         return 'video/x-msvideo';
       case '3gp':
         return 'video/3gpp';
+      // Audio — the same pipeline streams the music player's cloud tracks.
+      case 'mp3':
+        return 'audio/mpeg';
+      case 'm4a':
+      case 'aac':
+        return 'audio/mp4';
+      case 'ogg':
+      case 'opus':
+        return 'audio/ogg';
+      case 'wav':
+        return 'audio/wav';
+      case 'flac':
+        return 'audio/flac';
+      case 'wma':
+        return 'audio/x-ms-wma';
       default:
         // Unknown extension — let the player sniff. `application/octet-stream`
         // is safer than misidentifying as mp4.

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:just_audio_background/just_audio_background.dart';
 import 'package:workmanager/workmanager.dart';
 // Forces every Material Symbol IconData to be reachable so the dynamic
 // `SymbolsGet.get(name, style)` lookup used by ThemeIcon survives Flutter's
@@ -10,8 +11,14 @@ import 'src/app.dart';
 import 'services/cache_manager_service.dart';
 import 'services/auto_sync_worker.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Media-session + notification channel for background music playback.
+  await JustAudioBackground.init(
+    androidNotificationChannelId: 'com.ciphernest.vault.audio',
+    androidNotificationChannelName: 'Music playback',
+    androidNotificationOngoing: true,
+  );
   Workmanager().initialize(callbackDispatcher, isInDebugMode: false);
   CacheManagerService().enforceCacheLimit();
   // Fire-and-forget: re-registers the auto-sync periodic task if the user

@@ -1,4 +1,4 @@
-name: ciphernest
+﻿name: ciphernest
 description: "Your cloud. Actually private."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
@@ -56,7 +56,7 @@ dependencies:
   video_player: ^2.10.1
   chewie: ^1.13.0
   video_thumbnail: ^0.5.6
-  # Pure-Dart EXIF reader — pulls camera/device details out of the encrypted
+  # Pure-Dart EXIF reader â€” pulls camera/device details out of the encrypted
   # image's plaintext bytes without a platform round-trip. Small (~40 KB
   # compiled) and works on any Uint8List, so it slots into the Samsung-style
   # info sheet with no permission gymnastics.
@@ -71,6 +71,7 @@ dependencies:
   flutter_web_auth_2: ^4.1.0
   shelf: ^1.4.1
   just_audio: ^0.9.40
+  just_audio_background: ^0.0.1-beta.13
   share_plus: ^10.0.0
   app_links: ^6.3.2
   pasteboard: ^0.4.0

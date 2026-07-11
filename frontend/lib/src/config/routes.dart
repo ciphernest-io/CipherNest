@@ -19,7 +19,7 @@ import '../screens/settings/key_management_screen.dart';
 import '../screens/settings/recycle_bin_screen.dart';
 import '../screens/migration/migration_screen.dart';
 import '../screens/gallery/album_detail_screen.dart';
-import '../screens/audio/audio_screen.dart';
+import '../screens/music/music_home_screen.dart';
 import '../screens/settings/active_shares_screen.dart';
 import '../screens/share/shared_viewer_screen.dart';
 import '../models/album_model.dart';
@@ -126,7 +126,7 @@ class AppRoutes {
         );
 
       case audio:
-        return MaterialPageRoute(builder: (_) => const AudioScreen());
+        return MaterialPageRoute(builder: (_) => const MusicHomeScreen());
 
       case activeShares:
         return MaterialPageRoute(builder: (_) => const ActiveSharesScreen());

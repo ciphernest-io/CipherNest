@@ -11,6 +11,7 @@ import '../../../services/cloud/cloud_account.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/cache_manager_service.dart';
+import '../../../services/audio_player_service.dart';
 import '../../../services/auto_sync_service.dart';
 import '../../../services/auto_sync_worker.dart';
 import '../../../services/gallery_prefs.dart';
@@ -620,6 +621,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
             subtitle: Text('Check encryption integrity', style: TextStyle(color: cs.onSurface.withAlpha(140))),
             trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: () => Navigator.pushNamed(context, AppRoutes.keyManagement),
+          ),
+          AnimatedBuilder(
+            animation: AudioPlayerService(),
+            builder: (context, _) => SwitchListTile(
+              secondary: ThemeIcon('musicNote', color: cs.primary),
+              title: Text('Track titles on lock screen',
+                  style: TextStyle(color: cs.onSurface)),
+              subtitle: Text(
+                AudioPlayerService().showTitlesOnLockScreen
+                    ? 'Media notification shows what\'s playing'
+                    : 'Media notification shows "CipherNest Audio"',
+                style: TextStyle(color: cs.onSurface.withAlpha(140)),
+              ),
+              value: AudioPlayerService().showTitlesOnLockScreen,
+              onChanged: (v) =>
+                  AudioPlayerService().setShowTitlesOnLockScreen(v),
+            ),
           ),
 
           const SizedBox(height: 40),

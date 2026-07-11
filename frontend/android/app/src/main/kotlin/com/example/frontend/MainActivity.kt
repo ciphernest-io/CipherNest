@@ -1,6 +1,8 @@
 package com.example.frontend
 
-import io.flutter.embedding.android.FlutterFragmentActivity
+import com.ryanheise.audioservice.AudioServiceFragmentActivity
 
-class MainActivity: FlutterFragmentActivity() {
+// AudioServiceFragmentActivity = FlutterFragmentActivity (biometrics keep
+// working) + the media-session plumbing background playback needs.
+class MainActivity: AudioServiceFragmentActivity() {
 }

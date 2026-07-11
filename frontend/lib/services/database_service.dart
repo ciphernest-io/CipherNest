@@ -50,10 +50,11 @@ class DatabaseService extends ChangeNotifier {
 
     final db = await openDatabase(
       path,
-      version: 7,
+      version: 8,
       onCreate: (db, version) async {
         await _createSchema(db);
         await _seedSmartAlbums(db);
+        await _seedSmartPlaylists(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         // v2 added albums tables; v3 changes account_id semantics from
@@ -99,6 +100,16 @@ class DatabaseService extends ChangeNotifier {
           await db.execute(
             'ALTER TABLE files ADD COLUMN deleted_at INTEGER',
           );
+        }
+        // v8 splits albums by kind: 'photo' (gallery albums) vs 'audio'
+        // (music playlists). Both live in the same tables — album_files is
+        // file-type agnostic — the kind column just keeps the two UIs from
+        // seeing each other's collections.
+        if (oldVersion < 8) {
+          await db.execute(
+            "ALTER TABLE albums ADD COLUMN kind TEXT NOT NULL DEFAULT 'photo'",
+          );
+          await _seedSmartPlaylists(db);
         }
       },
     );
@@ -148,6 +159,7 @@ class DatabaseService extends ChangeNotifier {
         cover_file_id TEXT,
         is_smart INTEGER DEFAULT 0,
         smart_query TEXT,
+        kind TEXT NOT NULL DEFAULT 'photo',
         created_at INTEGER,
         updated_at INTEGER
       )
@@ -178,6 +190,32 @@ class DatabaseService extends ChangeNotifier {
         'name': album['name'],
         'is_smart': 1,
         'smart_query': album['query'],
+        'created_at': now,
+        'updated_at': now,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+  }
+
+  static Future<void> _seedSmartPlaylists(Database db) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final playlist in [
+      {
+        'id': 'smart_audio_recent',
+        'name': 'Recently added',
+        'query': 'audio_recent',
+      },
+      {
+        'id': 'smart_audio_favourites',
+        'name': 'Favourites',
+        'query': 'audio_favourites',
+      },
+    ]) {
+      await db.insert('albums', {
+        'id': playlist['id'],
+        'name': playlist['name'],
+        'is_smart': 1,
+        'smart_query': playlist['query'],
+        'kind': 'audio',
         'created_at': now,
         'updated_at': now,
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
@@ -347,6 +385,13 @@ class DatabaseService extends ChangeNotifier {
       whereArgs: [_currentAccountId, cutoff],
     );
     return rows.map((r) => r['id'] as String).toList();
+  }
+
+  Future<CnestFile?> getFileById(String id) async {
+    final db = await database;
+    final rows =
+        await db.query('files', where: 'id = ?', whereArgs: [id], limit: 1);
+    return rows.isEmpty ? null : CnestFile.fromMap(rows.first);
   }
 
   Future<void> setFavorite(String id, bool favorite) async {
@@ -653,16 +698,19 @@ class DatabaseService extends ChangeNotifier {
 
   // --- ALBUM OPERATIONS ---
 
-  Future<List<CnestAlbum>> getAlbums() async {
+  Future<List<CnestAlbum>> getAlbums({String kind = 'photo'}) async {
     final db = await database;
     final rows = await db.rawQuery('''
       SELECT a.*,
         CASE WHEN a.is_smart = 1 THEN 0
-        ELSE (SELECT COUNT(*) FROM album_files af WHERE af.album_id = a.id)
+        ELSE (SELECT COUNT(*) FROM album_files af
+              INNER JOIN files f ON f.id = af.file_id
+              WHERE af.album_id = a.id AND f.is_deleted = 0)
         END as file_count
       FROM albums a
+      WHERE a.kind = ?
       ORDER BY a.is_smart DESC, a.created_at ASC
-    ''');
+    ''', [kind]);
     final albums = rows.map((r) => CnestAlbum.fromMap(r)).toList();
 
     // Populate smart album counts
@@ -674,18 +722,25 @@ class DatabaseService extends ChangeNotifier {
     return albums;
   }
 
-  Future<CnestAlbum> createAlbum(String name) async {
+  /// Music playlists — same tables as photo albums, kind = 'audio'.
+  Future<List<CnestAlbum>> getPlaylists() => getAlbums(kind: 'audio');
+
+  Future<CnestAlbum> createAlbum(String name, {String kind = 'photo'}) async {
     final db = await database;
     final now = DateTime.now();
     final album = CnestAlbum(
       id: const Uuid().v4(),
       name: name,
+      kind: kind,
       createdAt: now,
       updatedAt: now,
     );
     await db.insert('albums', album.toMap());
     return album;
   }
+
+  Future<CnestAlbum> createPlaylist(String name) =>
+      createAlbum(name, kind: 'audio');
 
   Future<void> renameAlbum(String albumId, String newName) async {
     final db = await database;
@@ -852,6 +907,11 @@ class DatabaseService extends ChangeNotifier {
             "LOWER(filename) LIKE '%.mkv' OR "
             "LOWER(filename) LIKE '%.webm'"
             ")";
+      // Music smart playlists. type 3 = CnestFileType.audio.
+      case 'audio_recent':
+        return 'type = 3 AND $notDeleted';
+      case 'audio_favourites':
+        return 'type = 3 AND is_favorite = 1 AND $notDeleted';
       default:
         return null;
     }
