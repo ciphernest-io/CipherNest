@@ -123,6 +123,10 @@
     inlined; loaded once per session.
   -->
   <script src="/hash-wasm.min.js" defer></script>
-  <script src="/share.js" defer></script>
+  <!-- Version query busts stale browser caches on redeploy. Bump on every
+       change to share.js so recipients never run an old decryptor against a
+       newer blob format (that mismatch reads as a generic "Decryption
+       failed"). Current: format v1. -->
+  <script src="/share.js?v=fmt1" defer></script>
 </body>
 </html>
