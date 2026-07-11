@@ -19,6 +19,8 @@
 const ENCRYPTED_CHUNK_SIZE = 524316; // 512 KiB plaintext + 12-byte nonce + 16-byte MAC
 const NONCE_SIZE = 12;
 const MAC_SIZE = 16;
+const FORMAT_VERSION = 0x01; // first byte of every CipherNest blob
+const BODY_PREAMBLE_SIZE = 20; // 16-byte content_id + 4-byte total_chunks (BE)
 
 const $ = (id) => document.getElementById(id);
 const status = $('status');
@@ -197,17 +199,19 @@ async function decryptAndRender(downloadUrl, shareKeyBytes, opts) {
     ['decrypt']
   );
 
-  // Header layout differs by mode (see share_service.dart in the app):
-  //   Plain:    [4-byte length prefix][60-byte wrapped fileKey]
-  //   Password: [4-byte length prefix][16-byte salt][60-byte wrapped fileKey]
-  //
-  // The salt is duplicated into the header for password shares but we
-  // already used the URL fragment's p= copy to derive shareKey via
-  // Argon2id — skip past it here.
-  const headerLen = readU32BE(blob, 0);
-  const headerEnd = 4 + headerLen;
-  const wrappedStart = passwordMode ? 4 + 16 : 4;
-  const wrappedFileKey = blob.subarray(wrappedStart, headerEnd);
+  // Share header v1 (see share_service.dart):
+  //   [1 version=0x01][4 region-len BE][region]
+  //   region = password ? [16 salt][60 wrapped key] : [60 wrapped key]
+  // The salt is also in the URL fragment's p= (already used to derive
+  // shareKey via Argon2id), so we skip past it here.
+  if (blob.length < 5) throw new Error('blob too short');
+  if (blob[0] !== FORMAT_VERSION) {
+    throw new Error('unsupported share version ' + blob[0]);
+  }
+  const regionLen = readU32BE(blob, 1);
+  const regionEnd = 5 + regionLen;
+  const wrappedStart = passwordMode ? 5 + 16 : 5;
+  const wrappedFileKey = blob.subarray(wrappedStart, regionEnd);
   const fileKeyBytes = await aesGcmDecrypt(shareKey, wrappedFileKey);
   const fileKey = await crypto.subtle.importKey(
     'raw',
@@ -217,50 +221,44 @@ async function decryptAndRender(downloadUrl, shareKeyBytes, opts) {
     ['decrypt']
   );
 
-  const body = blob.subarray(headerEnd);
+  const body = blob.subarray(regionEnd);
   const plaintext = await decryptBody(fileKey, body);
 
   hide(status);
   await render(plaintext);
 }
 
+// Body v1: [16 content_id][4 total_chunks BE] then chunks of up to
+// ENCRYPTED_CHUNK_SIZE, each [12 nonce=BE96(i)][ct][16 tag] with
+// AAD = content_id || BE32(i) || BE32(total_chunks). One format, no
+// single-shot/chunked ambiguity. Reorder, truncation, duplication, and
+// cross-blob splice all fail authentication.
 async function decryptBody(fileKey, body) {
-  // The sender uses TWO different body layouts depending on file type:
-  //   - Images / small files: EncryptionService.encryptFile writes one
-  //                           AES-GCM output covering the WHOLE body:
-  //                             [12-byte nonce][ciphertext][16-byte tag]
-  //   - Videos / streaming:   EncryptionService.encryptStream splits the
-  //                           plaintext into 512 KiB chunks, each becomes
-  //                             [12-byte nonce][ct][16-byte tag]
-  //                           of up to 524316 bytes on disk.
-  //
-  // We can't tell the two layouts apart from body length alone — a 2 MB
-  // photo encrypted single-shot and a 2 MB single-chunk video are the
-  // same size, but the earlier "if body ≤ 524316 use single-shot"
-  // heuristic broke images >~500 KB because it forced them into the
-  // chunked path where the tag alignment doesn't match.
-  //
-  // Try single-shot first. AES-GCM MAC failure is deterministic and
-  // fast — the whole ciphertext gets processed anyway during a normal
-  // decrypt, so the double-try cost is a rounding error.
-  try {
-    return await aesGcmDecrypt(fileKey, body);
-  } catch (_) {
-    // MAC failure — likely a chunked body from encryptStream. Fall
-    // through to the chunked path below.
-  }
+  if (body.length < BODY_PREAMBLE_SIZE) throw new Error('body too short');
+  const contentId = body.subarray(0, 16);
+  const totalChunks = readU32BE(body, 16);
 
   const parts = [];
-  let offset = 0;
+  let offset = BODY_PREAMBLE_SIZE;
+  let index = 0;
   while (offset < body.length) {
     const remaining = body.length - offset;
     const chunkSize = Math.min(remaining, ENCRYPTED_CHUNK_SIZE);
     const chunk = body.subarray(offset, offset + chunkSize);
-    const plain = await aesGcmDecrypt(fileKey, chunk);
+    const plain = await aesGcmDecryptChunk(
+      fileKey,
+      chunk,
+      chunkAad(contentId, index, totalChunks),
+      index
+    );
     parts.push(plain);
     offset += chunkSize;
+    index++;
   }
-  // Concatenate
+  if (index !== totalChunks) {
+    throw new Error('chunk count mismatch: header ' + totalChunks + ' found ' + index);
+  }
+
   let total = 0;
   for (const p of parts) total += p.byteLength;
   const out = new Uint8Array(total);
@@ -272,13 +270,48 @@ async function decryptBody(fileKey, body) {
   return out;
 }
 
+// AAD for chunk i: content_id || BE32(i) || BE32(total_chunks).
+function chunkAad(contentId, index, totalChunks) {
+  const aad = new Uint8Array(24);
+  aad.set(contentId, 0);
+  const dv = new DataView(aad.buffer);
+  dv.setUint32(16, index, false);
+  dv.setUint32(20, totalChunks, false);
+  return aad;
+}
+
+// BE96(index): 12-byte counter nonce (index < 2^32).
+function chunkNonce(index) {
+  const n = new Uint8Array(12);
+  new DataView(n.buffer).setUint32(8, index, false);
+  return n;
+}
+
+// Wrapped-key decrypt (no AAD): [12 nonce][ct][16 tag].
 async function aesGcmDecrypt(key, input) {
-  // input layout: [12-byte nonce][ciphertext][16-byte tag]
-  if (input.length < NONCE_SIZE + MAC_SIZE) throw new Error('chunk too short');
+  if (input.length < NONCE_SIZE + MAC_SIZE) throw new Error('input too short');
   const nonce = input.subarray(0, NONCE_SIZE);
   const ctAndTag = input.subarray(NONCE_SIZE);
   const buf = await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: nonce, tagLength: 128 },
+    key,
+    ctAndTag
+  );
+  return new Uint8Array(buf);
+}
+
+// Body-chunk decrypt: verifies the inline nonce equals BE96(expectedIndex)
+// before running GCM, and authenticates the chunk AAD.
+async function aesGcmDecryptChunk(key, input, aad, expectedIndex) {
+  if (input.length < NONCE_SIZE + MAC_SIZE) throw new Error('chunk too short');
+  const nonce = input.subarray(0, NONCE_SIZE);
+  const expected = chunkNonce(expectedIndex);
+  for (let i = 0; i < NONCE_SIZE; i++) {
+    if (nonce[i] !== expected[i]) throw new Error('chunk nonce mismatch');
+  }
+  const ctAndTag = input.subarray(NONCE_SIZE);
+  const buf = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: nonce, tagLength: 128, additionalData: aad },
     key,
     ctAndTag
   );
