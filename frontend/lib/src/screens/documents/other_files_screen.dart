@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
+import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 
 import '../../models/file_model.dart';
@@ -74,7 +75,7 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Could not open file: $e'),
-              backgroundColor: Colors.red),
+              backgroundColor: ThemeController().tokens.danger),
         );
       }
     } finally {
@@ -97,8 +98,9 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
               child: const Text('Cancel')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Delete',
-                  style: TextStyle(color: Colors.red))),
+              child: Text('Delete',
+                  style:
+                      TextStyle(color: ThemeController().tokens.danger))),
         ],
       ),
     );
@@ -110,7 +112,7 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
     _refresh();
   }
 
-  IconData _iconForExt(String filename) {
+  String _iconForExt(String filename) {
     final dot = filename.lastIndexOf('.');
     final ext = dot < 0 ? '' : filename.substring(dot + 1).toLowerCase();
     switch (ext) {
@@ -119,7 +121,7 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
       case '7z':
       case 'tar':
       case 'gz':
-        return themeIconData('fileZip');
+        return 'fileZip';
       case 'py':
       case 'js':
       case 'ts':
@@ -129,18 +131,18 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
       case 'cpp':
       case 'rs':
       case 'go':
-        return themeIconData('fileCode');
+        return 'fileCode';
       case 'ipynb':
-        return themeIconData('notebook');
+        return 'notebook';
       case 'csv':
       case 'tsv':
-        return themeIconData('fileCsv');
+        return 'fileCsv';
       case 'db':
       case 'sqlite':
       case 'sqlite3':
-        return themeIconData('database');
+        return 'database';
       default:
-        return themeIconData('file');
+        return 'file';
     }
   }
 
@@ -198,7 +200,7 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
           child: Column(
             children: [
               ThemeIcon('folderOpen',
-                  size: 64, color: cs.surfaceContainerHighest),
+                  size: 64, color: cs.onSurface.withAlpha(120)),
               const SizedBox(height: 16),
               Text('No other files yet',
                   style: TextStyle(color: cs.onSurface.withAlpha(120))),
@@ -214,6 +216,7 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
   }
 
   Widget _buildRow(ColorScheme cs, CnestFile file) {
+    final t = ThemeController().tokens;
     final isOpening = _openingFileId == file.id;
     final ext = file.filename.contains('.')
         ? file.filename.split('.').last.toUpperCase()
@@ -223,19 +226,19 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
       height: 88,
       decoration: BoxDecoration(
         color: cs.surface,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(t.rInput),
         border: Border.all(color: cs.outline),
       ),
       child: InkWell(
         onTap: () => _handleOpen(file),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(t.rInput),
         child: Row(
           children: [
             Container(
               width: 64,
               height: double.infinity,
               alignment: Alignment.center,
-              child: Icon(_iconForExt(file.filename),
+              child: ThemeIcon(_iconForExt(file.filename),
                   color: cs.primary, size: 30),
             ),
             Expanded(
@@ -300,14 +303,14 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
               )
             else
               PopupMenuButton<String>(
-                icon: Icon(
-                    themeIconData('dotsThreeVertical'),
+                icon: ThemeIcon('dotsThreeVertical',
                     color: cs.onSurface.withAlpha(120)),
-                itemBuilder: (_) => const [
-                  PopupMenuItem(value: 'share', child: Text('Share')),
+                itemBuilder: (_) => [
+                  const PopupMenuItem(value: 'share', child: Text('Share')),
                   PopupMenuItem(
                     value: 'delete',
-                    child: Text('Delete', style: TextStyle(color: Colors.red)),
+                    child:
+                        Text('Delete', style: TextStyle(color: cs.error)),
                   ),
                 ],
                 onSelected: (v) {

@@ -299,16 +299,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() => _showYearAgo = val);
   }
 
-  IconData _providerIcon(int providerType) {
+  String _providerIcon(int providerType) {
     switch (providerType) {
       case CloudAccount.providerGoogle:
-        return themeIconData('googleLogo');
+        return 'googleLogo';
       case CloudAccount.providerOneDrive:
-        return themeIconData('microsoftOutlookLogo');
+        return 'microsoftOutlookLogo';
       case CloudAccount.providerDropbox:
-        return themeIconData('dropboxLogo');
+        return 'dropboxLogo';
       default:
-        return themeIconData('cloud');
+        return 'cloud';
     }
   }
 
@@ -371,7 +371,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ListTile(
                       leading: CircleAvatar(
                         backgroundColor: cs.primary.withAlpha(60),
-                        child: Icon(_providerIcon(a.providerType), color: cs.primary, size: 20),
+                        child: ThemeIcon(_providerIcon(a.providerType), color: cs.primary, size: 20),
                       ),
                       title: Text(a.email, style: TextStyle(color: cs.onSurface)),
                       subtitle: Text(
@@ -557,8 +557,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               return Column(
                 children: [
                   SwitchListTile(
-                    secondary: Icon(
-                      tc.brightness == Brightness.dark ? themeIconData('moon') : themeIconData('sun'),
+                    secondary: ThemeIcon(
+                      tc.brightness == Brightness.dark ? 'moon' : 'sun',
                       color: Theme.of(context).colorScheme.primary,
                     ),
                     title: Text('Light Mode', style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
@@ -712,14 +712,15 @@ class _ModePill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     return Material(
       color: selected
           ? cs.primary.withValues(alpha: 0.14)
           : cs.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(t.rInput),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(t.rInput),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
@@ -729,7 +730,7 @@ class _ModePill extends StatelessWidget {
                   : cs.outline.withValues(alpha: 0.3),
               width: selected ? 1.5 : 1,
             ),
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(t.rInput),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -817,8 +818,8 @@ class _ThemePackTile extends StatelessWidget {
                             ),
                           ),
                           if (selected)
-                            Icon(Icons.check_circle,
-                                color: t.accent, size: 20),
+                            ThemeIcon('checkCircle',
+                                selected: true, color: t.accent, size: 20),
                         ],
                       ),
                       const SizedBox(height: 4),

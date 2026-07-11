@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
+import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 import '../../../services/cloud/canary_retry.dart';
+
+/// Outcome of the canary integrity check. The display color is derived from
+/// this in build() via theme tokens — never stored as a raw Color.
+enum _KeyCheckStatus { idle, checking, ok, warn, error }
 
 class KeyManagementScreen extends StatefulWidget {
   const KeyManagementScreen({super.key});
@@ -12,13 +17,13 @@ class KeyManagementScreen extends StatefulWidget {
 class _KeyManagementScreenState extends State<KeyManagementScreen> {
   bool _isTesting = false;
   String? _testResult;
-  Color _resultColor = Colors.grey;
+  _KeyCheckStatus _status = _KeyCheckStatus.idle;
 
   Future<void> _runCanaryTest() async {
     setState(() {
       _isTesting = true;
       _testResult = "Running cryptographic handshake...";
-      _resultColor = Colors.yellow;
+      _status = _KeyCheckStatus.checking;
     });
 
     // The shared helper retries once on transient (network / OAuth warm-up)
@@ -39,17 +44,17 @@ class _KeyManagementScreenState extends State<KeyManagementScreen> {
       if (success) {
         _testResult =
             "INTEGRITY CONFIRMED\nAES-256-GCM Keys Active\nCloud Link Established";
-        _resultColor = Colors.greenAccent;
+        _status = _KeyCheckStatus.ok;
       } else if (transientError != null) {
         _testResult =
             "COULD NOT REACH CLOUD\nCheck your connection and try again.\n\n${transientError.toString()}";
-        _resultColor = Colors.orangeAccent;
+        _status = _KeyCheckStatus.warn;
       } else {
         _testResult =
             "INTEGRITY CHECK FAILED\nCould not decrypt the canary file. "
             "Either the master key on this device does not match the vault, "
             "or the cloud files were modified outside CipherNest.";
-        _resultColor = Colors.redAccent;
+        _status = _KeyCheckStatus.error;
       }
     });
   }
@@ -57,6 +62,14 @@ class _KeyManagementScreenState extends State<KeyManagementScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
+    final resultColor = switch (_status) {
+      _KeyCheckStatus.idle => t.fgMuted,
+      _KeyCheckStatus.checking => t.warning,
+      _KeyCheckStatus.ok => t.success,
+      _KeyCheckStatus.warn => t.warning,
+      _KeyCheckStatus.error => t.danger,
+    };
     return Scaffold(
       appBar: AppBar(title: const Text('Security Center')),
       body: Padding(
@@ -74,15 +87,15 @@ class _KeyManagementScreenState extends State<KeyManagementScreen> {
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
                 color: cs.surface,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: _resultColor),
+                borderRadius: BorderRadius.circular(t.rCard),
+                border: Border.all(color: resultColor),
               ),
               child: Column(
                 children: [
-                  Icon(
-                    _resultColor == Colors.greenAccent ? themeIconData('lock') : themeIconData('clock'),
+                  ThemeIcon(
+                    _status == _KeyCheckStatus.ok ? 'lock' : 'clock',
                     size: 48,
-                    color: _resultColor,
+                    color: resultColor,
                   ),
                   const SizedBox(height: 16),
                   _isTesting
@@ -91,9 +104,9 @@ class _KeyManagementScreenState extends State<KeyManagementScreen> {
                           _testResult ?? "System Ready. Run test to verify keys.",
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            color: _resultColor,
+                            color: resultColor,
                             fontWeight: FontWeight.w600,
-                            fontFamily: 'Courier', // Cyber feel
+                            fontFamily: t.monoFontFamily, // Cyber feel
                           ),
                         ),
                 ],
@@ -121,7 +134,7 @@ class _KeyManagementScreenState extends State<KeyManagementScreen> {
             const SizedBox(height: 8),
             Text(
               "• Algorithm: AES-256-GCM\n• Key Storage: Android Keystore / iOS Keychain\n• Protocol: Google Drive AppData Scope",
-              style: TextStyle(color: cs.onSurface.withAlpha(140), height: 1.5, fontFamily: 'Courier'),
+              style: TextStyle(color: cs.onSurface.withAlpha(140), height: 1.5, fontFamily: t.monoFontFamily),
             ),
           ],
         ),

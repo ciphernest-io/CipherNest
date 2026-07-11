@@ -5,6 +5,7 @@ import '../../../services/key_manager_service.dart';
 import '../../config/routes.dart';
 import '../../widgets/friendly_error_sheet.dart';
 import '../../widgets/master_password_field_group.dart';
+import '../../widgets/theme_icon.dart';
 import '../cloud_selection/cloud_selection_screen.dart' show CloudSelectionArgs;
 
 /// Which flow entered the master-password screen.
@@ -122,7 +123,7 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
         automaticallyImplyLeading: false,
         leading: Navigator.canPop(context)
             ? IconButton(
-                icon: const Icon(Icons.arrow_back),
+                icon: const ThemeIcon('arrowLeft'),
                 onPressed: () => Navigator.pop(context),
               )
             : null,

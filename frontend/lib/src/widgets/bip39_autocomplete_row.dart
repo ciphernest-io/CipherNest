@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../config/theme_controller.dart';
 import '../utils/wordlists.dart';
 
 /// A small horizontal row of BIP-39 suggestion chips filtered by the
@@ -62,6 +63,7 @@ class _Bip39AutocompleteRowState extends State<Bip39AutocompleteRow> {
   Widget build(BuildContext context) {
     if (_suggestions.isEmpty) return const SizedBox.shrink();
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     return Padding(
       padding: const EdgeInsets.only(top: 6),
       child: Wrap(
@@ -75,7 +77,7 @@ class _Bip39AutocompleteRowState extends State<Bip39AutocompleteRow> {
                   widget.controller.selection =
                       TextSelection.collapsed(offset: w.length);
                 },
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(t.rCard),
                 child: Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 10,
@@ -83,7 +85,7 @@ class _Bip39AutocompleteRowState extends State<Bip39AutocompleteRow> {
                   ),
                   decoration: BoxDecoration(
                     color: cs.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(t.rCard),
                     border: Border.all(
                       color: cs.outline.withValues(alpha: 0.4),
                     ),
@@ -91,7 +93,7 @@ class _Bip39AutocompleteRowState extends State<Bip39AutocompleteRow> {
                   child: Text(
                     w,
                     style: TextStyle(
-                      fontFamily: 'Courier',
+                      fontFamily: t.monoFontFamily,
                       fontSize: widget.chipFontSize,
                       color: cs.onSurface.withValues(alpha: 0.85),
                     ),

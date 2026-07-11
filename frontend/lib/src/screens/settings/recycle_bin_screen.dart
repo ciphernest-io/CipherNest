@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 
 import '../../../services/cache_manager_service.dart';
@@ -118,9 +119,9 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text(
+            child: Text(
               'Delete forever',
-              style: TextStyle(color: Colors.red),
+              style: TextStyle(color: Theme.of(ctx).colorScheme.error),
             ),
           ),
         ],
@@ -203,8 +204,8 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            themeIconData('trash'),
+          ThemeIcon(
+            'trash',
             size: 64,
             color: cs.onSurface.withAlpha(120),
           ),
@@ -228,7 +229,7 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
         child: Row(
           children: [
             IconButton(
-              icon: const Icon(Icons.close),
+              icon: const ThemeIcon('x'),
               onPressed: _exitSelection,
             ),
             const SizedBox(width: 4),
@@ -242,16 +243,14 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
             const Spacer(),
             IconButton(
               tooltip: 'Restore',
-              icon: Icon(
-                themeIconData('arrowCounterClockwise'),
-              ),
+              icon: const ThemeIcon('arrowCounterClockwise'),
               onPressed: _restoreSelected,
             ),
             IconButton(
               tooltip: 'Delete forever',
-              icon: Icon(
-                themeIconData('trashSimple'),
-                color: Colors.redAccent,
+              icon: ThemeIcon(
+                'trashSimple',
+                color: cs.error,
               ),
               onPressed: () => _deleteForeverSelected(files),
             ),
@@ -262,6 +261,7 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
   }
 
   Widget _buildGrid(_BinSnapshot snap) {
+    final t = ThemeController().tokens;
     final files = snap.files;
     return GridView.builder(
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -307,7 +307,7 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
                     vertical: 2,
                   ),
                   decoration: BoxDecoration(
-                    color: Colors.black.withAlpha(160),
+                    color: t.scrim,
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
@@ -323,16 +323,15 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
               if (_selectionMode)
                 Container(
                   color: isSelected
-                      ? Colors.black.withAlpha(80)
+                      ? t.scrim
                       : Colors.transparent,
                   child: Align(
                     alignment: Alignment.topRight,
                     child: Padding(
                       padding: const EdgeInsets.all(4.0),
-                      child: Icon(
-                        isSelected
-                            ? Icons.check_circle
-                            : Icons.radio_button_unchecked,
+                      child: ThemeIcon(
+                        isSelected ? 'checkCircle' : 'radio_button_unchecked',
+                        selected: isSelected,
                         color: Colors.white,
                         size: 22,
                       ),

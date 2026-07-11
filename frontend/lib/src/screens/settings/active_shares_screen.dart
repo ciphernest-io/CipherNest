@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 
 import '../../models/share_model.dart';
@@ -40,8 +41,9 @@ class _ActiveSharesScreenState extends State<ActiveSharesScreen> {
               child: const Text('Cancel')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child:
-                  const Text('Revoke', style: TextStyle(color: Colors.red))),
+              child: Text('Revoke',
+                  style: TextStyle(
+                      color: Theme.of(ctx).colorScheme.error))),
         ],
       ),
     );
@@ -70,6 +72,7 @@ class _ActiveSharesScreenState extends State<ActiveSharesScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Active Shares'),
@@ -111,7 +114,7 @@ class _ActiveSharesScreenState extends State<ActiveSharesScreen> {
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
                   color: cs.surface,
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(t.rInput),
                   border: Border.all(color: cs.outline),
                 ),
                 child: Column(
@@ -119,10 +122,8 @@ class _ActiveSharesScreenState extends State<ActiveSharesScreen> {
                   children: [
                     Row(
                       children: [
-                        Icon(
-                          share.hasPassword
-                              ? themeIconData('lock')
-                              : themeIconData('linkSimple'),
+                        ThemeIcon(
+                          share.hasPassword ? 'lock' : 'linkSimple',
                           color: cs.primary,
                           size: 18,
                         ),
@@ -142,7 +143,7 @@ class _ActiveSharesScreenState extends State<ActiveSharesScreen> {
                           _expiryLabel(share),
                           style: TextStyle(
                               color: share.isExpired
-                                  ? Colors.redAccent
+                                  ? cs.error
                                   : cs.onSurface.withAlpha(140),
                               fontSize: 11),
                         ),
@@ -151,17 +152,15 @@ class _ActiveSharesScreenState extends State<ActiveSharesScreen> {
                     const SizedBox(height: 6),
                     SelectableText(
                       share.shareUrl,
-                      style: const TextStyle(
-                          fontSize: 11, fontFamily: 'monospace'),
+                      style: TextStyle(
+                          fontSize: 11, fontFamily: t.monoFontFamily),
                       maxLines: 2,
                     ),
                     const SizedBox(height: 8),
                     Row(
                       children: [
                         TextButton.icon(
-                          icon: Icon(
-                              themeIconData('copy'),
-                              size: 14),
+                          icon: ThemeIcon('copy', size: 14),
                           label: const Text('Copy'),
                           onPressed: () async {
                             final messenger = ScaffoldMessenger.of(context);
@@ -175,12 +174,10 @@ class _ActiveSharesScreenState extends State<ActiveSharesScreen> {
                         ),
                         const Spacer(),
                         TextButton.icon(
-                          icon: Icon(
-                              themeIconData('trash'),
-                              size: 14,
-                              color: Colors.redAccent),
-                          label: const Text('Revoke',
-                              style: TextStyle(color: Colors.redAccent)),
+                          icon: ThemeIcon('trash',
+                              size: 14, color: cs.error),
+                          label: Text('Revoke',
+                              style: TextStyle(color: cs.error)),
                           onPressed: () => _revoke(share),
                         ),
                       ],

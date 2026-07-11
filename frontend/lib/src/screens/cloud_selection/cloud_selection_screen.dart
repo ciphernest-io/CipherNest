@@ -11,7 +11,7 @@ import '../../../services/cnest_errors.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/database_service.dart';
 import '../../config/routes.dart';
-import '../../config/theme.dart' show AppColors;
+import '../../config/theme_controller.dart';
 import '../../models/file_model.dart';
 import '../../widgets/friendly_error_sheet.dart';
 import '../../widgets/theme_icon.dart';
@@ -256,6 +256,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
   // ---------------------------------------------------------------------------
 
   Future<_ExistingVaultChoice?> _promptExistingVaultOnSignup() {
+    final t = ThemeController().tokens;
     return showDialog<_ExistingVaultChoice>(
       context: context,
       barrierDismissible: false,
@@ -269,7 +270,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
           TextButton(
             onPressed: () =>
                 Navigator.pop(ctx, _ExistingVaultChoice.startOver),
-            style: TextButton.styleFrom(foregroundColor: AppColors.error),
+            style: TextButton.styleFrom(foregroundColor: t.danger),
             child: const Text('Start over on this cloud'),
           ),
           FilledButton(
@@ -387,7 +388,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
               _CloudOption(
                 title: 'Google Drive',
                 subtitle: 'Sign in with Google',
-                icon: themeIconData('googleLogo'),
+                icon: 'googleLogo',
                 enabled: !_isLoading,
                 onTap: () => _connectProvider(CloudAccount.providerGoogle),
               ),
@@ -395,22 +396,22 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
               _CloudOption(
                 title: 'OneDrive',
                 subtitle: 'Sign in with Microsoft',
-                icon: themeIconData('microsoftOutlookLogo'),
+                icon: 'microsoftOutlookLogo',
                 enabled: !_isLoading,
                 onTap: () => _connectProvider(CloudAccount.providerOneDrive),
               ),
               const SizedBox(height: 12),
-              const _CloudOption(
+              _CloudOption(
                 title: 'Dropbox',
                 subtitle: 'Coming in v2',
-                icon: Icons.cloud_outlined,
+                icon: 'cloud',
                 enabled: false,
               ),
               const SizedBox(height: 12),
-              const _CloudOption(
+              _CloudOption(
                 title: 'pCloud',
                 subtitle: 'Coming in v2',
-                icon: Icons.cloud_outlined,
+                icon: 'cloud',
                 enabled: false,
               ),
               const SizedBox(height: 20),
@@ -479,23 +480,24 @@ class _CloudOption extends StatelessWidget {
 
   final String title;
   final String subtitle;
-  final IconData icon;
+  final String icon;
   final bool enabled;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     return InkWell(
       onTap: enabled ? onTap : null,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(t.rCard),
       child: Container(
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
           color: enabled
               ? cs.surface
               : cs.surfaceContainerHighest.withValues(alpha: 0.5),
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(t.rCard),
           border: Border.all(
             color: enabled
                 ? cs.primary.withValues(alpha: 0.4)
@@ -504,7 +506,7 @@ class _CloudOption extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Icon(
+            ThemeIcon(
               icon,
               size: 26,
               color: enabled

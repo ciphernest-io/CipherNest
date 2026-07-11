@@ -70,11 +70,16 @@ class _SplashScreenState extends State<SplashScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // The mark is a monochrome silhouette, so it takes the active
+            // pack's accent as a runtime tint — one asset, every theme.
+            // Read it from the ambient Theme (not the controller singleton):
+            // the controller loads saved prefs async, and only a Theme
+            // dependency makes this rebuild with the right pack on cold start.
             Image.asset(
-              Theme.of(context).brightness == Brightness.dark
-                  ? 'assets/images/ciphernest_logo_white.png'
-                  : 'assets/images/ciphernest_logo_black.png',
+              'assets/images/ciphernest_logo_white.png',
               width: 220,
+              color: Theme.of(context).colorScheme.primary,
+              colorBlendMode: BlendMode.srcIn,
             ),
             const SizedBox(height: 16),
             const CiphernestLogo(fontSize: 36),

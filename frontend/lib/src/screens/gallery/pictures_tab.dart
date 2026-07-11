@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -165,7 +166,10 @@ class PicturesTabState extends State<PicturesTab> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+            child: Text(
+              'Delete',
+              style: TextStyle(color: ThemeController().tokens.danger),
+            ),
           ),
         ],
       ),
@@ -227,6 +231,8 @@ class PicturesTabState extends State<PicturesTab> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     return FutureBuilder<List<CnestFile>>(
       future: _filesFuture,
       builder: (context, snapshot) {
@@ -327,17 +333,18 @@ class PicturesTabState extends State<PicturesTab> {
                                   if (_selectionMode)
                                     Container(
                                       color: isSelected
-                                          ? Colors.black.withAlpha(80)
+                                          ? t.scrim
                                           : Colors.transparent,
                                       child: Align(
                                         alignment: Alignment.topRight,
                                         child: Padding(
                                           padding:
                                               const EdgeInsets.all(4.0),
-                                          child: Icon(
+                                          child: ThemeIcon(
                                             isSelected
-                                                ? Icons.check_circle
-                                                : Icons.radio_button_unchecked,
+                                                ? 'checkCircle'
+                                                : 'radio_button_unchecked',
+                                            selected: isSelected,
                                             color: Colors.white,
                                             size: 22,
                                           ),
@@ -352,7 +359,7 @@ class PicturesTabState extends State<PicturesTab> {
                                         'heart',
                                         selected: true,
                                         size: 14,
-                                        color: Colors.redAccent,
+                                        color: cs.error,
                                       ),
                                     ),
                                 ],
@@ -383,7 +390,7 @@ class PicturesTabState extends State<PicturesTab> {
         child: Row(
           children: [
             IconButton(
-              icon: const Icon(Icons.close),
+              icon: ThemeIcon('x'),
               onPressed: _exitSelection,
             ),
             const SizedBox(width: 4),
@@ -400,9 +407,9 @@ class PicturesTabState extends State<PicturesTab> {
               onPressed: () => _shareSelectedFilenames(all),
             ),
             IconButton(
-              icon: Icon(
-                themeIconData('trash'),
-                color: Colors.redAccent,
+              icon: ThemeIcon(
+                'trash',
+                color: cs.error,
               ),
               onPressed: () => _deleteSelected(all),
             ),
@@ -416,12 +423,11 @@ class PicturesTabState extends State<PicturesTab> {
         children: [
           FilterChip(
             label: const Text('Favorites'),
-            avatar: Icon(
-              _favoritesOnly
-                  ? themeIconData('heart', selected: true)
-                  : themeIconData('heart'),
+            avatar: ThemeIcon(
+              'heart',
+              selected: _favoritesOnly,
               size: 14,
-              color: _favoritesOnly ? Colors.redAccent : cs.onSurface,
+              color: _favoritesOnly ? cs.error : cs.onSurface,
             ),
             selected: _favoritesOnly,
             onSelected: (v) {
@@ -456,6 +462,7 @@ class _DateHeaderDelegate extends SliverPersistentHeaderDelegate {
   Widget build(
       BuildContext context, double shrinkOffset, bool overlapsContent) {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     return Container(
       color: Theme.of(context).scaffoldBackgroundColor,
       alignment: Alignment.centerLeft,
@@ -466,7 +473,7 @@ class _DateHeaderDelegate extends SliverPersistentHeaderDelegate {
           color: cs.onSurface.withAlpha(180),
           fontSize: 13,
           fontWeight: FontWeight.w600,
-          fontFamily: 'Inter',
+          fontFamily: t.fontFamily,
         ),
       ),
     );
@@ -626,12 +633,13 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
         width: 22,
         height: 22,
         decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.55),
+          color: ThemeController().tokens.scrim,
           shape: BoxShape.circle,
         ),
         child: Center(
-          child: Icon(
-            themeIconData('play', selected: true),
+          child: ThemeIcon(
+            'play',
+            selected: true,
             size: 13,
             color: Colors.white,
           ),
@@ -699,10 +707,8 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
     return Container(
       color: cs.surfaceContainerHighest,
       child: Center(
-        child: Icon(
-          _isVideo
-              ? themeIconData('playCircle')
-              : themeIconData('imageBroken'),
+        child: ThemeIcon(
+          _isVideo ? 'playCircle' : 'imageBroken',
           color: cs.onSurface.withAlpha(140),
           size: 40,
         ),

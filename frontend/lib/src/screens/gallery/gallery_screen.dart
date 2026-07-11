@@ -70,7 +70,8 @@ class _GalleryScreenState extends State<GalleryScreen> {
         CircleAvatar(
           radius: 36,
           backgroundColor: cs.primary,
-          child: ThemeIcon('lock', color: cs.onSurface, size: 32),
+          // onPrimary, not onSurface — the glyph sits on the accent disc.
+          child: ThemeIcon('lock', color: cs.onPrimary, size: 32),
         ),
         const SizedBox(height: 16),
         Center(

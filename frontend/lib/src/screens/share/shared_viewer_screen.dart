@@ -383,13 +383,13 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
       case _Phase.initial:
       case _Phase.downloading:
         return _StatusView(
-          icon: themeIconData('cloudArrowDown'),
+          icon: 'cloudArrowDown',
           label: 'Downloading encrypted blob…',
           spinner: true,
         );
       case _Phase.decrypting:
         return _StatusView(
-          icon: themeIconData('lockKeyOpen'),
+          icon: 'lockKeyOpen',
           label: 'Decrypting on-device…',
           spinner: true,
         );
@@ -397,13 +397,13 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
         return _buildPasswordForm(cs);
       case _Phase.expired:
         return _StatusView(
-          icon: themeIconData('clockCountdown'),
+          icon: 'clockCountdown',
           label: 'This link has expired.',
           spinner: false,
         );
       case _Phase.error:
         return _StatusView(
-          icon: themeIconData('warningCircle'),
+          icon: 'warningCircle',
           label: _errorMessage ?? 'Something went wrong.',
           spinner: false,
         );
@@ -420,8 +420,8 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Icon(
-              themeIconData('lock'),
+            ThemeIcon(
+              'lock',
               size: 56,
               color: cs.primary,
             ),
@@ -445,14 +445,14 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
               onSubmitted: (_) => _onPasswordSubmit(),
               decoration: const InputDecoration(
                 hintText: 'Password',
-                prefixIcon: Icon(Icons.lock_outline),
+                prefixIcon: ThemeIcon('lock'),
               ),
             ),
             if (_errorMessage != null) ...[
               const SizedBox(height: 12),
               Text(
                 _errorMessage!,
-                style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                style: TextStyle(color: cs.error, fontSize: 12),
               ),
             ],
             const SizedBox(height: 24),
@@ -511,8 +511,8 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              themeIconData('musicNotes'),
+            ThemeIcon(
+              'musicNotes',
               size: 80,
               color: cs.primary,
             ),
@@ -524,10 +524,9 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
                 return IconButton(
                   iconSize: 64,
                   onPressed: () => playing ? p.pause() : p.play(),
-                  icon: Icon(
-                    playing
-                        ? themeIconData('pauseCircle', selected: true)
-                        : themeIconData('playCircle', selected: true),
+                  icon: ThemeIcon(
+                    playing ? 'pauseCircle' : 'playCircle',
+                    selected: true,
                     color: cs.primary,
                   ),
                 );
@@ -563,10 +562,8 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              _mediaKind == _MediaKind.document
-                  ? themeIconData('fileText')
-                  : themeIconData('file'),
+            ThemeIcon(
+              _mediaKind == _MediaKind.document ? 'fileText' : 'file',
               size: 80,
               color: cs.primary,
             ),
@@ -614,7 +611,7 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
 // ---------------------------------------------------------------------------
 
 class _StatusView extends StatelessWidget {
-  final IconData icon;
+  final String icon;
   final String label;
   final bool spinner;
   const _StatusView({
@@ -632,7 +629,7 @@ class _StatusView extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 64, color: cs.primary),
+            ThemeIcon(icon, size: 64, color: cs.primary),
             const SizedBox(height: 20),
             Text(
               label,

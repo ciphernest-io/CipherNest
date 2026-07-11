@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 import '../../models/album_model.dart';
 import '../../models/file_model.dart';
@@ -107,7 +108,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               child: const Text('Cancel')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Delete', style: TextStyle(color: Colors.red))),
+              child: Text('Delete',
+                  style:
+                      TextStyle(color: ThemeController().tokens.danger))),
         ],
       ),
     );
@@ -152,8 +155,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               onTap: () => Navigator.pop(ctx, 'rename'),
             ),
             ListTile(
-              leading: ThemeIcon('trash', color: Colors.redAccent),
-              title: const Text('Delete Album', style: TextStyle(color: Colors.redAccent)),
+              leading: ThemeIcon('trash', color: cs.error),
+              title: Text('Delete Album', style: TextStyle(color: cs.error)),
               onTap: () => Navigator.pop(ctx, 'delete'),
             ),
           ],
@@ -192,7 +195,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
             TextButton(
                 onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Delete', style: TextStyle(color: Colors.red))),
+                child: Text('Delete',
+                    style:
+                        TextStyle(color: ThemeController().tokens.danger))),
           ],
         ),
       );
@@ -275,8 +280,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               onTap: () => Navigator.pop(ctx, 'remove'),
             ),
             ListTile(
-              leading: ThemeIcon('trash', color: Colors.redAccent),
-              title: const Text('Delete from Vault', style: TextStyle(color: Colors.redAccent)),
+              leading: ThemeIcon('trash', color: cs.error),
+              title: Text('Delete from Vault', style: TextStyle(color: cs.error)),
               onTap: () => Navigator.pop(ctx, 'delete'),
             ),
           ],
@@ -306,6 +311,7 @@ class _VaultPhotoPickerState extends State<_VaultPhotoPicker> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     return Scaffold(
       appBar: AppBar(
         title: Text('${_selected.length} selected'),
@@ -361,7 +367,7 @@ class _VaultPhotoPickerState extends State<_VaultPhotoPicker> {
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color:
-                          isSelected ? cs.primary : Colors.black38,
+                          isSelected ? cs.primary : t.hairline,
                       border:
                           Border.all(color: cs.onSurface, width: 1.5),
                     ),

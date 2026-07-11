@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -145,7 +146,7 @@ class _ShareDialogState extends State<ShareDialog> {
           obscureText: true,
           decoration: const InputDecoration(
             hintText: 'Password',
-            prefixIcon: Icon(Icons.lock_outline),
+            prefixIcon: ThemeIcon('lock'),
           ),
         ),
         const SizedBox(height: 4),
@@ -158,7 +159,7 @@ class _ShareDialogState extends State<ShareDialog> {
       ],
       if (_error != null) ...[
         const SizedBox(height: 12),
-        Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+        Text(_error!, style: TextStyle(color: cs.error, fontSize: 12)),
       ],
       const SizedBox(height: 20),
       ElevatedButton.icon(
@@ -179,17 +180,18 @@ class _ShareDialogState extends State<ShareDialog> {
   // ---- Result (post-create) ----
 
   List<Widget> _buildResult(ColorScheme cs) {
+    final t = ThemeController().tokens;
     final url = _result!.shareUrl;
     return [
       Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: cs.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(t.rInput),
         ),
         child: SelectableText(
           url,
-          style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+          style: TextStyle(fontSize: 12, fontFamily: t.monoFontFamily),
           maxLines: 4,
         ),
       ),
@@ -198,12 +200,12 @@ class _ShareDialogState extends State<ShareDialog> {
         Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            color: Colors.orangeAccent.withAlpha(30),
-            borderRadius: BorderRadius.circular(8),
+            color: t.warning.withAlpha(30),
+            borderRadius: BorderRadius.circular(t.rInput),
           ),
           child: Row(
             children: [
-              const Icon(Icons.warning_amber, color: Colors.orangeAccent, size: 18),
+              ThemeIcon('warning', color: t.warning, size: 18),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(

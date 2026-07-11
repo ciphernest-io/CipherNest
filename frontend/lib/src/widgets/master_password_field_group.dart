@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../config/theme.dart' show AppColors;
+import '../config/theme_controller.dart';
 import '../utils/wordlists.dart';
 import 'password_strength_meter.dart';
 import 'theme_icon.dart';
@@ -145,8 +145,9 @@ class _RuleRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     final tint = passed
-        ? AppColors.success
+        ? t.success
         : cs.onSurface.withValues(alpha: 0.4);
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),

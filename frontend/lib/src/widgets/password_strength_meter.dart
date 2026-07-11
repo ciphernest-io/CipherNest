@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 
-import '../config/theme.dart' show AppColors;
+import '../config/theme_controller.dart';
 
 /// A four-segment bar with a text label. Purely presentational — the
 /// consumer computes the [score] (0..4) and the [label] (see
 /// [PasswordStrengthLabel]) from whatever rules they care about.
 ///
-/// Segments fill left-to-right in a colour that ramps from `AppColors.error`
-/// through `AppColors.warning` into `cs.primary`, ending in
-/// `AppColors.success` at full score. Empty segments render as a muted
+/// Segments fill left-to-right in a colour that ramps from `t.danger`
+/// through `t.warning` into `cs.primary`, ending in
+/// `t.success` at full score. Empty segments render as a muted
 /// track so the total bar length is stable at every score.
 ///
 /// The meter is deliberately decoupled from the confirm-password check.
@@ -70,16 +70,18 @@ class PasswordStrengthMeter extends StatelessWidget {
   }
 
   Color _fillColor(ColorScheme cs) {
-    if (score <= 1) return AppColors.error;
-    if (score == 2) return AppColors.warning;
+    final t = ThemeController().tokens;
+    if (score <= 1) return t.danger;
+    if (score == 2) return t.warning;
     if (score == 3) return cs.primary;
-    return AppColors.success;
+    return t.success;
   }
 
   Color _labelColor(ColorScheme cs) {
-    if (score <= 1) return AppColors.error;
-    if (score == 2) return AppColors.warning;
-    if (score == 4) return AppColors.success;
+    final t = ThemeController().tokens;
+    if (score <= 1) return t.danger;
+    if (score == 2) return t.warning;
+    if (score == 4) return t.success;
     return cs.onSurface.withValues(alpha: 0.75);
   }
 }

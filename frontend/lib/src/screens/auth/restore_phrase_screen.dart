@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../config/routes.dart';
-import '../../config/theme.dart' show AppColors;
+import '../../config/theme_controller.dart';
 import '../../utils/wordlists.dart';
 import '../../widgets/bip39_autocomplete_row.dart';
 import '../../widgets/theme_icon.dart';
@@ -225,7 +225,7 @@ class _RestorePhraseScreenState extends State<RestorePhraseScreen> {
         automaticallyImplyLeading: false,
         leading: Navigator.canPop(context)
             ? IconButton(
-                icon: const Icon(Icons.arrow_back),
+                icon: const ThemeIcon('arrowLeft'),
                 onPressed: () => Navigator.pop(context),
               )
             : null,
@@ -285,7 +285,8 @@ class _RestorePhraseScreenState extends State<RestorePhraseScreen> {
                 const SizedBox(height: 12),
                 Text(
                   _phraseError!,
-                  style: text.bodySmall?.copyWith(color: AppColors.error),
+                  style: text.bodySmall
+                      ?.copyWith(color: ThemeController().tokens.danger),
                 ),
               ],
               const SizedBox(height: 28),
@@ -381,15 +382,16 @@ class _Slot extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     Color borderColor = cs.outline.withValues(alpha: 0.4);
-    if (isMatch) borderColor = AppColors.success;
-    if (isWrong) borderColor = AppColors.error;
+    if (isMatch) borderColor = t.success;
+    if (isWrong) borderColor = t.danger;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(t.rInput),
         border: Border.all(color: borderColor, width: 1.2),
       ),
       child: Row(
@@ -415,8 +417,8 @@ class _Slot extends StatelessWidget {
               textCapitalization: TextCapitalization.none,
               textInputAction:
                   isLast ? TextInputAction.done : TextInputAction.next,
-              style: const TextStyle(
-                fontFamily: 'Courier',
+              style: TextStyle(
+                fontFamily: t.monoFontFamily,
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
               ),

@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../../services/key_manager_service.dart';
 import '../../config/routes.dart';
-import '../../config/theme.dart' show AppColors;
+import '../../config/theme_controller.dart';
 import '../../utils/wordlists.dart';
 import '../../widgets/bip39_autocomplete_row.dart';
 import '../../widgets/theme_icon.dart';
@@ -40,7 +40,7 @@ class _RecoveryPhraseScreenState extends State<RecoveryPhraseScreen> {
         scrolledUnderElevation: 0,
         leading: _stage == 2
             ? IconButton(
-                icon: const Icon(Icons.arrow_back),
+                icon: const ThemeIcon('arrowLeft'),
                 onPressed: () => setState(() => _stage = 1),
               )
             : null,
@@ -143,7 +143,7 @@ class _DisplayStage extends StatelessWidget {
           const SizedBox(height: 10),
           _AdviceCard(
             icon: 'xCircle',
-            iconTint: AppColors.error,
+            iconTint: ThemeController().tokens.danger,
             title: 'Do NOT email or text it to yourself.',
             body:
                 "Emailing yourself the phrase is basically publishing it. That inbox lives on Google's servers, so does your phrase now. Cloud clipboards, cloud photo backups, cloud SMS all leak the same way. Every 'sync' is a copy you don't own. Kinda defeats the whole point.",
@@ -206,6 +206,7 @@ class _WordGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     return GridView.count(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
@@ -218,7 +219,7 @@ class _WordGrid extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
             color: cs.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(t.rInput),
             border: Border.all(color: cs.outline.withValues(alpha: 0.4)),
           ),
           child: Row(
@@ -236,8 +237,8 @@ class _WordGrid extends StatelessWidget {
                 child: Text(
                   words[i],
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontFamily: 'Courier',
+                  style: TextStyle(
+                    fontFamily: t.monoFontFamily,
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
                   ),
@@ -271,7 +272,8 @@ class _AdviceCard extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: cs.surface,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius:
+            BorderRadius.circular(ThemeController().tokens.rInput),
         border: Border.all(color: cs.outline.withValues(alpha: 0.3)),
       ),
       child: Row(
@@ -497,6 +499,7 @@ class _TypeBackSlot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final t = ThemeController().tokens;
     Widget? suffix;
     Color? borderColor;
     switch (status) {
@@ -507,10 +510,10 @@ class _TypeBackSlot extends StatelessWidget {
             'checkCircle',
             selected: true,
             size: 20,
-            color: AppColors.success,
+            color: t.success,
           ),
         );
-        borderColor = AppColors.success;
+        borderColor = t.success;
       case _SlotStatus.wrong:
         suffix = Padding(
           padding: const EdgeInsets.all(12),
@@ -518,10 +521,10 @@ class _TypeBackSlot extends StatelessWidget {
             'xCircle',
             selected: true,
             size: 20,
-            color: AppColors.error,
+            color: t.danger,
           ),
         );
-        borderColor = AppColors.error;
+        borderColor = t.danger;
       case _SlotStatus.neutral:
         suffix = null;
         borderColor = null;

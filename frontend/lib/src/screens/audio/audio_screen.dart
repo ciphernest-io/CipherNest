@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
+import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 
 import '../../models/file_model.dart';
@@ -108,7 +109,9 @@ class _AudioScreenState extends State<AudioScreen> {
       if (mounted) {
         setState(() => _preparingFileId = null);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not play: $e'), backgroundColor: Colors.red),
+          SnackBar(
+              content: Text('Could not play: $e'),
+              backgroundColor: ThemeController().tokens.danger),
         );
       }
     }
@@ -129,7 +132,9 @@ class _AudioScreenState extends State<AudioScreen> {
               child: const Text('Cancel')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Delete', style: TextStyle(color: Colors.red))),
+              child: Text('Delete',
+                  style:
+                      TextStyle(color: ThemeController().tokens.danger))),
         ],
       ),
     );
@@ -179,6 +184,7 @@ class _AudioScreenState extends State<AudioScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Audio'),
@@ -233,12 +239,12 @@ class _AudioScreenState extends State<AudioScreen> {
                       return Container(
                         decoration: BoxDecoration(
                           color: cs.surface,
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(t.rInput),
                           border: Border.all(color: cs.outline),
                         ),
                         child: ListTile(
                           shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12)),
+                              borderRadius: BorderRadius.circular(t.rInput)),
                           leading: CircleAvatar(
                             backgroundColor: cs.primary.withAlpha(60),
                             child: isPreparing
@@ -248,10 +254,9 @@ class _AudioScreenState extends State<AudioScreen> {
                                     child: CircularProgressIndicator(
                                         strokeWidth: 2, color: cs.primary),
                                   )
-                                : Icon(
-                                    isPlaying
-                                        ? themeIconData('pause', selected: true)
-                                        : themeIconData('play', selected: true),
+                                : ThemeIcon(
+                                    isPlaying ? 'pause' : 'play',
+                                    selected: true,
                                     color: cs.primary,
                                     size: 18,
                                   ),
@@ -278,15 +283,15 @@ class _AudioScreenState extends State<AudioScreen> {
                               if (v == 'share') ShareDialog.show(context, file);
                               if (v == 'delete') _handleDelete(file);
                             },
-                            itemBuilder: (_) => const [
-                              PopupMenuItem(
+                            itemBuilder: (_) => [
+                              const PopupMenuItem(
                                 value: 'share',
                                 child: Text('Share'),
                               ),
                               PopupMenuItem(
                                 value: 'delete',
                                 child: Text('Delete',
-                                    style: TextStyle(color: Colors.redAccent)),
+                                    style: TextStyle(color: cs.error)),
                               ),
                             ],
                           ),
@@ -332,10 +337,9 @@ class _AudioScreenState extends State<AudioScreen> {
                 ),
               ),
               IconButton(
-                icon: Icon(
-                  _player.playing
-                      ? themeIconData('pause', selected: true)
-                      : themeIconData('play', selected: true),
+                icon: ThemeIcon(
+                  _player.playing ? 'pause' : 'play',
+                  selected: true,
                   color: cs.primary,
                 ),
                 onPressed: () async {

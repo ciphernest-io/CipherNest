@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:open_file/open_file.dart'; // Launches native PDF reader
 import 'package:path_provider/path_provider.dart'; // For temp storage
@@ -91,7 +92,9 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not open file: $e'), backgroundColor: Colors.red),
+          SnackBar(
+              content: Text('Could not open file: $e'),
+              backgroundColor: ThemeController().tokens.danger),
         );
       }
     } finally {
@@ -113,7 +116,8 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete', style: TextStyle(color: Colors.red))
+            child: Text('Delete',
+                style: TextStyle(color: ThemeController().tokens.danger))
           ),
         ],
       ),
@@ -133,6 +137,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
 
     return Scaffold(
       appBar: AppBar(
@@ -162,7 +167,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                   Center(
                     child: Column(
                       children: [
-                        ThemeIcon('folderOpen', size: 64, color: cs.surfaceContainerHighest),
+                        ThemeIcon('folderOpen', size: 64, color: cs.onSurface.withAlpha(120)),
                         const SizedBox(height: 16),
                         Text('No documents found', style: TextStyle(color: cs.onSurface.withAlpha(120))),
                       ],
@@ -185,12 +190,12 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                 height: 90,
                 decoration: BoxDecoration(
                   color: cs.surface,
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(t.rInput),
                   border: Border.all(color: cs.outline),
                 ),
                 child: InkWell(
                   onTap: () => _handleOpen(file),
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(t.rInput),
                   child: Row(
                     children: [
                       // --- BIG THUMBNAIL (Left) ---
@@ -199,7 +204,8 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                         height: double.infinity,
                         decoration: BoxDecoration(
                           color: cs.surface,
-                          borderRadius: const BorderRadius.horizontal(left: Radius.circular(12)),
+                          borderRadius: BorderRadius.horizontal(
+                              left: Radius.circular(t.rInput)),
                         ),
                         child: _DocumentThumbnail(
                           key: ValueKey(file.id),
@@ -282,9 +288,10 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                               value: 'delete',
                               child: Row(
                                 children: [
-                                  ThemeIcon('trash', color: Colors.red, size: 20),
-                                  SizedBox(width: 12),
-                                  Text('Delete', style: TextStyle(color: Colors.red)),
+                                  ThemeIcon('trash', color: cs.error, size: 20),
+                                  const SizedBox(width: 12),
+                                  Text('Delete',
+                                      style: TextStyle(color: cs.error)),
                                 ],
                               ),
                             ),
@@ -351,49 +358,50 @@ class _DocumentThumbnailState extends State<_DocumentThumbnail> {
   }
 
   Widget _buildFallbackIcon() {
+    final t = ThemeController().tokens;
     // robust extension parsing
     final ext = widget.file.filename.split('.').last.toLowerCase().trim();
 
-    IconData icon;
+    String icon;
     Color color;
 
     switch (ext) {
       case 'pdf':
-        icon = themeIconData('filePdf');
-        color = const Color(0xFFCC4444);
+        icon = 'filePdf';
+        color = t.danger;
         break;
       case 'doc':
       case 'docx':
-        icon = themeIconData('fileText');
-        color = const Color(0xFF5588CC);
+        icon = 'fileText';
+        color = t.info;
         break;
       case 'xls':
       case 'xlsx':
       case 'csv':
-        icon = themeIconData('table');
-        color = const Color(0xFF55AA77);
+        icon = 'table';
+        color = t.success;
         break;
       case 'ppt':
       case 'pptx':
-        icon = themeIconData('presentation');
-        color = const Color(0xFFCC8844);
+        icon = 'presentation';
+        color = t.warning;
         break;
       case 'txt':
-        icon = themeIconData('textT');
-        color = Colors.grey;
+        icon = 'textT';
+        color = t.fgMuted;
         break;
       case 'zip':
       case 'rar':
-        icon = themeIconData('fileZip');
-        color = const Color(0xFFCCCC55);
+        icon = 'fileZip';
+        color = t.warning;
         break;
       default:
-        icon = themeIconData('file');
-        color = Colors.grey;
+        icon = 'file';
+        color = t.fgMuted;
     }
 
     return Center(
-      child: Icon(icon, color: color.withAlpha(204), size: 36),
+      child: ThemeIcon(icon, color: color.withAlpha(204), size: 36),
     );
   }
 
@@ -401,7 +409,8 @@ class _DocumentThumbnailState extends State<_DocumentThumbnail> {
   Widget build(BuildContext context) {
     if (_thumbBytes != null) {
       return ClipRRect(
-        borderRadius: const BorderRadius.horizontal(left: Radius.circular(12)),
+        borderRadius: BorderRadius.horizontal(
+            left: Radius.circular(ThemeController().tokens.rInput)),
         child: Image.memory(
           _thumbBytes!, 
           width: double.infinity, 

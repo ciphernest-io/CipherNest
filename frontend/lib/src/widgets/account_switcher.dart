@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'theme_icon.dart';
 import '../config/routes.dart';
+import '../config/theme_controller.dart';
 import '../../services/cloud/account_registry.dart';
 import '../../services/cloud/cloud_account.dart';
 import '../../services/cloud/cloud_service.dart';
@@ -13,16 +14,16 @@ import '../../services/sync_service.dart';
 class AccountSwitcher extends StatelessWidget {
   const AccountSwitcher({super.key});
 
-  IconData _providerIcon(int providerType) {
+  String _providerIcon(int providerType) {
     switch (providerType) {
       case CloudAccount.providerGoogle:
-        return themeIconData('googleLogo');
+        return 'googleLogo';
       case CloudAccount.providerOneDrive:
-        return themeIconData('microsoftOutlookLogo');
+        return 'microsoftOutlookLogo';
       case CloudAccount.providerDropbox:
-        return themeIconData('dropboxLogo');
+        return 'dropboxLogo';
       default:
-        return themeIconData('cloud');
+        return 'cloud';
     }
   }
 
@@ -52,6 +53,7 @@ class AccountSwitcher extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     return ListenableBuilder(
       listenable: AccountRegistry(),
       builder: (context, _) {
@@ -64,7 +66,8 @@ class AccountSwitcher extends StatelessWidget {
           tooltip: 'Switch account',
           offset: const Offset(0, 48),
           color: cs.surface,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(t.rInput)),
           onSelected: (val) => _handleSelect(context, val),
           itemBuilder: (ctx) => [
             for (final a in accounts)
@@ -72,7 +75,7 @@ class AccountSwitcher extends StatelessWidget {
                 value: a.id,
                 child: Row(
                   children: [
-                    Icon(_providerIcon(a.providerType),
+                    ThemeIcon(_providerIcon(a.providerType),
                         size: 20, color: cs.onSurface),
                     const SizedBox(width: 12),
                     Expanded(
@@ -124,7 +127,7 @@ class AccountSwitcher extends StatelessWidget {
                     shape: BoxShape.circle,
                   ),
                   alignment: Alignment.center,
-                  child: Icon(_providerIcon(active.providerType),
+                  child: ThemeIcon(_providerIcon(active.providerType),
                       size: 16, color: cs.primary),
                 ),
                 const SizedBox(width: 6),

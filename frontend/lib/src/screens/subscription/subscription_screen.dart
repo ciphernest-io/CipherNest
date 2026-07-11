@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../config/routes.dart';
-import '../../config/theme.dart' show AppColors;
+import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 
 /// Three-tier paywall (Free / Plus / Lifetime). In v1.0 the CTAs are mock:
@@ -348,6 +348,7 @@ class _TierCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     final text = Theme.of(context).textTheme;
     final borderColor = recommended
         ? cs.primary
@@ -356,14 +357,14 @@ class _TierCard extends StatelessWidget {
       color: recommended
           ? cs.surface
           : cs.surfaceContainerHighest.withValues(alpha: 0.5),
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(t.rCard),
       child: InkWell(
         onTap: onToggle,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(t.rCard),
         child: Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(t.rCard),
             border: Border.all(
               color: borderColor,
               width: recommended ? 1.6 : 1,
@@ -387,7 +388,7 @@ class _TierCard extends StatelessWidget {
                         color: recommended
                             ? cs.primary.withValues(alpha: 0.14)
                             : cs.onSurface.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(20),
+                        borderRadius: BorderRadius.circular(t.rCardLg),
                       ),
                       child: Text(
                         badge,
@@ -482,7 +483,7 @@ class _TierCard extends StatelessWidget {
                               size: 16,
                               color: recommended
                                   ? cs.primary
-                                  : AppColors.success,
+                                  : t.success,
                             ),
                           ),
                           const SizedBox(width: 10),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'theme_controller.dart';
 import 'theme_packs.dart';
@@ -167,6 +168,12 @@ class AppTheme {
         elevation: 0,
         centerTitle: false,
         titleTextStyle: titleStyle.copyWith(fontSize: 20),
+        // Transparent app bars (viewer, auth flow) make AppBar estimate the
+        // status-bar style from transparent-as-black — white clock/battery
+        // on a white background in light mode. Pin it to the real mode.
+        systemOverlayStyle: mode == Brightness.dark
+            ? SystemUiOverlayStyle.light
+            : SystemUiOverlayStyle.dark,
       ),
 
       bottomNavigationBarTheme: BottomNavigationBarThemeData(

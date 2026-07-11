@@ -229,7 +229,9 @@ double _fillFor(ThemePack pack) {
 
 double _weightFor(ThemePack pack, {required bool selected}) {
   switch (pack) {
-    case ThemePack.binary: return 100;
+    // Raised from the design system's 100 — hairline glyphs were barely
+    // visible on device, so Binary matches Corporate's weight.
+    case ThemePack.binary: return 300;
     case ThemePack.burrow: return 300;
     case ThemePack.corporate: return 300;
     case ThemePack.alien: return 700;

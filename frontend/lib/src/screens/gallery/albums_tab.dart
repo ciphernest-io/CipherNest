@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
+import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../config/routes.dart';
@@ -134,12 +135,13 @@ class _AlbumsTabState extends State<AlbumsTab> {
 
   Widget _buildCreateCard() {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     return GestureDetector(
       onTap: _createAlbum,
       child: Container(
         decoration: BoxDecoration(
           color: cs.surface,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(t.rCard),
           border: Border.all(color: cs.outline),
         ),
         child: Center(
@@ -232,12 +234,13 @@ class _AlbumCardState extends State<_AlbumCard> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     return GestureDetector(
       onTap: widget.onTap,
       child: Container(
         decoration: BoxDecoration(
           color: cs.surface,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(t.rCard),
           border: Border.all(color: cs.outline),
         ),
         clipBehavior: Clip.antiAlias,
@@ -249,10 +252,10 @@ class _AlbumCardState extends State<_AlbumCard> {
                   ? Image.memory(_coverBytes!, fit: BoxFit.cover)
                   : Container(
                       color: cs.surfaceContainerHighest,
-                      child: Icon(
+                      child: ThemeIcon(
                         widget.album.isSmart
                             ? _smartAlbumIcon(widget.album.smartQuery)
-                            : themeIconData('folderSimple'),
+                            : 'folderSimple',
                         color: cs.onSurface.withAlpha(60),
                         size: 40,
                       ),
@@ -283,18 +286,18 @@ class _AlbumCardState extends State<_AlbumCard> {
     );
   }
 
-  IconData _smartAlbumIcon(String? query) {
+  String _smartAlbumIcon(String? query) {
     switch (query) {
       case 'all_images':
-        return themeIconData('images');
+        return 'images';
       case 'camera':
-        return themeIconData('camera');
+        return 'camera';
       case 'screenshots':
-        return themeIconData('screencast');
+        return 'screencast';
       case 'videos':
-        return themeIconData('videoCamera');
+        return 'videoCamera';
       default:
-        return themeIconData('folderSimple');
+        return 'folderSimple';
     }
   }
 }

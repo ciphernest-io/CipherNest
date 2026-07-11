@@ -536,7 +536,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final cards = <Widget>[
       _DashboardCard(
         title: 'Photos & Videos',
-        icon: themeIconData('images'),
+        icon: 'images',
         color: cs.primary,
         showCardArt: true,
         onTap: () async {
@@ -545,19 +545,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       _DashboardCard(
         title: 'Documents',
-        icon: themeIconData('fileText'),
+        icon: 'fileText',
         color: cs.primary,
         onTap: () => Navigator.pushNamed(context, AppRoutes.documents),
       ),
       _DashboardCard(
         title: 'Audio',
-        icon: themeIconData('musicNote'),
+        icon: 'musicNote',
         color: cs.primary,
         onTap: () => Navigator.pushNamed(context, AppRoutes.audio),
       ),
       _DashboardCard(
         title: 'Other Files',
-        icon: themeIconData('folder'),
+        icon: 'folder',
         color: cs.primary,
         onTap: () => Navigator.pushNamed(context, AppRoutes.otherFiles),
       ),
@@ -704,7 +704,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
 class _DashboardCard extends StatelessWidget {
   final String title;
-  final IconData icon;
+  final String icon;
   final Color color;
   final VoidCallback onTap;
   /// If true, render the active theme pack's `cardArtAsset` behind the card
@@ -733,7 +733,7 @@ class _DashboardCard extends StatelessWidget {
             color: color.withOpacity(0.1),
             borderRadius: BorderRadius.circular(tokens.rIc),
           ),
-          child: Icon(icon, color: color, size: 28),
+          child: ThemeIcon(icon, color: color, size: 28),
         ),
         const SizedBox(width: 16),
         Text(title, style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600, fontSize: 18)),
@@ -813,15 +813,15 @@ class _VaultUsageCard extends StatelessWidget {
     final total = live + trashBytes;
     final count = stats?['total_count'] ?? 0;
 
+    final tokens = ThemeController().tokens;
     final segments = <_UsageSegment>[
       _UsageSegment('Photos & Videos', images, cs.primary),
-      _UsageSegment('Documents', docs, Colors.amber.shade400),
-      _UsageSegment('Audio', audio, Colors.tealAccent.shade400),
-      _UsageSegment('Other', other, Colors.pinkAccent.shade100),
+      _UsageSegment('Documents', docs, tokens.warning),
+      _UsageSegment('Audio', audio, tokens.info),
+      _UsageSegment('Other', other, tokens.fgMuted),
       if (trashBytes > 0)
         _UsageSegment('Recycle Bin', trashBytes, cs.onSurface.withAlpha(90)),
     ].where((s) => s.bytes > 0).toList();
-    final tokens = ThemeController().tokens;
 
     return Container(
       padding: EdgeInsets.all(tokens.pad),
@@ -835,8 +835,8 @@ class _VaultUsageCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(
-                themeIconData('cloudCheck'),
+              ThemeIcon(
+                'cloudCheck',
                 color: cs.primary,
                 size: 20,
               ),

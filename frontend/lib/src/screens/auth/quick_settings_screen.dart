@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../services/auto_sync_worker.dart';
 import '../../../services/key_manager_service.dart';
 import '../../config/routes.dart';
+import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 
 /// One-time convenience screen shown after successful signup or restore,
@@ -219,7 +220,8 @@ class _SettingRow extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: cs.surface,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius:
+            BorderRadius.circular(ThemeController().tokens.rCard),
         border: Border.all(color: cs.outline.withValues(alpha: 0.3)),
       ),
       child: Row(

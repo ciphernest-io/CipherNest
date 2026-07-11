@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:photo_manager/photo_manager.dart';
 import '../../config/routes.dart';
@@ -241,6 +242,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
   // --- PHASE: Choosing migration mode ---
   Widget _buildChoosing() {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -262,7 +264,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: cs.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(t.rInput),
             border: Border.all(color: cs.outline.withAlpha(60)),
           ),
           child: Row(
@@ -288,21 +290,21 @@ class _MigrationScreenState extends State<MigrationScreen> {
         ),
         const SizedBox(height: 20),
         _MigrationOption(
-          icon: themeIconData('infinity'),
+          icon: 'infinity',
           title: 'Entire Gallery',
           subtitle: 'Encrypt all photos and videos on this device',
           onTap: _scanFullGallery,
         ),
         const SizedBox(height: 12),
         _MigrationOption(
-          icon: themeIconData('folderSimple'),
+          icon: 'folderSimple',
           title: 'Select Albums',
           subtitle: 'Choose specific albums to migrate',
           onTap: _showAlbumPicker,
         ),
         const SizedBox(height: 12),
         _MigrationOption(
-          icon: themeIconData('handTap'),
+          icon: 'handTap',
           title: 'Pick Photos Manually',
           subtitle: 'Hand-pick individual photos and videos',
           onTap: _pickManualPhotos,
@@ -314,6 +316,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
   // --- PHASE: Album selector ---
   Widget _buildAlbumSelector() {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -365,7 +368,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
               backgroundColor: cs.primary,
               foregroundColor: cs.onPrimary,
               disabledBackgroundColor: cs.surfaceContainerHighest,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(t.rCard)),
             ),
             child: Text('Scan ${_selectedAlbumIndices.length} Album${_selectedAlbumIndices.length == 1 ? '' : 's'}'),
           ),
@@ -395,13 +398,14 @@ class _MigrationScreenState extends State<MigrationScreen> {
   // --- PHASE: Ready to migrate ---
   Widget _buildReady() {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
 
     if (_assets.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            ThemeIcon('checkCircle', selected: true, color: Colors.greenAccent, size: 64),
+            ThemeIcon('checkCircle', selected: true, color: t.success, size: 64),
             const SizedBox(height: 16),
             Text('All caught up!',
                 style: TextStyle(color: cs.onSurface, fontSize: 22, fontWeight: FontWeight.bold)),
@@ -438,16 +442,16 @@ class _MigrationScreenState extends State<MigrationScreen> {
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
             color: cs.surface,
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(t.rCard),
             border: Border.all(color: cs.outline),
           ),
           child: Column(
             children: [
-              _StatRow(label: 'Photos', value: '$photoCount', icon: themeIconData('image')),
+              _StatRow(label: 'Photos', value: '$photoCount', icon: 'image'),
               if (videoCount > 0)
-                _StatRow(label: 'Videos', value: '$videoCount', icon: themeIconData('videoCamera')),
-              _StatRow(label: 'Total Size', value: _formatBytes(_totalBytes), icon: themeIconData('hardDrive')),
-              _StatRow(label: 'Estimated Time', value: '~${_formatDuration(estimatedDuration)}', icon: themeIconData('timer')),
+                _StatRow(label: 'Videos', value: '$videoCount', icon: 'videoCamera'),
+              _StatRow(label: 'Total Size', value: _formatBytes(_totalBytes), icon: 'hardDrive'),
+              _StatRow(label: 'Estimated Time', value: '~${_formatDuration(estimatedDuration)}', icon: 'timer'),
             ],
           ),
         ),
@@ -465,7 +469,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
             style: ElevatedButton.styleFrom(
               backgroundColor: cs.primary,
               foregroundColor: cs.onPrimary,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(t.rCard)),
             ),
           ),
         ),
@@ -477,6 +481,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
   // --- PHASE: Migrating (and Paused) ---
   Widget _buildMigrating() {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     final p = _progress;
     final fraction = p != null && p.total > 0 ? p.current / p.total : 0.0;
     final percent = (fraction * 100).toStringAsFixed(0);
@@ -507,7 +512,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
                     value: fraction, strokeWidth: 8,
                     backgroundColor: cs.outline,
                     valueColor: AlwaysStoppedAnimation<Color>(
-                      _phase == _MigrationPhase.paused ? Colors.orangeAccent : cs.primary,
+                      _phase == _MigrationPhase.paused ? t.warning : cs.primary,
                     ),
                   ),
                 ),
@@ -530,16 +535,16 @@ class _MigrationScreenState extends State<MigrationScreen> {
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: cs.surface,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(t.rInput),
               border: Border.all(color: cs.outline),
             ),
             child: Column(
               children: [
-                _StatRow(label: 'Secured', value: '${p.synced}', icon: themeIconData('checkCircle', selected: true), color: Colors.greenAccent),
+                _StatRow(label: 'Secured', value: '${p.synced}', icon: 'checkCircle', iconSelected: true, color: t.success),
                 if (p.failed > 0)
-                  _StatRow(label: 'Failed', value: '${p.failed}', icon: themeIconData('warning', selected: true), color: Colors.redAccent),
-                _StatRow(label: 'Uploaded', value: _formatBytes(p.bytesUploaded), icon: themeIconData('cloudArrowUp')),
-                _StatRow(label: 'ETA', value: _formatDuration(p.eta), icon: themeIconData('timer')),
+                  _StatRow(label: 'Failed', value: '${p.failed}', icon: 'warning', iconSelected: true, color: t.danger),
+                _StatRow(label: 'Uploaded', value: _formatBytes(p.bytesUploaded), icon: 'cloudArrowUp'),
+                _StatRow(label: 'ETA', value: _formatDuration(p.eta), icon: 'timer'),
               ],
             ),
           ),
@@ -550,8 +555,8 @@ class _MigrationScreenState extends State<MigrationScreen> {
               child: OutlinedButton(
                 onPressed: _cancel,
                 style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.redAccent,
-                  side: const BorderSide(color: Colors.redAccent),
+                  foregroundColor: t.danger,
+                  side: BorderSide(color: t.danger),
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
                 child: const Text('Cancel'),
@@ -562,7 +567,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
               child: ElevatedButton(
                 onPressed: _phase == _MigrationPhase.paused ? _resume : _pause,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: _phase == _MigrationPhase.paused ? cs.primary : Colors.orangeAccent,
+                  backgroundColor: _phase == _MigrationPhase.paused ? cs.primary : t.warning,
                   foregroundColor: cs.onPrimary,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
@@ -579,14 +584,16 @@ class _MigrationScreenState extends State<MigrationScreen> {
   // --- PHASE: Complete ---
   Widget _buildComplete() {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     final r = _result;
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            r != null && r.failed == 0 ? themeIconData('checkCircle', selected: true) : themeIconData('info'),
-            color: r != null && r.failed == 0 ? Colors.greenAccent : Colors.orangeAccent,
+          ThemeIcon(
+            r != null && r.failed == 0 ? 'checkCircle' : 'info',
+            selected: r != null && r.failed == 0,
+            color: r != null && r.failed == 0 ? t.success : t.warning,
             size: 72,
           ),
           const SizedBox(height: 20),
@@ -600,16 +607,16 @@ class _MigrationScreenState extends State<MigrationScreen> {
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
                 color: cs.surface,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(t.rCard),
                 border: Border.all(color: cs.outline),
               ),
               child: Column(
                 children: [
-                  _StatRow(label: 'Secured', value: '${r.synced}', icon: themeIconData('checkCircle', selected: true), color: Colors.greenAccent),
+                  _StatRow(label: 'Secured', value: '${r.synced}', icon: 'checkCircle', iconSelected: true, color: t.success),
                   if (r.failed > 0)
-                    _StatRow(label: 'Failed', value: '${r.failed}', icon: themeIconData('warning', selected: true), color: Colors.redAccent),
+                    _StatRow(label: 'Failed', value: '${r.failed}', icon: 'warning', iconSelected: true, color: t.danger),
                   if (r.skipped > 0)
-                    _StatRow(label: 'Skipped', value: '${r.skipped}', icon: themeIconData('skipForward'), color: Colors.grey),
+                    _StatRow(label: 'Skipped', value: '${r.skipped}', icon: 'skipForward', color: t.fgMuted),
                 ],
               ),
             ),
@@ -632,6 +639,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
   }
 
   Future<void> _showExitConfirmation() async {
+    final t = ThemeController().tokens;
     final shouldLeave = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -644,7 +652,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Continue')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Cancel', style: TextStyle(color: Colors.red)),
+            child: Text('Cancel', style: TextStyle(color: t.danger)),
           ),
         ],
       ),
@@ -658,7 +666,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
 
 // --- Reusable option card for the choosing phase ---
 class _MigrationOption extends StatelessWidget {
-  final IconData icon;
+  final String icon;
   final String title;
   final String subtitle;
   final VoidCallback onTap;
@@ -673,19 +681,20 @@ class _MigrationOption extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(t.rCard),
       child: Container(
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
           color: cs.surface,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(t.rCard),
           border: Border.all(color: cs.outline),
         ),
         child: Row(
           children: [
-            Icon(icon, color: cs.primary, size: 28),
+            ThemeIcon(icon, color: cs.primary, size: 28),
             const SizedBox(width: 16),
             Expanded(
               child: Column(
@@ -720,6 +729,7 @@ class _AssetPickerScreenState extends State<_AssetPickerScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     return Scaffold(
       appBar: AppBar(
         title: Text('${_selected.length} selected'),
@@ -786,7 +796,7 @@ class _AssetPickerScreenState extends State<_AssetPickerScreen> {
                     width: 24, height: 24,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: isSelected ? cs.primary : Colors.black38,
+                      color: isSelected ? cs.primary : t.hairline,
                       border: Border.all(color: cs.onSurface, width: 1.5),
                     ),
                     child: isSelected
@@ -806,13 +816,15 @@ class _AssetPickerScreenState extends State<_AssetPickerScreen> {
 class _StatRow extends StatelessWidget {
   final String label;
   final String value;
-  final IconData icon;
+  final String icon;
+  final bool iconSelected;
   final Color? color;
 
   const _StatRow({
     required this.label,
     required this.value,
     required this.icon,
+    this.iconSelected = false,
     this.color,
   });
 
@@ -823,7 +835,7 @@ class _StatRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
-          Icon(icon, size: 18, color: color ?? cs.onSurface.withAlpha(120)),
+          ThemeIcon(icon, selected: iconSelected, size: 18, color: color ?? cs.onSurface.withAlpha(120)),
           const SizedBox(width: 12),
           Text(label, style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 14)),
           const Spacer(),
