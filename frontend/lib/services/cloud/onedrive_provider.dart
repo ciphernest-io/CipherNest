@@ -4,11 +4,13 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:http/http.dart' as http;
+import '../database_backup_service.dart';
 import '../encryption_service.dart';
 import '../../src/models/file_model.dart';
 import 'account_registry.dart';
 import 'cloud_account.dart';
 import 'cloud_provider.dart';
+import 'drive_layout.dart';
 
 /// CipherNest OneDrive integration.
 /// Uses Microsoft Graph API + OAuth2 (auth code flow) for personal accounts.
@@ -24,8 +26,15 @@ class OneDriveProvider implements CloudProvider {
   static const String _authority =
       'https://login.microsoftonline.com/common/oauth2/v2.0';
   static const String _graphBase = 'https://graph.microsoft.com/v1.0';
+  // Files.ReadWrite (not .AppFolder): the vault lives in a visible
+  // /CipherNest/ tree, matching the Google provider's drive.file posture.
   static const String _scopes =
-      'Files.ReadWrite.AppFolder User.Read offline_access';
+      'Files.ReadWrite User.Read offline_access';
+
+  /// Path base for a file in the visible tree, e.g.
+  /// `/me/drive/root:/CipherNest/vault/<name>`.
+  static String _itemPath(String folder, String encodedName) =>
+      '$_graphBase/me/drive/root:/${DriveLayout.rootFolder}/$folder/$encodedName';
 
   @override
   CloudAccount account;
@@ -290,33 +299,39 @@ class OneDriveProvider implements CloudProvider {
         ? filename.substring(0, filename.length - '.cnest'.length)
         : filename;
 
-    // Special files (DB backup, etc.) keep their original name unencoded.
-    final isSpecial = filename == 'ciphernest_db_backup.cnest';
-    final cloudName = isSpecial
+    // Special files (DB backup) keep their original name unencoded and land
+    // in backup/; everything else is a vault file in vault/.
+    final isBackup = filename == DatabaseBackupService.backupFileName;
+    final folder = isBackup ? DriveLayout.backupFolder : DriveLayout.vaultFolder;
+    final cloudName = isBackup
         ? filename
         : _encodeFilename(stem, type.wireName, originalName ?? filename);
 
+    // Graph auto-creates missing parent folders on upload; drop the README
+    // once the tree exists.
+    await _ensureReadme();
+
     if (fileBytes != null) {
-      return _uploadSmall(cloudName, fileBytes);
+      return _uploadSmall(folder, cloudName, fileBytes);
     }
     if (fileStream != null && fileSize != null) {
       if (fileSize <= _smallUploadThreshold) {
         // Buffer small streams into bytes for the simple PUT path
         final builder = BytesBuilder(copy: false);
         await fileStream.forEach(builder.add);
-        return _uploadSmall(cloudName, builder.takeBytes());
+        return _uploadSmall(folder, cloudName, builder.takeBytes());
       }
-      return _uploadLarge(cloudName, fileStream, fileSize);
+      return _uploadLarge(folder, cloudName, fileStream, fileSize);
     }
     throw Exception('No data provided for upload');
   }
 
-  Future<String?> _uploadSmall(String cloudName, Uint8List bytes) async {
+  Future<String?> _uploadSmall(
+      String folder, String cloudName, Uint8List bytes) async {
     final headers = await _authHeaders();
     final encodedName = Uri.encodeComponent(cloudName);
     final resp = await http.put(
-      Uri.parse(
-          '$_graphBase/me/drive/special/approot:/$encodedName:/content'),
+      Uri.parse('${_itemPath(folder, encodedName)}:/content'),
       headers: {
         ...headers,
         'Content-Type': 'application/octet-stream',
@@ -330,15 +345,14 @@ class OneDriveProvider implements CloudProvider {
     return j['id'] as String?;
   }
 
-  Future<String?> _uploadLarge(
-      String cloudName, Stream<List<int>> stream, int totalSize) async {
+  Future<String?> _uploadLarge(String folder, String cloudName,
+      Stream<List<int>> stream, int totalSize) async {
     final headers = await _authHeaders();
     final encodedName = Uri.encodeComponent(cloudName);
 
     // Step 1: create upload session
     final createResp = await http.post(
-      Uri.parse(
-          '$_graphBase/me/drive/special/approot:/$encodedName:/createUploadSession'),
+      Uri.parse('${_itemPath(folder, encodedName)}:/createUploadSession'),
       headers: {
         ...headers,
         'Content-Type': 'application/json',
@@ -477,7 +491,7 @@ class OneDriveProvider implements CloudProvider {
       final headers = await _authHeaders();
       final results = <Map<String, dynamic>>[];
       String url =
-          '$_graphBase/me/drive/special/approot/children?\$top=200&\$select=id,name,size,createdDateTime';
+          '$_graphBase/me/drive/root:/${DriveLayout.rootFolder}/${DriveLayout.vaultFolder}:/children?\$top=200&\$select=id,name,size,createdDateTime';
 
       while (true) {
         final resp = await http.get(Uri.parse(url), headers: headers);
@@ -526,8 +540,9 @@ class OneDriveProvider implements CloudProvider {
     return _withRetry(() async {
       final headers = await _authHeaders();
       final encodedName = Uri.encodeComponent(name);
+      // Only ever called for the DB backup, which lives in backup/.
       final resp = await http.get(
-        Uri.parse('$_graphBase/me/drive/special/approot:/$encodedName'),
+        Uri.parse(_itemPath(DriveLayout.backupFolder, encodedName)),
         headers: headers,
       );
       if (resp.statusCode == 200) {
@@ -570,7 +585,30 @@ class OneDriveProvider implements CloudProvider {
     }
   }
 
-  // ---- PUBLIC SHARE (uploads to approot, anonymous createLink) ----
+  /// Writes the plaintext README into /CipherNest/ once per session. Graph
+  /// auto-creates the folder; conflictBehavior 'fail' means an existing
+  /// README is left untouched (a 409 is expected and ignored).
+  bool _readmeEnsured = false;
+  Future<void> _ensureReadme() async {
+    if (_readmeEnsured) return;
+    _readmeEnsured = true;
+    try {
+      final headers = await _authHeaders();
+      final bytes =
+          Uint8List.fromList(DriveLayout.readmeContents.codeUnits);
+      final url =
+          '$_graphBase/me/drive/root:/${DriveLayout.rootFolder}/${DriveLayout.readmeName}:/content?@microsoft.graph.conflictBehavior=fail';
+      await http.put(
+        Uri.parse(url),
+        headers: {...headers, 'Content-Type': 'text/plain'},
+        body: bytes,
+      );
+    } catch (e) {
+      debugPrint('OneDrive README write skipped: $e');
+    }
+  }
+
+  // ---- PUBLIC SHARE (CipherNest/shares/, anonymous createLink) ----
 
   @override
   Future<({String cloudId, String downloadUrl})> uploadPublicShare({
@@ -581,11 +619,11 @@ class OneDriveProvider implements CloudProvider {
       final headers = await _authHeaders();
       final encodedName = Uri.encodeComponent(filename);
 
-      // 1. Upload to approot (small uploads only — share blobs are typically
-      //    small images/audio/docs; large videos won't realistically be shared)
+      // 1. Upload to CipherNest/shares/ (small uploads only — share blobs are
+      //    typically small images/audio/docs; large videos won't realistically
+      //    be shared)
       final uploadResp = await http.put(
-        Uri.parse(
-            '$_graphBase/me/drive/special/approot:/$encodedName:/content'),
+        Uri.parse('${_itemPath(DriveLayout.sharesFolder, encodedName)}:/content'),
         headers: {
           ...headers,
           'Content-Type': 'application/octet-stream',

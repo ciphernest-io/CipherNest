@@ -628,7 +628,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
 
-          const SizedBox(height: 40),
+          const SizedBox(height: 24),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              'Your encrypted vault lives in your cloud under a folder named '
+              '"CipherNest". The files there are unreadable by design — don\'t '
+              'delete or move them from your cloud\'s website; use the Recycle '
+              'Bin in this app instead.',
+              style: TextStyle(color: cs.onSurface.withAlpha(110), fontSize: 12),
+            ),
+          ),
+          const SizedBox(height: 24),
           Center(
             child: Text(
               'CipherNest v1.0.0 Beta',

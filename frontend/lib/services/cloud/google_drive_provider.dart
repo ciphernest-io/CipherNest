@@ -3,10 +3,12 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
+import '../../services/database_backup_service.dart';
 import '../../services/encryption_service.dart';
 import '../../src/models/file_model.dart';
 import 'cloud_account.dart';
 import 'cloud_provider.dart';
+import 'drive_layout.dart';
 
 class GoogleDriveProvider implements CloudProvider {
   @override
@@ -14,9 +16,14 @@ class GoogleDriveProvider implements CloudProvider {
 
   GoogleDriveProvider({required this.account});
 
+  /// ONLY `drive.file`. This is a non-sensitive scope (no CASA / restricted-
+  /// scope assessment) and — critically — it limits the app to files IT
+  /// created. CipherNest cannot read the rest of the user's Drive, enforced
+  /// by Google, not by our promise. The vault lives in a visible
+  /// `My Drive/CipherNest/` tree (data portability, no lock-in), which
+  /// `drive.file` fully supports for app-created files.
   static final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: [
-      drive.DriveApi.driveAppdataScope,
       drive.DriveApi.driveFileScope,
     ],
   );
@@ -108,10 +115,16 @@ class GoogleDriveProvider implements CloudProvider {
     int? fileSize,
   }) async {
     final api = await _getApi();
+    final tree = await _ensureTree();
+    // The DB backup goes to backup/; everything else (vault files + thumbs)
+    // to vault/. Discriminated by the backup's fixed filename.
+    final parentId = filename == DatabaseBackupService.backupFileName
+        ? tree.backupId
+        : tree.vaultId;
 
     final driveFile = drive.File()
       ..name = filename
-      ..parents = ['appDataFolder']
+      ..parents = [parentId]
       ..mimeType = 'application/octet-stream'
       ..appProperties = {
         'type': type.wireName,
@@ -186,12 +199,15 @@ class GoogleDriveProvider implements CloudProvider {
     // overflows that (every photo is a file + thumbnail pair). Files dropped
     // here would be treated as remote deletions by the reconcile diff, so
     // every page must be walked.
+    final tree = await _ensureTree();
     final out = <Map<String, dynamic>>[];
     String? pageToken;
     do {
       final fileList = await api.files.list(
-        q: "trashed = false and name contains '.cnest'",
-        spaces: 'appDataFolder',
+        // Only vault/ blobs — backup/ and shares/ live in sibling folders,
+        // so they never pollute the reconcile diff.
+        q: "trashed = false and '${tree.vaultId}' in parents "
+            "and name contains '.cnest'",
         $fields:
             'nextPageToken, files(id, name, size, createdTime, appProperties)',
         pageSize: 1000,
@@ -216,9 +232,10 @@ class GoogleDriveProvider implements CloudProvider {
   @override
   Future<String?> findFileByName(String name) async {
     final api = await _getApi();
+    // drive.file limits results to app-created files, and the names we look
+    // up (the DB backup) are unique, so an unscoped name match is safe.
     final fileList = await api.files.list(
       q: "trashed = false and name = '$name'",
-      spaces: 'appDataFolder',
       $fields: 'files(id)',
       pageSize: 1,
     );
@@ -261,36 +278,78 @@ class GoogleDriveProvider implements CloudProvider {
     }
   }
 
-  // ---- PUBLIC SHARE (uploads to user's regular Drive, anyone-with-link) ----
+  // ---- VISIBLE VAULT FOLDER TREE (My Drive/CipherNest/...) ----
 
-  static const String _sharesFolderName = 'CipherNest Shares';
-  String? _cachedSharesFolderId;
+  _DriveTree? _cachedTree;
 
-  Future<String> _ensureSharesFolder() async {
-    if (_cachedSharesFolderId != null) return _cachedSharesFolderId!;
+  /// Ensures `CipherNest/{vault,backup,shares}` exists (creating what's
+  /// missing) and drops the plaintext README the first time. Cached per
+  /// provider instance. Idempotent and safe to call before every op.
+  Future<_DriveTree> _ensureTree() async {
+    final cached = _cachedTree;
+    if (cached != null) return cached;
     final api = await _getApi();
-    // Look for existing folder
+    final rootId = await _ensureFolder(api, DriveLayout.rootFolder, 'root');
+    final vaultId = await _ensureFolder(api, DriveLayout.vaultFolder, rootId);
+    final backupId = await _ensureFolder(api, DriveLayout.backupFolder, rootId);
+    final sharesId = await _ensureFolder(api, DriveLayout.sharesFolder, rootId);
+    await _ensureReadme(api, rootId);
+    final tree = _DriveTree(
+      rootId: rootId,
+      vaultId: vaultId,
+      backupId: backupId,
+      sharesId: sharesId,
+    );
+    _cachedTree = tree;
+    return tree;
+  }
+
+  Future<String> _ensureFolder(
+    drive.DriveApi api,
+    String name,
+    String parentId,
+  ) async {
     final lookup = await api.files.list(
       q: "mimeType = 'application/vnd.google-apps.folder' "
-          "and name = '$_sharesFolderName' "
-          "and trashed = false "
-          "and 'root' in parents",
+          "and name = '$name' and trashed = false "
+          "and '$parentId' in parents",
       $fields: 'files(id)',
       pageSize: 1,
     );
     if (lookup.files != null && lookup.files!.isNotEmpty) {
-      _cachedSharesFolderId = lookup.files!.first.id;
-      return _cachedSharesFolderId!;
+      return lookup.files!.first.id!;
     }
-    // Create it
-    final folderMeta = drive.File()
-      ..name = _sharesFolderName
-      ..mimeType = 'application/vnd.google-apps.folder'
-      ..parents = ['root'];
-    final created = await api.files.create(folderMeta);
-    _cachedSharesFolderId = created.id!;
-    return _cachedSharesFolderId!;
+    final created = await api.files.create(
+      drive.File()
+        ..name = name
+        ..mimeType = 'application/vnd.google-apps.folder'
+        ..parents = [parentId],
+    );
+    return created.id!;
   }
+
+  Future<void> _ensureReadme(drive.DriveApi api, String rootId) async {
+    final existing = await api.files.list(
+      q: "name = '${DriveLayout.readmeName}' and trashed = false "
+          "and '$rootId' in parents",
+      $fields: 'files(id)',
+      pageSize: 1,
+    );
+    if (existing.files != null && existing.files!.isNotEmpty) return;
+    final bytes = Uint8List.fromList(DriveLayout.readmeContents.codeUnits);
+    await api.files.create(
+      drive.File()
+        ..name = DriveLayout.readmeName
+        ..parents = [rootId]
+        ..mimeType = 'text/plain',
+      uploadMedia: drive.Media(
+        Future.value(bytes).asStream().asBroadcastStream(),
+        bytes.length,
+      ),
+    );
+  }
+
+  // ---- PUBLIC SHARE (CipherNest/shares/, anyone-with-link) ----
 
   @override
   Future<({String cloudId, String downloadUrl})> uploadPublicShare({
@@ -298,7 +357,7 @@ class GoogleDriveProvider implements CloudProvider {
     required Uint8List bytes,
   }) async {
     final api = await _getApi();
-    final folderId = await _ensureSharesFolder();
+    final folderId = (await _ensureTree()).sharesId;
 
     final driveFile = drive.File()
       ..name = filename
@@ -360,4 +419,18 @@ class GoogleAuthClient extends http.BaseClient {
     request.headers.addAll(_headers);
     return _client.send(request);
   }
+}
+
+/// Cached folder ids for the visible `CipherNest/` tree.
+class _DriveTree {
+  final String rootId;
+  final String vaultId;
+  final String backupId;
+  final String sharesId;
+  const _DriveTree({
+    required this.rootId,
+    required this.vaultId,
+    required this.backupId,
+    required this.sharesId,
+  });
 }
