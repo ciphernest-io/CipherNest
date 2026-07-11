@@ -78,7 +78,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   bool _videoMuted = true;
   // Tapping the centered video thumb expands it into a per-second frame
   // strip; the bar then scrolls under a FIXED center playhead to scrub.
-  // Collapses on page change or when the scrub exits the segment.
+  // Collapses on tap, page change, or when the scrub exits the segment.
   bool _videoExpanded = false;
   // Scrub throttling state (see _handleStripScrollUpdate).
   DateTime _lastScrubSeek = DateTime.fromMillisecondsSinceEpoch(0);
@@ -94,6 +94,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   static const double _photoSlot = 36.0; // 30 wide thumb + 6 margins
   static const double _videoSlot = 59.0; // 53 wide (4:3 of 40) + 6
   static const double _frameTileW = 44.0; // expanded per-second tile
+  static const double _minFrameTileW = 16.0; // thinnest legible film sliver
   static const double _vSlot = 36.0; // landscape rail: uniform slots
   Axis _stripAxis = Axis.horizontal;
   // Captured by the strip's LayoutBuilder each build; the offset math needs
@@ -106,9 +107,18 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     return const {'mp4', 'mov', 'avi', 'mkv'}.contains(ext);
   }
 
-  /// Samsung shows ~1 frame per second, capped (52 s video → 12 frames).
-  static int _expandedFrameCount(Duration d) =>
-      d.inSeconds.clamp(1, 12).toInt();
+  /// Samsung shows a dense film: ~1 tile per second for short clips, and for
+  /// long ones as many tiles as fit the segment without a sliver dropping
+  /// below [_minFrameTileW] — density is what makes the scrub read as silk.
+  int _expandedFrameCount(Duration d) {
+    final bySeconds = d.inSeconds.clamp(1, 30).toInt();
+    // The strip may not have laid out yet when preloading frames — fall back
+    // to the screen width so preload and expand agree on the count.
+    final viewport =
+        _stripViewport > 0 ? _stripViewport : MediaQuery.sizeOf(context).width;
+    final byWidth = max(1, (viewport * 0.72) ~/ _minFrameTileW);
+    return min(bySeconds, byWidth);
+  }
 
   /// Expanded tile width shrinks so the whole segment never exceeds ~72% of
   /// the bar — otherwise a long video's 12 tiles cover the viewport and the
@@ -318,6 +328,12 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     _restoreStripPosition();
   }
 
+  void _collapseCurrentVideo() {
+    if (!_videoExpanded) return;
+    setState(() => _videoExpanded = false);
+    _restoreStripPosition();
+  }
+
   /// Puts the strip back where it belongs after a rebuild that reset its
   /// scroll position (chrome hide/show, expansion): centered on the current
   /// item, or on the playback fraction while a video is expanded.
@@ -494,7 +510,10 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+            child: Text(
+              'Delete',
+              style: TextStyle(color: Theme.of(ctx).colorScheme.error),
+            ),
           ),
         ],
       ),
@@ -702,7 +721,6 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   }
 
   Future<_SaveMode?> _showSaveSheet(CnestFile source) async {
-    final cs = Theme.of(context).colorScheme;
     final isCameraRoll = source.assetId != null;
     final isUnsyncedVaultFile =
         source.cloudId == null || !source.isUploaded;
@@ -710,12 +728,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     // and isn't a camera-roll original we'd be overwriting in spirit.
     final canReplace = !isCameraRoll && !isUnsyncedVaultFile;
 
+    // Surface + corner shape come from the theme's bottomSheetTheme.
     return showModalBottomSheet<_SaveMode>(
       context: context,
-      backgroundColor: cs.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
       builder: (ctx) {
         return SafeArea(
           child: Padding(
@@ -730,7 +745,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                     height: 4,
                     margin: const EdgeInsets.only(bottom: 18),
                     decoration: BoxDecoration(
-                      color: Colors.grey[600],
+                      color: Theme.of(ctx).colorScheme.onSurface.withAlpha(60),
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
@@ -741,7 +756,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                 ),
                 const SizedBox(height: 16),
                 _SaveOptionTile(
-                  icon: themeIconData('copy'),
+                  icon: 'copy',
                   title: 'Save as copy',
                   subtitle:
                       'Keep the original. Recommended — original stays intact.',
@@ -749,7 +764,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                 ),
                 const SizedBox(height: 10),
                 _SaveOptionTile(
-                  icon: themeIconData('arrowsClockwise'),
+                  icon: 'arrowsClockwise',
                   title: 'Replace original',
                   subtitle: canReplace
                       ? 'Delete the original and keep only the edit.'
@@ -776,6 +791,8 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   }
 
   void _showProcessingDialog() {
+    // White-on-scrim is deliberate: the dialog floats on the modal barrier,
+    // which is dark in both light and dark mode.
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -934,13 +951,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   }
 
   Future<int?> _showWallpaperLocationSheet() {
-    final cs = Theme.of(context).colorScheme;
+    // Surface + corner shape come from the theme's bottomSheetTheme.
     return showModalBottomSheet<int>(
       context: context,
-      backgroundColor: cs.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
       builder: (ctx) {
         return SafeArea(
           child: Padding(
@@ -955,7 +968,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                     height: 4,
                     margin: const EdgeInsets.only(bottom: 18),
                     decoration: BoxDecoration(
-                      color: Colors.grey[600],
+                      color: Theme.of(ctx).colorScheme.onSurface.withAlpha(60),
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
@@ -966,7 +979,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                 ),
                 const SizedBox(height: 16),
                 _SaveOptionTile(
-                  icon: themeIconData('house'),
+                  icon: 'house',
                   title: 'Home screen',
                   subtitle: 'Apply only to the home screen.',
                   onTap: () =>
@@ -974,7 +987,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                 ),
                 const SizedBox(height: 10),
                 _SaveOptionTile(
-                  icon: themeIconData('lockKey'),
+                  icon: 'lockKey',
                   title: 'Lock screen',
                   subtitle: 'Apply only to the lock screen.',
                   onTap: () =>
@@ -982,7 +995,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                 ),
                 const SizedBox(height: 10),
                 _SaveOptionTile(
-                  icon: themeIconData('devices'),
+                  icon: 'devices',
                   title: 'Both',
                   subtitle: 'Apply to both home and lock screens.',
                   onTap: () =>
@@ -1006,10 +1019,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      // Samsung's info sheet sits on the base background, not the raised
+      // sheet surface; the corner shape still comes from bottomSheetTheme.
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
       builder: (ctx) => DraggableScrollableSheet(
         initialChildSize: 0.55,
         minChildSize: 0.3,
@@ -1041,7 +1053,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   Widget build(BuildContext context) {
     if (_currentFiles.isEmpty) return const SizedBox.shrink();
     final theme = Theme.of(context);
-    const overlayColor = Colors.white;
+    // Viewer chrome floats over the theme background (Samsung: white chrome
+    // on black in dark mode, dark chrome on white in light mode).
+    final overlayColor = theme.colorScheme.onSurface;
 
     return WillPopScope(
       onWillPop: _onWillPop,
@@ -1051,18 +1065,18 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
             ? AppBar(
                 backgroundColor: Colors.transparent,
                 elevation: 0,
-                iconTheme: const IconThemeData(color: overlayColor),
+                iconTheme: IconThemeData(color: overlayColor),
                 title: Column(
                   children: [
                     Text(
                       _currentFiles[_currentIndex].filename,
-                      style: const TextStyle(fontSize: 14, color: overlayColor),
+                      style: TextStyle(fontSize: 14, color: overlayColor),
                     ),
                     Text(
                       '${_currentIndex + 1} / ${_currentFiles.length}',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 10,
-                        color: Colors.white70,
+                        color: overlayColor.withValues(alpha: 0.7),
                       ),
                     ),
                   ],
@@ -1273,8 +1287,17 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                         width: 2.5,
                         height: _thumbH + 14,
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: overlayColor,
                           borderRadius: BorderRadius.circular(2),
+                          // Halo in the opposite tone — the line rides over
+                          // photo frames, which can match either mode.
+                          boxShadow: [
+                            BoxShadow(
+                              color: theme.colorScheme.surface
+                                  .withValues(alpha: 0.7),
+                              blurRadius: 2,
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -1488,7 +1511,32 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       });
       controller?.addListener(_onActiveVideoTick);
       controller?.setVolume(_videoMuted ? 0 : 1);
+      _preloadScrubFrames();
     });
+  }
+
+  /// Kick off scrub-film frame extraction as soon as a video binds, so the
+  /// film is already painted when the user expands the thumb.
+  void _preloadScrubFrames() {
+    final controller = _activeVideo;
+    if (controller == null || _currentFiles.isEmpty || !_currentIsVideo) {
+      return;
+    }
+    final duration = controller.value.duration;
+    if (duration <= Duration.zero) return;
+    final file = _currentFiles[_currentIndex];
+    String? source;
+    if (file.localPath != null && File(file.localPath!).existsSync()) {
+      source = file.localPath;
+    } else {
+      source = controller.dataSource;
+    }
+    unawaited(_ExpandedVideoStripState.preloadFrames(
+      fileId: file.id,
+      source: source,
+      duration: duration,
+      frameCount: _expandedFrameCount(duration),
+    ));
   }
 
   Widget _buildFilmstrip({required Axis axis}) {
@@ -1604,10 +1652,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
             // film pops out of the row.
             height: _thumbH + 6,
             radius: radius,
-            onScrubFraction: (fraction) {
-              final d = controller.value.duration;
-              if (d > Duration.zero) controller.seekTo(d * fraction);
-            },
+            // Second tap on the expanded film contracts it back to the
+            // single thumb; scrolling the bar remains the way to scrub.
+            onTap: _collapseCurrentVideo,
           ),
         ),
       );
@@ -1671,8 +1718,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                                   shape: BoxShape.circle,
                                 ),
                                 child: Center(
-                                  child: Icon(
-                                    themeIconData('play', selected: true),
+                                  child: ThemeIcon(
+                                    'play',
+                                    selected: true,
                                     size: 9,
                                     color: Colors.white,
                                   ),
@@ -1702,8 +1750,17 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                             child: Container(
                               width: 2.5,
                               decoration: BoxDecoration(
-                                color: Colors.white,
+                                color: Theme.of(context).colorScheme.onSurface,
                                 borderRadius: BorderRadius.circular(2),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .surface
+                                        .withValues(alpha: 0.7),
+                                    blurRadius: 2,
+                                  ),
+                                ],
                               ),
                             ),
                           ),
@@ -1724,16 +1781,13 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     required bool vertical,
   }) {
     final fav = _currentFiles[_currentIndex].isFavorite;
+    final danger = Theme.of(context).colorScheme.error;
     // Samsung Gallery's order: favorite, edit, info, share, delete.
     final children = <Widget>[
       IconButton(
-        icon: Icon(
-          fav
-              ? themeIconData('heart', selected: true)
-              : themeIconData('heart'),
-        ),
+        icon: ThemeIcon('heart', selected: fav),
         onPressed: _toggleFavorite,
-        color: fav ? Colors.redAccent : overlayColor,
+        color: fav ? danger : overlayColor,
       ),
       // Edit — hidden for videos to keep the row balanced.
       if (!_currentIsVideo)
@@ -1759,7 +1813,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       IconButton(
         icon: ThemeIcon('trash'),
         onPressed: _handleDelete,
-        color: Colors.redAccent,
+        color: danger,
       ),
     ];
     if (vertical) {
@@ -1772,7 +1826,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
 enum _SaveMode { copy, replace }
 
 class _SaveOptionTile extends StatelessWidget {
-  final IconData icon;
+  final String icon;
   final String title;
   final String subtitle;
   final bool enabled;
@@ -1788,18 +1842,19 @@ class _SaveOptionTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final radius = BorderRadius.circular(ThemeController().tokens.rCard);
     return InkWell(
       onTap: enabled ? onTap : null,
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: radius,
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: radius,
           border: Border.all(color: cs.outline),
         ),
         child: Row(
           children: [
-            Icon(
+            ThemeIcon(
               icon,
               color: enabled ? cs.primary : cs.onSurface.withAlpha(80),
               size: 22,
@@ -2064,7 +2119,7 @@ class _InfoSheetBodyState extends State<_InfoSheetBody> {
           style: TextStyle(
             color: cs.onSurface.withAlpha(140),
             fontSize: 11,
-            fontFamily: 'monospace',
+            fontFamily: ThemeController().tokens.monoFontFamily,
           ),
         ),
       ],
@@ -2230,7 +2285,7 @@ class _AddTagChip extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(999),
+          borderRadius: BorderRadius.circular(ThemeController().tokens.rPill),
           border: Border.all(color: cs.onSurface.withAlpha(80)),
         ),
         child: Row(
@@ -2749,9 +2804,11 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
           // Rebuffering overlay — the slow-chunk wait must read as
           // "loading", never as a silent pause on a frozen frame.
           if (_isVideoStalled)
-            const IgnorePointer(
+            IgnorePointer(
               child: Center(
-                child: CircularProgressIndicator(color: Colors.white),
+                child: CircularProgressIndicator(
+                  color: Theme.of(context).colorScheme.primary,
+                ),
               ),
             ),
         ],
@@ -2847,7 +2904,11 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
         // D. Spinner (For Image or Video Buffering)
         if ((!_isVideo && _isLoadingFull && _fullImage == null) ||
             _isBufferingVideo)
-          const Center(child: CircularProgressIndicator(color: Colors.white)),
+          Center(
+            child: CircularProgressIndicator(
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
 
         // E. Broken state — nothing local, nothing cached, nothing in the
         // cloud (or the download failed). Matches the grid's broken tile.
@@ -2858,9 +2919,9 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
             _thumbImage == null &&
             !hasLocal)
           Center(
-            child: Icon(
-              themeIconData('imageBroken'),
-              color: Colors.white38,
+            child: ThemeIcon(
+              'imageBroken',
+              color: Theme.of(context).colorScheme.onSurface.withAlpha(97),
               size: 64,
             ),
           ),
@@ -2997,7 +3058,8 @@ class _FilmstripItemState extends State<_FilmstripItem> {
 
   @override
   Widget build(BuildContext context) {
-    Widget fallback(_, _, _) => Container(color: Colors.grey[800]);
+    final placeholder = Theme.of(context).colorScheme.surfaceContainerHighest;
+    Widget fallback(_, _, _) => Container(color: placeholder);
 
     if (_assetThumbBytes != null) {
       return Image.memory(
@@ -3030,7 +3092,7 @@ class _FilmstripItemState extends State<_FilmstripItem> {
         errorBuilder: fallback,
       );
     }
-    return Container(color: Colors.grey[800]);
+    return Container(color: placeholder);
   }
 }
 
@@ -3163,10 +3225,10 @@ class _GlassIconButton extends StatelessWidget {
   }
 }
 
-/// The expanded video segment inside the gallery bar: one tile per second
-/// of video (capped at 12, spread evenly across the full duration),
-/// extracted lazily and cached. Scrubbing happens by scrolling the bar under
-/// the fixed center playhead; tapping a tile seeks straight to it.
+/// The expanded video segment inside the gallery bar: a dense film of frames
+/// spread evenly across the full duration, extracted lazily and cached.
+/// Scrubbing happens by scrolling the bar under the fixed center playhead;
+/// tapping the film collapses it back to the single thumb.
 class _ExpandedVideoStrip extends StatefulWidget {
   final CnestFile file;
   final String? source;
@@ -3175,7 +3237,7 @@ class _ExpandedVideoStrip extends StatefulWidget {
   final double tileWidth;
   final double height;
   final double radius;
-  final ValueChanged<double> onScrubFraction;
+  final VoidCallback onTap;
 
   const _ExpandedVideoStrip({
     super.key,
@@ -3186,7 +3248,7 @@ class _ExpandedVideoStrip extends StatefulWidget {
     required this.tileWidth,
     required this.height,
     required this.radius,
-    required this.onScrubFraction,
+    required this.onTap,
   });
 
   @override
@@ -3201,33 +3263,36 @@ class _ExpandedVideoStripState extends State<_ExpandedVideoStrip> {
 
   String get _cacheKey => '${widget.file.id}#${widget.frameCount}';
 
-  @override
-  void initState() {
-    super.initState();
-    _ensureFrames();
-  }
-
-  Future<void> _ensureFrames() async {
-    final key = _cacheKey;
+  /// Extracts the film's frames into the shared cache. The screen calls this
+  /// the moment a video binds — while the user is still watching the small
+  /// thumb — so expansion opens onto a fully painted film instead of dark
+  /// tiles filling in one by one.
+  static Future<void> preloadFrames({
+    required String fileId,
+    required String? source,
+    required Duration duration,
+    required int frameCount,
+    void Function()? onFrame,
+  }) async {
+    final key = '$fileId#$frameCount';
     _frameCache.putIfAbsent(
       key,
-      () => List<Uint8List?>.filled(widget.frameCount, null),
+      () => List<Uint8List?>.filled(frameCount, null),
     );
     if (_extracting.contains(key)) return;
-    final source = widget.source;
     if (source == null) return;
     final frames = _frameCache[key]!;
     if (!frames.contains(null)) return;
     _extracting.add(key);
     try {
-      final totalMs = widget.duration.inMilliseconds;
-      for (var i = 0; i < widget.frameCount; i++) {
+      final totalMs = duration.inMilliseconds;
+      for (var i = 0; i < frameCount; i++) {
         if (frames[i] != null) continue;
         try {
           final bytes = await VideoThumbnail.thumbnailData(
             video: source,
             imageFormat: ImageFormat.JPEG,
-            timeMs: (totalMs * (i + 0.5) / widget.frameCount).round(),
+            timeMs: (totalMs * (i + 0.5) / frameCount).round(),
             maxWidth: 120,
             quality: 50,
           );
@@ -3235,7 +3300,7 @@ class _ExpandedVideoStripState extends State<_ExpandedVideoStrip> {
         } catch (_) {
           // Tile stays dark; keep extracting the rest.
         }
-        if (mounted) setState(() {});
+        onFrame?.call();
       }
     } finally {
       _extracting.remove(key);
@@ -3243,14 +3308,26 @@ class _ExpandedVideoStripState extends State<_ExpandedVideoStrip> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    unawaited(preloadFrames(
+      fileId: widget.file.id,
+      source: widget.source,
+      duration: widget.duration,
+      frameCount: widget.frameCount,
+      onFrame: () {
+        if (mounted) setState(() {});
+      },
+    ));
+  }
+
+  @override
   Widget build(BuildContext context) {
     final frames = _frameCache[_cacheKey]!;
+    final placeholder = Theme.of(context).colorScheme.surfaceContainerHighest;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTapDown: (d) => widget.onScrubFraction(
-        (d.localPosition.dx / (widget.frameCount * widget.tileWidth))
-            .clamp(0.0, 1.0),
-      ),
+      onTap: widget.onTap,
       child: SizedBox(
         width: widget.frameCount * widget.tileWidth,
         height: widget.height,
@@ -3268,9 +3345,9 @@ class _ExpandedVideoStripState extends State<_ExpandedVideoStrip> {
                           fit: BoxFit.cover,
                           gaplessPlayback: true,
                           errorBuilder: (_, _, _) =>
-                              Container(color: Colors.grey[900]),
+                              Container(color: placeholder),
                         )
-                      : Container(color: Colors.grey[900]),
+                      : Container(color: placeholder),
                 ),
             ],
           ),
