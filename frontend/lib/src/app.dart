@@ -3,8 +3,11 @@ import 'dart:async';
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 
+import '../services/app_lock_service.dart';
+import '../services/audio_player_service.dart';
 import '../services/recycle_bin_service.dart';
 import '../services/share_service.dart';
+import '../services/video_streaming_server.dart';
 import 'config/constants.dart';
 import 'config/routes.dart';
 import 'config/theme_controller.dart';
@@ -16,7 +19,7 @@ class App extends StatefulWidget {
   State<App> createState() => _AppState();
 }
 
-class _AppState extends State<App> {
+class _AppState extends State<App> with WidgetsBindingObserver {
   final _themeController = ThemeController();
   final _navigatorKey = GlobalKey<NavigatorState>();
   final _appLinks = AppLinks();
@@ -25,15 +28,32 @@ class _AppState extends State<App> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _themeController.addListener(_onThemeChanged);
     _bootstrapDeepLinks();
+    // Auto-lock: defers while music plays or a video streams so playback
+    // never cuts mid-session.
+    AppLockService().init(
+      navigatorKey: _navigatorKey,
+      isPlaybackActive: () =>
+          AudioPlayerService().playing ||
+          VideoStreamingServer().hasActiveSessions,
+    );
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _themeController.removeListener(_onThemeChanged);
     _linkSub?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      AppLockService().onResumed();
+    }
   }
 
   void _onThemeChanged() {
@@ -112,27 +132,35 @@ class _AppState extends State<App> {
       theme: _themeController.themeData,
       initialRoute: AppRoutes.splash,
       onGenerateRoute: AppRoutes.generateRoute,
-      // App-wide texture (currently only Hackerman's code-rain). Painted
-      // behind every route, beneath route content, at low opacity so screens
-      // remain legible. Builder runs once per route push and re-runs when
-      // ThemeController notifies, so switching themes swaps the texture.
-      builder: appTex == null
-          ? null
-          : (context, child) => Stack(
-                children: [
-                  Positioned.fill(
-                    child: Opacity(
-                      opacity: 0.35,
-                      child: Image.asset(
-                        appTex,
-                        fit: BoxFit.cover,
-                        repeat: ImageRepeat.repeat,
-                      ),
-                    ),
+      // Every pointer-down resets the auto-lock countdown, then (for
+      // Hackerman) the app-wide code-rain texture is painted behind the
+      // route at low opacity. Builder re-runs on ThemeController notify, so
+      // switching themes swaps the texture.
+      builder: (context, child) {
+        Widget content = child ?? const SizedBox.shrink();
+        if (appTex != null) {
+          content = Stack(
+            children: [
+              Positioned.fill(
+                child: Opacity(
+                  opacity: 0.35,
+                  child: Image.asset(
+                    appTex,
+                    fit: BoxFit.cover,
+                    repeat: ImageRepeat.repeat,
                   ),
-                  if (child != null) child,
-                ],
+                ),
               ),
+              content,
+            ],
+          );
+        }
+        return Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: (_) => AppLockService().recordActivity(),
+          child: content,
+        );
+      },
     );
   }
 }

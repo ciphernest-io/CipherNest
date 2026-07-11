@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../widgets/theme_icon.dart';
 import '../../config/routes.dart';
+import '../../../services/app_lock_service.dart';
 import '../../../services/cloud/account_registry.dart';
 import '../../../services/key_manager_service.dart';
 
@@ -50,6 +51,8 @@ class _LoginScreenState extends State<LoginScreen> {
   ///   - Otherwise route to home if an active cloud account is registered,
   ///     or to reconnect if not.
   Future<void> _routeAfterUnlock() async {
+    // Vault is unlocked — start the inactivity countdown.
+    AppLockService().recordActivity();
     if (await KeyManagerService().hasSignupInProgress()) {
       final mnemonic =
           await KeyManagerService().retrieveMnemonicIfPending();

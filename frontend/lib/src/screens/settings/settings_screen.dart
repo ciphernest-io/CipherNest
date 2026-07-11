@@ -10,6 +10,7 @@ import '../../../services/cloud/cloud_account.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/cache_manager_service.dart';
+import '../../../services/app_lock_service.dart';
 import '../../../services/audio_player_service.dart';
 import '../../../services/auto_sync_service.dart';
 import '../../../services/auto_sync_worker.dart';
@@ -44,6 +45,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _showFeatured = true;
   bool _showYearAgo = true;
 
+  // Security
+  int _autoLockMinutes = AppLockService.defaultMinutes;
+
   @override
   void initState() {
     super.initState();
@@ -76,6 +80,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _autoSyncMode = mode;
         _showFeatured = prefs.getBool('gallery_show_featured') ?? true;
         _showYearAgo = prefs.getBool('gallery_show_year_ago') ?? true;
+        _autoLockMinutes = prefs.getInt(AppLockService.prefsKeyMinutes) ??
+            AppLockService.defaultMinutes;
         if (lastRunMs > 0) {
           final dt = DateTime.fromMillisecondsSinceEpoch(lastRunMs);
           _lastSyncDisplay = '${dt.month}/${dt.day} ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}';
@@ -124,6 +130,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  static String _autoLockLabel(int minutes) {
+    if (minutes <= 0) return 'Never — vault stays unlocked';
+    if (minutes == 1) return 'Lock after 1 minute of inactivity';
+    return 'Lock after $minutes minutes of inactivity';
+  }
+
+  Future<void> _pickAutoLock() async {
+    const options = [1, 5, 15, 30, 0]; // 0 = never
+    final cs = Theme.of(context).colorScheme;
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final m in options)
+              ListTile(
+                title: Text(
+                    m <= 0 ? 'Never' : (m == 1 ? '1 minute' : '$m minutes')),
+                trailing: m == _autoLockMinutes
+                    ? ThemeIcon('check', color: cs.primary)
+                    : null,
+                onTap: () => Navigator.pop(ctx, m),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked == null) return;
+    await AppLockService().setTimeoutMinutes(picked);
+    if (mounted) setState(() => _autoLockMinutes = picked);
   }
 
   String _formatBytes(int bytes) {
@@ -554,6 +593,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const Divider(),
           // ... Security Section ...
           _SectionHeader(title: "Security"),
+          ListTile(
+            leading: ThemeIcon('lock', color: cs.primary),
+            title: Text('Auto-lock', style: TextStyle(color: cs.onSurface)),
+            subtitle: Text(
+              _autoLockLabel(_autoLockMinutes),
+              style: TextStyle(color: cs.onSurface.withAlpha(140)),
+            ),
+            trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
+            onTap: _pickAutoLock,
+          ),
           ListTile(
             leading: ThemeIcon('key', color: cs.primary),
             title: Text('Key Management', style: TextStyle(color: cs.onSurface)),

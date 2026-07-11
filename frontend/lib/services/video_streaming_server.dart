@@ -101,6 +101,10 @@ class VideoStreamingServer {
   int? _port;
   final Map<String, _StreamingSession> _sessions = {};
 
+  /// True while any video streaming session is open — used by the auto-lock
+  /// service to defer locking during playback.
+  bool get hasActiveSessions => _sessions.isNotEmpty;
+
   /// Maximum plaintext bytes returned in a single HTTP response, regardless
   /// of how much the client requested. When ExoPlayer opens the URL it sends
   /// `Range: bytes=0-`, which the pre-fix code interpreted as "download the
