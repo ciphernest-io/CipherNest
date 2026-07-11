@@ -2,6 +2,9 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:photo_manager/photo_manager.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
+import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -122,11 +125,12 @@ class _StoriesTabState extends State<StoriesTab> {
 
   Widget _buildYearAgoCard() {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: cs.surface,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(t.rCard),
         border: Border.all(color: cs.outline),
       ),
       child: Column(
@@ -162,7 +166,7 @@ class _StoriesTabState extends State<StoriesTab> {
                     ),
                   ),
                   child: ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(t.rInput),
                     child: SizedBox(
                       width: 120,
                       child: _ThumbnailLoader(file: _yearAgoFiles[index]),
@@ -179,6 +183,7 @@ class _StoriesTabState extends State<StoriesTab> {
 
   Widget _buildFeaturedVideoCard() {
     final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
     final video = _featuredVideo!;
     return GestureDetector(
       onTap: () => Navigator.push(
@@ -194,7 +199,7 @@ class _StoriesTabState extends State<StoriesTab> {
         height: 200,
         decoration: BoxDecoration(
           color: cs.surface,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(t.rCardLg),
           border: Border.all(color: cs.outline),
         ),
         clipBehavior: Clip.antiAlias,
@@ -207,7 +212,7 @@ class _StoriesTabState extends State<StoriesTab> {
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [Colors.transparent, Colors.black.withAlpha(180)],
+                  colors: [Colors.transparent, t.scrim],
                 ),
               ),
             ),
@@ -258,9 +263,82 @@ class _ThumbnailLoaderState extends State<_ThumbnailLoader> {
     _load();
   }
 
+  bool get _isVideo {
+    final ext = widget.file.filename.split('.').last.toLowerCase();
+    return const {'mp4', 'mov', 'avi', 'mkv'}.contains(ext);
+  }
+
+  /// Fire-and-forget: share the obtained frame through the standard
+  /// thumb-cache path so the grid, filmstrip, and viewer reuse it.
+  void _persistFrame(Uint8List bytes) {
+    final cloudId = widget.file.cloudId;
+    if (cloudId == null) return;
+    getTemporaryDirectory().then((dir) async {
+      try {
+        await File('${dir.path}/thumb_$cloudId.jpg').writeAsBytes(bytes);
+      } catch (_) {
+        // Best-effort cache write.
+      }
+    });
+  }
+
   Future<void> _load() async {
-    // LOCAL-FIRST: use device file if it exists
-    if (widget.file.localPath != null) {
+    // Videos first: their raw bytes are not decodable as an image, so they
+    // need a real frame — same rungs as the gallery grid and filmstrip.
+    if (_isVideo) {
+      // Rung 0 — the shared disk thumb cache.
+      if (widget.file.cloudId != null) {
+        final dir = await getTemporaryDirectory();
+        final cached = File('${dir.path}/thumb_${widget.file.cloudId}.jpg');
+        if (await cached.exists()) {
+          final bytes = await cached.readAsBytes();
+          if (mounted) setState(() => _bytes = bytes);
+          return;
+        }
+      }
+      // Rung 1 — MediaStore.
+      if (widget.file.assetId != null) {
+        try {
+          final asset = await AssetEntity.fromId(widget.file.assetId!);
+          final bytes = await asset?.thumbnailDataWithSize(
+            const ThumbnailSize(600, 600),
+          );
+          if (bytes != null) {
+            _persistFrame(bytes);
+            if (mounted) setState(() => _bytes = bytes);
+            return;
+          }
+        } catch (_) {
+          // fall through
+        }
+      }
+      // Rung 2 — extract a frame from the local original.
+      if (widget.file.localPath != null &&
+          File(widget.file.localPath!).existsSync()) {
+        try {
+          final bytes = await VideoThumbnail.thumbnailData(
+            video: widget.file.localPath!,
+            imageFormat: ImageFormat.JPEG,
+            maxWidth: 600,
+            quality: 70,
+          );
+          if (bytes != null) {
+            _persistFrame(bytes);
+            if (mounted) setState(() => _bytes = bytes);
+            return;
+          }
+        } catch (_) {
+          // fall through to the cloud thumb
+        }
+      }
+      // Rung 3 — the encrypted cloud thumbnail only. Never fall back to the
+      // full video blob: it isn't an image, and it can be hundreds of MB.
+      if (widget.file.thumbnailCloudId == null) return;
+    }
+
+    // LOCAL-FIRST: use device file if it exists (images only — a video
+    // never reaches here with a local original).
+    if (!_isVideo && widget.file.localPath != null) {
       final localFile = File(widget.file.localPath!);
       if (await localFile.exists()) {
         final bytes = await localFile.readAsBytes();
@@ -270,8 +348,9 @@ class _ThumbnailLoaderState extends State<_ThumbnailLoader> {
     }
 
     // CLOUD FALLBACK
-    final targetId =
-        widget.file.thumbnailCloudId ?? widget.file.cloudId;
+    final targetId = _isVideo
+        ? widget.file.thumbnailCloudId
+        : (widget.file.thumbnailCloudId ?? widget.file.cloudId);
     if (targetId == null) return;
 
     try {
