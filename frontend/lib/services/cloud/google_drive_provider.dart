@@ -182,22 +182,35 @@ class GoogleDriveProvider implements CloudProvider {
   Future<List<Map<String, dynamic>>> listCloudFiles() async {
     final api = await _getApi();
 
-    final fileList = await api.files.list(
-      q: "trashed = false and name contains '.cnest'",
-      spaces: 'appDataFolder',
-      $fields: 'files(id, name, size, createdTime, appProperties)',
-      pageSize: 1000,
-    );
-
-    return fileList.files?.map((f) => {
+    // Drive caps a page at 1000 entries, and a vault of ~500 photos already
+    // overflows that (every photo is a file + thumbnail pair). Files dropped
+    // here would be treated as remote deletions by the reconcile diff, so
+    // every page must be walked.
+    final out = <Map<String, dynamic>>[];
+    String? pageToken;
+    do {
+      final fileList = await api.files.list(
+        q: "trashed = false and name contains '.cnest'",
+        spaces: 'appDataFolder',
+        $fields:
+            'nextPageToken, files(id, name, size, createdTime, appProperties)',
+        pageSize: 1000,
+        pageToken: pageToken,
+      );
+      for (final f in fileList.files ?? const <drive.File>[]) {
+        out.add({
           'id': f.id,
           'name': f.name,
           'size': f.size,
           'created': f.createdTime?.toIso8601String(),
           'type': f.appProperties?['type'],
           'original_name': f.appProperties?['original_name'],
-        }).toList() ??
-        [];
+        });
+      }
+      pageToken = fileList.nextPageToken;
+    } while (pageToken != null);
+
+    return out;
   }
 
   @override

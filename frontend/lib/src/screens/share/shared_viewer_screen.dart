@@ -201,7 +201,8 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
   /// Decrypts the share blob. The header layout depends on mode:
   /// - Plain:    [4-byte len = 60] [60-byte wrapped fileKey]
   /// - Password: [4-byte len = 76] [16-byte salt] [60-byte wrapped fileKey]
-  /// Body = the original chunked-encrypted body, byte-for-byte.
+  /// Body = the original encrypted body, byte-for-byte: single-shot AES-GCM
+  /// for images/small files, independent 524,316-byte chunks for videos.
   Future<Uint8List> _decryptShareBlob(
     Uint8List blob,
     SecretKey shareKey,
@@ -223,20 +224,35 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
     final fileKeyBytes = await cipher.decrypt(wrappedKey, shareKey);
     final fileKey = SecretKey(fileKeyBytes);
 
-    // Stream-decrypt the body chunks just like EncryptionService.decryptToStream.
     final body = blob.sublist(headerEnd);
-    final out = BytesBuilder(copy: false);
-    int offset = 0;
-    const encChunk = EncryptionService.encryptedChunkSize;
-    while (offset < body.length) {
-      final remaining = body.length - offset;
-      final size = remaining < encChunk ? remaining : encChunk;
-      final chunk = body.sublist(offset, offset + size);
-      final plain = await cipher.decrypt(chunk, fileKey);
-      out.add(plain);
-      offset += size;
+
+    // The body layout is ambiguous from length alone: images are encrypted
+    // single-shot (one AES-GCM message over the whole body), videos as
+    // independent 524,316-byte chunks. A body that fits in one chunk decrypts
+    // identically either way, but a single-shot image larger than one chunk
+    // MAC-fails if fed through the chunked loop. The web viewer resolves the
+    // same ambiguity single-shot-first, which is cheap on native SubtleCrypto;
+    // here decryption is pure-Dart on the UI isolate, so try chunked first —
+    // its wrong-layout failure costs one ~512 KB chunk MAC check, while a
+    // doomed single-shot pass over a large video body stalls for the whole
+    // body length before the real decrypt even starts.
+    try {
+      final out = BytesBuilder(copy: false);
+      int offset = 0;
+      const encChunk = EncryptionService.encryptedChunkSize;
+      while (offset < body.length) {
+        final remaining = body.length - offset;
+        final size = remaining < encChunk ? remaining : encChunk;
+        final chunk = body.sublist(offset, offset + size);
+        final plain = await cipher.decrypt(chunk, fileKey);
+        out.add(plain);
+        offset += size;
+      }
+      return out.takeBytes();
+    } catch (_) {
+      // Not a chunked body — a single-shot image larger than one chunk.
+      return await cipher.decrypt(body, fileKey);
     }
-    return out.takeBytes();
   }
 
   Future<File> _writeToTemp(Uint8List bytes) async {

@@ -1,3 +1,12 @@
 # Build artefacts produced when packaging the static web viewer for upload.
 # The source lives in web-viewer/ — the zip is generated on demand.
 web-viewer.zip
+docs/
+
+# Local design references / scratch files.
+temp/
+
+# Local-only context files — never publish.
+CLAUDE.md
+CLAUDE_CODE_PROMPT.md
+.claude/

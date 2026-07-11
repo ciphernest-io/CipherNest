@@ -54,13 +54,12 @@ class AutoSyncService {
       final account = AccountRegistry().activeAccount;
       if (account == null) return AutoSyncResult(synced: 0, failed: 0, skipped: 0);
       DatabaseService().setCurrentAccount(account.id);
-      final email = account.email;
 
       // Heal phantom rows from interrupted past runs: rows inserted before
       // an upload that never completed. With the gallery copy still present
       // we can re-upload; with it gone the row is pure dead weight (broken
       // tile in the grid, nothing recoverable behind it).
-      await _healPendingUploads(email);
+      await _healPendingUploads();
 
       // Get unsynced assets
       final assets = await getUnsyncedAssets();
@@ -70,7 +69,7 @@ class AutoSyncService {
 
       for (int i = 0; i < assets.length; i++) {
         try {
-          final didSync = await _syncAsset(assets[i], email);
+          final didSync = await _syncAsset(assets[i]);
           if (didSync) {
             synced++;
           } else {
@@ -190,7 +189,15 @@ class AutoSyncService {
   }
 
   /// Encrypts and uploads a single gallery asset.
-  Future<bool> _syncAsset(AssetEntity asset, String email) async {
+  Future<bool> _syncAsset(AssetEntity asset) async {
+    final account = AccountRegistry().activeAccount;
+    if (account == null) {
+      // Transient (sign-out mid-run). Must throw, not return false: false
+      // counts as "skipped", and a zero-failure run advances the watermark —
+      // silently dropping every remaining asset from all future scans.
+      throw StateError('No active cloud account');
+    }
+
     final file = await asset.file;
     if (file == null) return false;
 
@@ -240,8 +247,11 @@ class AutoSyncService {
       localPath: file.path,
       assetId: asset.id,
       type: isImage ? CnestFileType.image : CnestFileType.document,
-      provider: 0,
-      accountId: email,
+      // Composite account id + real provider type, matching what addFile
+      // persists — a bare email or hardcoded Google here silently mislabels
+      // rows synced under a OneDrive account.
+      provider: account.providerType,
+      accountId: account.id,
     );
     await DatabaseService().addFile(newFile);
 
@@ -314,7 +324,7 @@ class AutoSyncService {
   /// These come from pre-rollback versions of [_syncAsset] that were
   /// interrupted mid-upload: the row masquerades as a synced photo while the
   /// gallery copy exists, then turns into a broken tile once it's deleted.
-  Future<void> _healPendingUploads(String email) async {
+  Future<void> _healPendingUploads() async {
     final pending = await DatabaseService().getPendingUploads();
     for (final row in pending) {
       if (DateTime.now().difference(row.createdAt) < _pendingGraceWindow) {
@@ -334,7 +344,7 @@ class AutoSyncService {
         // Source still on device — replace the phantom with a fresh sync.
         try {
           await DatabaseService().permanentlyDeleteFile(row.id);
-          await _syncAsset(asset, email);
+          await _syncAsset(asset);
         } catch (e) {
           debugPrint('Heal re-upload failed for ${row.filename}: $e');
         }

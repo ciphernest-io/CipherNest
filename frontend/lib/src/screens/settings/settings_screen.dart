@@ -5,7 +5,6 @@ import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart'; // ENABLED
 import '../../config/routes.dart';
-import '../../config/theme.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/cloud/account_registry.dart';
 import '../../../services/cloud/cloud_account.dart';
@@ -203,7 +202,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Backup failed: $e'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text(
+              'Backup failed: $e',
+              style: TextStyle(color: Theme.of(context).colorScheme.onError),
+            ),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
         );
       }
     } finally {
@@ -268,7 +273,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Sync failed: $e'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text(
+              'Sync failed: $e',
+              style: TextStyle(color: Theme.of(context).colorScheme.onError),
+            ),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
         );
       }
     } finally {
@@ -313,7 +324,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Sign Out', style: TextStyle(color: Colors.red)),
+            child: Text(
+              'Sign Out',
+              style: TextStyle(color: Theme.of(ctx).colorScheme.error),
+            ),
           ),
         ],
       ),
@@ -338,6 +352,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tokens = ThemeController().tokens;
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
@@ -347,7 +363,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ListenableBuilder(
             listenable: AccountRegistry(),
             builder: (context, _) {
-              final cs = Theme.of(context).colorScheme;
               final accounts = AccountRegistry().accounts;
               final active = AccountRegistry().activeAccount;
               return Column(
@@ -364,7 +379,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         style: TextStyle(color: cs.onSurface.withAlpha(140)),
                       ),
                       trailing: IconButton(
-                        icon: ThemeIcon('signOut', color: Colors.redAccent),
+                        icon: ThemeIcon('signOut', color: cs.error),
                         onPressed: () => _handleRemoveAccount(a.id),
                       ),
                     ),
@@ -380,7 +395,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               );
             },
           ),
-          const Divider(color: Colors.white10),
+          const Divider(),
 
           // --- DATA MANAGEMENT ---
           _SectionHeader(title: "Data Management"),
@@ -393,12 +408,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text("Max Cache Size", style: TextStyle(color: Colors.white)),
+                    Text("Max Cache Size", style: TextStyle(color: cs.onSurface)),
                     // Highlight if unsaved
                     Text(
-                      "${_cacheLimitGB.toStringAsFixed(1)} GB", 
+                      "${_cacheLimitGB.toStringAsFixed(1)} GB",
                       style: TextStyle(
-                        color: _hasChanges ? Colors.orangeAccent : AppColors.primary, 
+                        color: _hasChanges ? tokens.warning : cs.primary,
                         fontWeight: FontWeight.bold
                       )
                     ),
@@ -409,8 +424,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   min: 0.1,
                   max: 2.0,
                   divisions: 19,
-                  activeColor: _hasChanges ? Colors.orangeAccent : AppColors.primary,
-                  inactiveColor: Colors.grey[800],
+                  activeColor: _hasChanges ? tokens.warning : cs.primary,
                   onChanged: (val) {
                     setState(() => _cacheLimitGB = val);
                     // Note: We do NOT save here anymore. We just update UI.
@@ -421,76 +435,69 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     if (_hasChanges)
-                      const Text("Unsaved changes", style: TextStyle(color: Colors.orangeAccent, fontSize: 12)),
+                      Text("Unsaved changes", style: TextStyle(color: tokens.warning, fontSize: 12)),
                     const SizedBox(width: 12),
                     ElevatedButton(
                       onPressed: _hasChanges ? _savePreferences : null,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: Colors.white, // <--- FORCE TEXT WHITE
-                        disabledBackgroundColor: Colors.grey[800],
-                        disabledForegroundColor: Colors.grey[500],
-                      ),
                       child: const Text("Save & Apply"),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-                const Text(
+                Text(
                   "Older files will be removed from device when cache exceeds this limit.",
-                  style: TextStyle(color: Colors.grey, fontSize: 11),
+                  style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 11),
                 ),
               ],
             ),
           ),
 
           ListTile(
-            leading: ThemeIcon('broom', color: Colors.orangeAccent),
-            title: const Text('Clear Local Cache', style: TextStyle(color: Colors.white)),
-            subtitle: Text('Free up $_cacheSize on device', style: const TextStyle(color: Colors.grey)),
+            leading: ThemeIcon('broom', color: cs.primary),
+            title: Text('Clear Local Cache', style: TextStyle(color: cs.onSurface)),
+            subtitle: Text('Free up $_cacheSize on device', style: TextStyle(color: cs.onSurface.withAlpha(140))),
             onTap: _clearCache,
           ),
           ListTile(
-            leading: ThemeIcon('cloudArrowUp', color: Colors.greenAccent),
-            title: const Text('Backup Vault Index', style: TextStyle(color: Colors.white)),
-            subtitle: const Text('Encrypt and upload your vault index to the cloud', style: TextStyle(color: Colors.grey)),
+            leading: ThemeIcon('cloudArrowUp', color: cs.primary),
+            title: Text('Backup Vault Index', style: TextStyle(color: cs.onSurface)),
+            subtitle: Text('Encrypt and upload your vault index to the cloud', style: TextStyle(color: cs.onSurface.withAlpha(140))),
             onTap: _handleBackup,
           ),
           ListTile(
-            leading: ThemeIcon('linkSimple', color: Colors.cyanAccent),
-            title: const Text('Active Shares', style: TextStyle(color: Colors.white)),
-            subtitle: const Text('Manage and revoke share links', style: TextStyle(color: Colors.grey)),
-            trailing: ThemeIcon('caretRight', size: 16, color: Colors.grey),
+            leading: ThemeIcon('linkSimple', color: cs.primary),
+            title: Text('Active Shares', style: TextStyle(color: cs.onSurface)),
+            subtitle: Text('Manage and revoke share links', style: TextStyle(color: cs.onSurface.withAlpha(140))),
+            trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: () => Navigator.pushNamed(context, AppRoutes.activeShares),
           ),
           ListTile(
-            leading: ThemeIcon('images', color: Colors.cyanAccent),
-            title: const Text('Import from Gallery', style: TextStyle(color: Colors.white)),
-            subtitle: const Text('Encrypt photos already on this device', style: TextStyle(color: Colors.grey)),
-            trailing: ThemeIcon('caretRight', size: 16, color: Colors.grey),
+            leading: ThemeIcon('images', color: cs.primary),
+            title: Text('Import from Gallery', style: TextStyle(color: cs.onSurface)),
+            subtitle: Text('Encrypt photos already on this device', style: TextStyle(color: cs.onSurface.withAlpha(140))),
+            trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: () => Navigator.pushNamed(context, AppRoutes.migration),
           ),
           ListTile(
-            leading: ThemeIcon('trash', color: Colors.redAccent),
-            title: const Text('Recycle Bin', style: TextStyle(color: Colors.white)),
-            subtitle: const Text('Restore or permanently delete recent items', style: TextStyle(color: Colors.grey)),
-            trailing: ThemeIcon('caretRight', size: 16, color: Colors.grey),
+            leading: ThemeIcon('trash', color: cs.error),
+            title: Text('Recycle Bin', style: TextStyle(color: cs.onSurface)),
+            subtitle: Text('Restore or permanently delete recent items', style: TextStyle(color: cs.onSurface.withAlpha(140))),
+            trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: () => Navigator.pushNamed(context, AppRoutes.recycleBin),
           ),
 
-          const Divider(color: Colors.white10),
+          const Divider(),
 
           // --- AUTO-SYNC ---
           _SectionHeader(title: "Auto-Sync"),
           SwitchListTile(
-            secondary: ThemeIcon('arrowsClockwise', color: Colors.cyanAccent),
-            title: const Text('Auto-Sync Gallery', style: TextStyle(color: Colors.white)),
+            secondary: ThemeIcon('arrowsClockwise', color: cs.primary),
+            title: Text('Auto-Sync Gallery', style: TextStyle(color: cs.onSurface)),
             subtitle: Text(
               _autoSyncEnabled ? 'Last sync: $_lastSyncDisplay' : 'Automatically encrypt new photos',
-              style: const TextStyle(color: Colors.grey),
+              style: TextStyle(color: cs.onSurface.withAlpha(140)),
             ),
             value: _autoSyncEnabled,
-            activeThumbColor: Colors.cyanAccent,
             onChanged: _toggleAutoSync,
           ),
           if (_autoSyncEnabled) ...[
@@ -499,9 +506,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     'When to sync',
-                    style: TextStyle(color: Colors.grey, fontSize: 12),
+                    style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 12),
                   ),
                   const SizedBox(height: 8),
                   _AutoSyncModePicker(
@@ -513,35 +520,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             ListTile(
               leading: const SizedBox(width: 24),
-              title: const Text('Sync Now', style: TextStyle(color: Colors.cyanAccent)),
-              subtitle: const Text('Manually check for new photos right now', style: TextStyle(color: Colors.grey, fontSize: 12)),
-              trailing: ThemeIcon('play', selected: true, color: Colors.cyanAccent),
+              title: Text('Sync Now', style: TextStyle(color: cs.primary)),
+              subtitle: Text('Manually check for new photos right now', style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 12)),
+              trailing: ThemeIcon('play', selected: true, color: cs.primary),
               onTap: _handleSyncNow,
             ),
           ],
 
-          const Divider(color: Colors.white10),
+          const Divider(),
 
           // --- GALLERY ---
           _SectionHeader(title: "Gallery"),
           SwitchListTile(
-            secondary: ThemeIcon('sparkle', color: Colors.amberAccent),
-            title: const Text('Show Featured Content', style: TextStyle(color: Colors.white)),
-            subtitle: const Text('Display stories and highlights', style: TextStyle(color: Colors.grey)),
+            secondary: ThemeIcon('sparkle', color: cs.primary),
+            title: Text('Show Featured Content', style: TextStyle(color: cs.onSurface)),
+            subtitle: Text('Display stories and highlights', style: TextStyle(color: cs.onSurface.withAlpha(140))),
             value: _showFeatured,
-            activeThumbColor: Colors.amberAccent,
             onChanged: _toggleFeatured,
           ),
           SwitchListTile(
-            secondary: ThemeIcon('clockCounterClockwise', color: Colors.amberAccent),
-            title: const Text('A Year Ago Memories', style: TextStyle(color: Colors.white)),
-            subtitle: const Text('Show photos from this day last year', style: TextStyle(color: Colors.grey)),
+            secondary: ThemeIcon('clockCounterClockwise', color: cs.primary),
+            title: Text('A Year Ago Memories', style: TextStyle(color: cs.onSurface)),
+            subtitle: Text('Show photos from this day last year', style: TextStyle(color: cs.onSurface.withAlpha(140))),
             value: _showYearAgo,
-            activeThumbColor: Colors.amberAccent,
             onChanged: _toggleYearAgo,
           ),
 
-          const Divider(color: Colors.white10),
+          const Divider(),
 
           // --- APPEARANCE ---
           _SectionHeader(title: "Appearance"),
@@ -592,34 +597,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
           ),
 
-          const Divider(color: Colors.white10),
+          const Divider(),
           // ... Security Section ...
           _SectionHeader(title: "Security"),
           if (_biometricAvailable)
             SwitchListTile(
-              secondary: ThemeIcon('fingerprint', color: Colors.tealAccent),
-              title: const Text('Unlock with biometrics',
-                  style: TextStyle(color: Colors.white)),
+              secondary: ThemeIcon('fingerprint', color: cs.primary),
+              title: Text('Unlock with biometrics',
+                  style: TextStyle(color: cs.onSurface)),
               subtitle: Text(
                 _biometricEnabled
                     ? 'Fingerprint or face unlocks CipherNest'
                     : 'Off — use master password to unlock',
-                style: const TextStyle(color: Colors.grey),
+                style: TextStyle(color: cs.onSurface.withAlpha(140)),
               ),
               value: _biometricEnabled,
-              activeThumbColor: Colors.tealAccent,
               onChanged: _biometricEnrolling ? null : _toggleBiometric,
             ),
           ListTile(
-            leading: ThemeIcon('key', color: Colors.greenAccent),
-            title: const Text('Key Management', style: TextStyle(color: Colors.white)),
-            subtitle: const Text('Check encryption integrity', style: TextStyle(color: Colors.grey)),
-            trailing: ThemeIcon('caretRight', size: 16, color: Colors.grey),
+            leading: ThemeIcon('key', color: cs.primary),
+            title: Text('Key Management', style: TextStyle(color: cs.onSurface)),
+            subtitle: Text('Check encryption integrity', style: TextStyle(color: cs.onSurface.withAlpha(140))),
+            trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: () => Navigator.pushNamed(context, AppRoutes.keyManagement),
           ),
-          
+
           const SizedBox(height: 40),
-          const Center(child: Text('CipherNest v0.5.0 Beta', style: TextStyle(color: Colors.white24))),
+          Center(
+            child: Text(
+              'CipherNest v1.0.0 Beta',
+              style: TextStyle(color: cs.onSurface.withAlpha(60)),
+            ),
+          ),
         ],
       ),
     );
@@ -637,7 +646,7 @@ class _SectionHeader extends StatelessWidget {
       child: Text(
         title.toUpperCase(),
         style: TextStyle(
-          color: AppColors.primary,
+          color: Theme.of(context).colorScheme.primary,
           fontSize: 12,
           fontWeight: FontWeight.bold,
           letterSpacing: 1.2,
