@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../widgets/theme_icon.dart';
 import '../../config/routes.dart';
@@ -14,39 +13,9 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  static const _kBiometricEnabled = 'biometric_enabled_v1';
-
   final _passwordController = TextEditingController();
   bool _isLoading = false;
   String? _error;
-
-  /// True only if the device supports biometrics AND the user explicitly
-  /// opted in via Quick Settings (or the Settings screen later). Gates the
-  /// biometric button — never show an unlock affordance the user didn't
-  /// ask for.
-  bool _biometricAvailable = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _checkBiometricAvailability();
-  }
-
-  Future<void> _checkBiometricAvailability() async {
-    final canUse = await KeyManagerService().canCheckBiometrics;
-    if (!canUse) return;
-    final prefs = await SharedPreferences.getInstance();
-    final enabled = prefs.getBool(_kBiometricEnabled) ?? false;
-    if (!mounted) return;
-    setState(() => _biometricAvailable = enabled);
-  }
-
-  Future<void> _triggerBiometrics() async {
-    final success = await KeyManagerService().authenticateWithBiometrics();
-    if (success && mounted) {
-      await _routeAfterUnlock();
-    }
-  }
 
   Future<void> _loginWithPassword() async {
     setState(() {
@@ -55,12 +24,19 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      final success = await KeyManagerService().login(_passwordController.text);
+      final success =
+          await KeyManagerService().unlock(_passwordController.text);
       if (success && mounted) {
         await _routeAfterUnlock();
       } else {
         setState(() => _error = "Incorrect password");
       }
+    } on PublicKeyMismatchException {
+      // Stored vault public key doesn't match the recovery seed — refuse to
+      // proceed rather than risk encrypting to a tampered key.
+      setState(() => _error =
+          'Vault key integrity check failed. Do not sync. Reinstall and '
+          'restore from your recovery phrase.');
     } catch (e) {
       setState(() => _error = e.toString());
     } finally {
@@ -140,19 +116,10 @@ class _LoginScreenState extends State<LoginScreen> {
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
-                child: _isLoading 
-                  ? const CircularProgressIndicator() 
+                child: _isLoading
+                  ? const CircularProgressIndicator()
                   : const Text('Unlock Vault'),
               ),
-              
-              if (_biometricAvailable) ...[
-                const SizedBox(height: 16),
-                TextButton.icon(
-                  onPressed: _triggerBiometrics,
-                  icon: ThemeIcon('fingerprint'),
-                  label: const Text('Use Biometrics'),
-                ),
-              ],
             ],
           ),
         ),

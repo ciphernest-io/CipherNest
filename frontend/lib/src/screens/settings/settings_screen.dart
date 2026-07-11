@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:local_auth/local_auth.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart'; // ENABLED
@@ -15,7 +14,6 @@ import '../../../services/audio_player_service.dart';
 import '../../../services/auto_sync_service.dart';
 import '../../../services/auto_sync_worker.dart';
 import '../../../services/gallery_prefs.dart';
-import '../../../services/key_manager_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../config/theme_packs.dart';
 import '../../config/theme_controller.dart';
@@ -46,17 +44,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _showFeatured = true;
   bool _showYearAgo = true;
 
-  // Biometrics
-  bool _biometricAvailable = false;
-  bool _biometricEnabled = false;
-  bool _biometricEnrolling = false;
-
   @override
   void initState() {
     super.initState();
     _loadStats();
     _loadPreferences(); // ENABLED
-    _loadBiometricCapability();
     // Any cache mutation (invalidate on delete, LRU sweep on sync, wipe on
     // recycle-bin permanent-delete) now bumps CacheManagerService's
     // notifier. Without this listener the "Cache size" tile only re-scans
@@ -71,44 +63,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.dispose();
   }
 
-  Future<void> _loadBiometricCapability() async {
-    final canUse = await KeyManagerService().canCheckBiometrics;
-    if (mounted) setState(() => _biometricAvailable = canUse);
-  }
-
-  Future<void> _toggleBiometric(bool wants) async {
-    if (!wants) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('biometric_enabled_v1', false);
-      if (mounted) setState(() => _biometricEnabled = false);
-      return;
-    }
-    setState(() => _biometricEnrolling = true);
-    try {
-      final auth = LocalAuthentication();
-      final ok = await auth.authenticate(
-        localizedReason: 'Set up CipherNest unlock',
-        options: const AuthenticationOptions(
-          biometricOnly: true,
-          stickyAuth: true,
-        ),
-      );
-      if (!mounted) return;
-      if (ok) {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setBool('biometric_enabled_v1', true);
-        if (mounted) setState(() => _biometricEnabled = true);
-      } else {
-        setState(() => _biometricEnabled = false);
-      }
-    } catch (e) {
-      debugPrint('Biometric enroll failed: $e');
-      if (mounted) setState(() => _biometricEnabled = false);
-    } finally {
-      if (mounted) setState(() => _biometricEnrolling = false);
-    }
-  }
-
   // --- NEW: PERSISTENCE LOGIC ---
   Future<void> _loadPreferences() async {
     final prefs = await SharedPreferences.getInstance();
@@ -120,7 +74,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _cacheLimitGB = val;
         _originalLimitGB = val;
         _autoSyncMode = mode;
-        _biometricEnabled = prefs.getBool('biometric_enabled_v1') ?? false;
         _showFeatured = prefs.getBool('gallery_show_featured') ?? true;
         _showYearAgo = prefs.getBool('gallery_show_year_ago') ?? true;
         if (lastRunMs > 0) {
@@ -601,20 +554,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const Divider(),
           // ... Security Section ...
           _SectionHeader(title: "Security"),
-          if (_biometricAvailable)
-            SwitchListTile(
-              secondary: ThemeIcon('fingerprint', color: cs.primary),
-              title: Text('Unlock with biometrics',
-                  style: TextStyle(color: cs.onSurface)),
-              subtitle: Text(
-                _biometricEnabled
-                    ? 'Fingerprint or face unlocks CipherNest'
-                    : 'Off — use master password to unlock',
-                style: TextStyle(color: cs.onSurface.withAlpha(140)),
-              ),
-              value: _biometricEnabled,
-              onChanged: _biometricEnrolling ? null : _toggleBiometric,
-            ),
           ListTile(
             leading: ThemeIcon('key', color: cs.primary),
             title: Text('Key Management', style: TextStyle(color: cs.onSurface)),

@@ -1,16 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:local_auth/local_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../services/auto_sync_worker.dart';
-import '../../../services/key_manager_service.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 
 /// One-time convenience screen shown after successful signup or restore,
-/// before the home screen. Lets the user opt into biometric unlock and
-/// background auto-sync without having to hunt for them in Settings.
+/// before the home screen. Lets the user opt into background auto-sync
+/// without having to hunt for it in Settings.
 ///
 /// Gated by SharedPreferences 'quick_settings_shown_v1'. `cloudSelection`
 /// routes here only when that flag is false and the mode is `signup` or
@@ -23,61 +21,17 @@ class QuickSettingsScreen extends StatefulWidget {
 }
 
 class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
-  static const _kBiometricEnabled = 'biometric_enabled_v1';
   // Watermark is the "only sync photos taken after this moment" cutoff.
   // Written when auto-sync is first enabled so we don't silently vault a
   // decade of gallery history — Migration handles that on demand.
   static const _kAutoSyncWatermark = 'auto_sync_watermark';
   static const _kShownFlag = 'quick_settings_shown_v1';
 
-  bool? _canBiometric;
-  bool _biometricOn = false;
   bool _autoSyncOn = false;
-  bool _isEnrollingBiometric = false;
 
   @override
   void initState() {
     super.initState();
-    KeyManagerService().canCheckBiometrics.then((v) {
-      if (!mounted) return;
-      setState(() => _canBiometric = v);
-    });
-  }
-
-  Future<void> _toggleBiometric(bool wants) async {
-    if (!wants) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_kBiometricEnabled, false);
-      if (!mounted) return;
-      setState(() => _biometricOn = false);
-      return;
-    }
-
-    setState(() => _isEnrollingBiometric = true);
-    try {
-      final auth = LocalAuthentication();
-      final ok = await auth.authenticate(
-        localizedReason: 'Set up CipherNest unlock',
-        options: const AuthenticationOptions(
-          biometricOnly: true,
-          stickyAuth: true,
-        ),
-      );
-      if (!mounted) return;
-      if (ok) {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setBool(_kBiometricEnabled, true);
-        if (mounted) setState(() => _biometricOn = true);
-      } else {
-        // User cancelled the biometric prompt. Leave toggle off.
-        setState(() => _biometricOn = false);
-      }
-    } catch (e) {
-      debugPrint('Biometric enroll failed: $e');
-      if (mounted) setState(() => _biometricOn = false);
-    } finally {
-      if (mounted) setState(() => _isEnrollingBiometric = false);
-    }
   }
 
   Future<void> _toggleAutoSync(bool v) async {
@@ -111,7 +65,6 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
-    final biometricAvailable = _canBiometric == true;
 
     return Scaffold(
       appBar: AppBar(
@@ -141,17 +94,6 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-              if (biometricAvailable)
-                _SettingRow(
-                  icon: 'fingerprint',
-                  title: 'Unlock with fingerprint or face',
-                  subtitle:
-                      'Unlock with a tap instead of typing the password each time. The password stays as a fallback.',
-                  value: _biometricOn,
-                  isLoading: _isEnrollingBiometric,
-                  onChanged: _toggleBiometric,
-                ),
-              if (biometricAvailable) const SizedBox(height: 12),
               _SettingRow(
                 icon: 'arrowsClockwise',
                 title: 'Auto-sync new photos in the background',
@@ -202,7 +144,6 @@ class _SettingRow extends StatelessWidget {
     required this.subtitle,
     required this.value,
     required this.onChanged,
-    this.isLoading = false,
   });
 
   final String icon;
@@ -210,7 +151,6 @@ class _SettingRow extends StatelessWidget {
   final String subtitle;
   final bool value;
   final ValueChanged<bool> onChanged;
-  final bool isLoading;
 
   @override
   Widget build(BuildContext context) {
@@ -251,16 +191,7 @@ class _SettingRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          isLoading
-              ? const SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : Switch(
-                  value: value,
-                  onChanged: isLoading ? null : onChanged,
-                ),
+          Switch(value: value, onChanged: onChanged),
         ],
       ),
     );

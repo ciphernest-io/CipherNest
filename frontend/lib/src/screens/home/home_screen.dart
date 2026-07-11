@@ -437,7 +437,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       
       if (isVideo && fileStream != null) {
         final encryptedSize = EncryptionService.calculateEncryptedSize(fileSize);
-        final encryptedStream = EncryptionService.encryptStream(fileStream);
+        final encryptedStream =
+            EncryptionService.encryptStream(fileStream, totalSize: fileSize);
 
         mainUploadFuture = CloudService().uploadEncryptedFile(
           filename: mainCloudFilename,

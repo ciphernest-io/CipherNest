@@ -307,7 +307,8 @@ class MigrationService {
 
     if (isVideo) {
       final encryptedSize = EncryptionService.calculateEncryptedSize(fileSize);
-      final encryptedStream = EncryptionService.encryptStream(file.openRead());
+      final encryptedStream =
+          EncryptionService.encryptStream(file.openRead(), totalSize: fileSize);
       mainCloudId = await CloudService().uploadEncryptedFile(
         filename: mainCloudFilename,
         type: CnestFileType.image,

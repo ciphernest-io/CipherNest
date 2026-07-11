@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart';
@@ -48,13 +49,11 @@ class ShareService {
     // 1. Download original encrypted blob (we need to swap its header).
     final originalBytes = await CloudService().downloadFile(file.cloudId!);
 
-    // 2. Recover the file's per-file key from the original header (master key).
-    final headerLen = ByteData.sublistView(originalBytes.sublist(0, 4))
-        .getUint32(0, Endian.big);
-    final headerSize = 4 + headerLen;
-    final fileKey = await EncryptionService.decryptFileKeyFromHeader(
-      originalBytes.sublist(0, headerSize),
-    );
+    // 2. Recover the file's per-file key from the vault header. This is an
+    //    HPKE open, so it requires an unlocked vault — sharing is always an
+    //    active, authenticated action, never a background one.
+    final fileKey =
+        await EncryptionService.decryptFileKeyFromHeader(originalBytes);
 
     // 3. Generate share key (random) or derive from password.
     SecretKey shareKey;
@@ -66,33 +65,30 @@ class ShareService {
       shareKey = await EncryptionService.generateShareKey();
     }
 
-    // 4. Re-wrap the file key with the share key → new header.
-    final newHeaderCore = await EncryptionService.wrapFileKeyForShare(
-      fileKey,
-      shareKey,
-    );
-    // For password mode, prepend the salt INSIDE the header.
-    // Format: [4-byte len of (salt? + wrapped)] [salt? (16 bytes)] [wrapped (60 bytes)]
-    Uint8List shareHeader;
-    if (salt != null) {
-      // newHeaderCore = [4-byte len][60-byte wrapped]; we re-format with salt
-      final wrapped = newHeaderCore.sublist(4); // 60 bytes
-      final combined = Uint8List(salt.length + wrapped.length);
-      combined.setRange(0, salt.length, salt);
-      combined.setRange(salt.length, combined.length, wrapped);
-      final lenPrefix = ByteData(4)..setUint32(0, combined.length, Endian.big);
-      shareHeader = Uint8List.fromList(
-        lenPrefix.buffer.asUint8List() + combined,
-      );
-    } else {
-      shareHeader = newHeaderCore;
-    }
+    // 4. Re-wrap the file key under the share key and frame the share header.
+    //    Share header v1:
+    //      [1 version][4 region-len BE][region]
+    //      region = password ? (16 salt + 60 wrapped) : (60 wrapped)
+    //    The body (preamble + AAD-bound chunks) is copied verbatim; its
+    //    content_id lives in the body, so it survives the header swap.
+    final wrapped =
+        await EncryptionService.wrapFileKeyForShare(fileKey, shareKey);
+    final region = salt == null
+        ? wrapped
+        : Uint8List.fromList([...salt, ...wrapped]);
+    final shareHeader = BytesBuilder(copy: false)
+      ..addByte(EncryptionService.formatVersion)
+      ..add((ByteData(4)..setUint32(0, region.length, Endian.big))
+          .buffer
+          .asUint8List())
+      ..add(region);
+    final headerBytes = shareHeader.toBytes();
 
     // 5. Build the share blob: new header + original encrypted body unchanged.
-    final body = originalBytes.sublist(headerSize);
-    final shareBlob = Uint8List(shareHeader.length + body.length);
-    shareBlob.setRange(0, shareHeader.length, shareHeader);
-    shareBlob.setRange(shareHeader.length, shareBlob.length, body);
+    final body = originalBytes.sublist(EncryptionService.headerSize);
+    final shareBlob = Uint8List(headerBytes.length + body.length);
+    shareBlob.setRange(0, headerBytes.length, headerBytes);
+    shareBlob.setRange(headerBytes.length, shareBlob.length, body);
 
     // 6. Upload to public location.
     final shareId = const Uuid().v4();

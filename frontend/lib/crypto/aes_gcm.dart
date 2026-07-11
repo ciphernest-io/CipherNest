@@ -45,6 +45,59 @@ class AesGcmCipher {
     return Uint8List.fromList(clearText);
   }
 
+  /// Encrypt one body chunk with a caller-supplied [nonce] and authenticated
+  /// [aad]. Output is nonce(12) || ciphertext || tag(16) — self-contained on
+  /// the wire so the streaming server can serve fixed-stride chunks. v1 uses
+  /// deterministic counter nonces (BE96(index)); uniqueness is structural
+  /// because each file key is fresh and used by exactly one encryptor.
+  Future<Uint8List> encryptChunk(
+    Uint8List plaintext,
+    SecretKey key,
+    Uint8List nonce,
+    Uint8List aad,
+  ) async {
+    final box = await _aesGcm.encrypt(
+      plaintext,
+      secretKey: key,
+      nonce: nonce,
+      aad: aad,
+    );
+    return Uint8List.fromList(nonce + box.cipherText + box.mac.bytes);
+  }
+
+  /// Decrypt one body chunk. Verifies the inline nonce equals [expectedNonce]
+  /// (rejecting a swapped/reordered chunk before GCM even runs) and
+  /// authenticates [aad] (binding the chunk to its content id, index, and
+  /// total count).
+  Future<Uint8List> decryptChunk(
+    Uint8List data,
+    SecretKey key,
+    Uint8List expectedNonce,
+    Uint8List aad,
+  ) async {
+    if (data.length < 28) throw Exception('Chunk too short');
+    final nonce = data.sublist(0, 12);
+    if (!_bytesEqual(nonce, expectedNonce)) {
+      throw Exception('Chunk nonce mismatch');
+    }
+    final macBytes = data.sublist(data.length - 16);
+    final cipherText = data.sublist(12, data.length - 16);
+    final clearText = await _aesGcm.decrypt(
+      SecretBox(cipherText, nonce: nonce, mac: Mac(macBytes)),
+      secretKey: key,
+      aad: aad,
+    );
+    return Uint8List.fromList(clearText);
+  }
+
+  bool _bytesEqual(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
   Uint8List _randomBytes(int length) {
     final rnd = Random.secure();
     return Uint8List.fromList(List<int>.generate(length, (i) => rnd.nextInt(256)));

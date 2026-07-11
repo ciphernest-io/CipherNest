@@ -19,6 +19,7 @@ import 'encryption_service.dart';
 class _StreamingSession {
   final CnestFile file;
   final SecretKey fileKey;
+  final Uint8List contentId;
   final int plaintextSize;
   final int encryptedSize;
   final int totalChunks;
@@ -47,6 +48,7 @@ class _StreamingSession {
   _StreamingSession({
     required this.file,
     required this.fileKey,
+    required this.contentId,
     required this.plaintextSize,
     required this.encryptedSize,
     required this.totalChunks,
@@ -72,9 +74,13 @@ class _StreamingSession {
     writeHandle = null;
   }
 
-  /// Encrypted byte offset where chunk [chunkIndex] starts (0-based).
+  /// Encrypted byte offset where chunk [chunkIndex] starts (0-based). The
+  /// body's 20-byte preamble (content_id + total_chunks) sits between the
+  /// header and chunk 0, so it's part of every chunk's base offset.
   int chunkEncryptedStart(int chunkIndex) {
-    return EncryptionService.headerSize + chunkIndex * EncryptionService.encryptedChunkSize;
+    return EncryptionService.headerSize +
+        EncryptionService.bodyPreambleSize +
+        chunkIndex * EncryptionService.encryptedChunkSize;
   }
 
   /// Encrypted byte size of chunk [chunkIndex] (handles last partial chunk).
@@ -176,13 +182,16 @@ class VideoStreamingServer {
         (EncryptionService.encryptedChunkSize - EncryptionService.plaintextChunkSize);
     // (plaintext + 28 overhead)
 
-    // Download just the header (64 bytes is enough; we use a slightly larger
-    // window to be safe against unusual encrypted-key sizes).
+    // Download the header + body preamble in one shot: the header yields the
+    // file key (HPKE open) and the 20-byte preamble yields content_id +
+    // total_chunks, both needed to build each chunk's AAD.
+    final prefixLen =
+        EncryptionService.headerSize + EncryptionService.bodyPreambleSize;
     final headerStart = DateTime.now();
-    final headerBytes = await CloudService().downloadRange(
+    final prefixBytes = await CloudService().downloadRange(
       file.cloudId!,
       0,
-      EncryptionService.headerSize - 1,
+      prefixLen - 1,
     );
     final headerElapsed = DateTime.now().difference(headerStart).inMilliseconds;
     debugPrint(
@@ -190,7 +199,11 @@ class VideoStreamingServer {
       'header fetched in ${headerElapsed}ms '
       '(${plaintextSize ~/ 1024 ~/ 1024} MB video, $totalChunks chunks)',
     );
-    final fileKey = await EncryptionService.decryptFileKeyFromHeader(headerBytes);
+    final fileKey =
+        await EncryptionService.decryptFileKeyFromHeader(prefixBytes);
+    final (contentId, _) = EncryptionService.readBodyPreamble(
+      prefixBytes.sublist(EncryptionService.headerSize),
+    );
 
     // Disk cache: a `.done` marker from an earlier session means the whole
     // plaintext is already on disk — playback needs zero network. A marker
@@ -213,6 +226,7 @@ class VideoStreamingServer {
     final session = _StreamingSession(
       file: file,
       fileKey: fileKey,
+      contentId: contentId,
       plaintextSize: plaintextSize,
       encryptedSize: encryptedSize,
       totalChunks: totalChunks,
@@ -491,6 +505,9 @@ class VideoStreamingServer {
           encryptedBytes,
           session.fileKey,
           runLast - runFirst + 1,
+          contentId: session.contentId,
+          totalChunks: session.totalChunks,
+          startIndex: runFirst,
           lastChunkEncryptedSize: lastChunkEncSize,
         );
 

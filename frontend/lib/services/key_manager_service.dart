@@ -1,36 +1,70 @@
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:bip39/bip39.dart' as bip39;
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:local_auth/local_auth.dart';
-import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// Key management for CipherNest's split-key architecture.
+///
+/// ## One root secret
+/// The BIP-39 seed (64 bytes) is the single root. Everything derives from it
+/// by HKDF-SHA256 with frozen, domain-separated info strings:
+///
+///   * `ciphernest/x25519/v1` → the vault's long-term **X25519 keypair**.
+///     Files are sealed to the public half via HPKE ([Hpke]); the private
+///     half is required only to open (decrypt).
+///   * `ciphernest/local/v1`  → `k_local`, which encrypts on-device
+///     secrets (currently the pending-mnemonic crash-recovery blob).
+///
+/// The info strings are load-bearing forever: once a real vault exists, a
+/// typo here would permanently orphan it. A frozen-mnemonic test
+/// (test/crypto/key_derivation_test.dart) pins them.
+///
+/// ## Encrypt while locked
+/// The public key lives in Keystore-wrapped secure storage and is loaded
+/// even when the vault is locked, so background sync can encrypt and upload
+/// with **no secret key material in memory**. Its confidentiality is
+/// irrelevant but its integrity is critical: on every real unlock we
+/// re-derive it from the seed and byte-compare against the stored value —
+/// a mismatch means someone swapped the key and we refuse to proceed.
+///
+/// ## Lock is real
+/// [lock] zeroes the private key and `k_local`; only [unlock] (password →
+/// Argon2id → seed) brings them back. There is no silent path to the private
+/// key — the biometric-shaped bypass the old build shipped is gone. Genuine
+/// hardware-backed biometrics is a future convenience layer over this same
+/// password path (Android Keystore setUserAuthenticationRequired via a
+/// platform channel), requiring no format change and no re-encryption.
 class KeyManagerService {
   static final KeyManagerService _instance = KeyManagerService._internal();
   factory KeyManagerService() => _instance;
   KeyManagerService._internal();
 
-  /// Set to true by [createAccount], cleared after the user completes the
-  /// recovery-phrase type-back. Its presence at login time signals the app
-  /// to resume the interrupted signup by re-showing the phrase.
+  // --- Frozen derivation labels. NEVER change these. ---
+  static const String infoX25519 = 'ciphernest/x25519/v1';
+  static const String infoLocal = 'ciphernest/local/v1';
+
+  // --- Secure storage (Keystore-wrapped). ---
+  static const _kVaultPub = 'vault_pub_v1';
+
+  // --- Password-wrapped seed blob (SharedPreferences). ---
+  static const _kSeedBlob = 'seed_blob_v1';
+  static const _kSeedNonce = 'seed_blob_nonce_v1';
+  static const _kSeedMac = 'seed_blob_mac_v1';
+  static const _kSeedSalt = 'seed_blob_salt_v1';
+
+  // --- Crash-recovery: mnemonic encrypted under k_local. ---
   static const _kSignupInProgress = 'signup_in_progress_v1';
-
-  /// True once the recovery-phrase type-back has been completed for the
-  /// current vault. When this flips, the encrypted-mnemonic blob below is
-  /// wiped — we never keep the phrase on disk one second longer than we
-  /// have to.
   static const _kRecoveryShown = 'recovery_shown_v1';
-
-  /// AES-GCM(master-key, plaintext=mnemonic) cipher text.
   static const _kEncryptedMnemonic = 'encrypted_mnemonic';
   static const _kEncryptedMnemonicNonce = 'encrypted_mnemonic_nonce';
   static const _kEncryptedMnemonicMac = 'encrypted_mnemonic_mac';
 
   final _storage = const FlutterSecureStorage();
-  final LocalAuthentication _localAuth = LocalAuthentication();
   final _argon2 = Argon2id(
     parallelism: 1,
     memory: 65536, // 64 MB
@@ -38,204 +72,270 @@ class KeyManagerService {
     hashLength: 32,
   );
 
-  /// The Master Key currently loaded in memory.
-  /// If null, the user is locked out (needs to log in).
-  SecretKey? _masterKey;
+  /// The vault's full X25519 keypair. Present only while unlocked — this is
+  /// the decrypt capability.
+  SimpleKeyPair? _vaultKeyPair;
 
-  /// Returns the master key if unlocked, otherwise throws error.
-  SecretKey get masterKey {
-    if (_masterKey == null) throw Exception('Vault is locked.');
-    return _masterKey!;
+  /// The vault's X25519 public key. Present whenever we can encrypt —
+  /// including a locked background isolate.
+  SimplePublicKey? _vaultPublicKey;
+
+  /// Local secret for on-device blobs. Present only while unlocked.
+  SecretKey? _kLocal;
+
+  /// True when the private key is in memory (decryption is possible).
+  bool get isUnlocked => _vaultKeyPair != null;
+
+  /// True when the public key is available (encryption is possible), whether
+  /// or not the vault is unlocked.
+  bool get canEncrypt => _vaultPublicKey != null;
+
+  /// The vault keypair for opening (decrypting) file keys. Throws if locked.
+  SimpleKeyPair get vaultKeyPair {
+    final kp = _vaultKeyPair;
+    if (kp == null) throw StateError('Vault is locked.');
+    return kp;
   }
 
-  /// Checks if an account exists on this device.
+  /// The vault public key for sealing (encrypting) file keys. Throws if not
+  /// yet loaded (call [unlock], [loadPublicKeyForEncrypt], or create/recover).
+  SimplePublicKey get vaultPublicKey {
+    final pk = _vaultPublicKey;
+    if (pk == null) throw StateError('Vault public key not loaded.');
+    return pk;
+  }
+
   Future<bool> hasAccount() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.containsKey('encrypted_mk');
+    return prefs.containsKey(_kSeedBlob);
   }
 
-  /// CREATION: Generates a new Master Key from a 12-word mnemonic.
-  /// Returns the mnemonic so the user can write it down.
-  ///
-  /// Also persists the mnemonic encrypted-under-the-master-key and sets a
-  /// signup-in-progress flag. If the user kills the app between here and
-  /// completing the recovery-phrase type-back, the login screen can decrypt
-  /// the pending mnemonic on next unlock and resume the flow, so nobody
-  /// loses their vault to a mid-signup crash.
+  // ---------------------------------------------------------------------------
+  // Account creation / recovery
+  // ---------------------------------------------------------------------------
+
+  /// Generates a new vault from a fresh 12-word mnemonic. Returns the
+  /// mnemonic so the user can write it down. Persists the encrypted seed
+  /// (password-wrapped), the public key, and a crash-recovery mnemonic blob.
   Future<String> createAccount(String password) async {
-    // 1. Generate 12-word mnemonic (BIP-39)
     final mnemonic = bip39.generateMnemonic();
-
-    // 2. Derive the Master Key (32 bytes) from the mnemonic
-    // We use the seed, taken as 32 bytes for AES-256
-    final seed = bip39.mnemonicToSeed(mnemonic);
-    final masterKeyBytes = seed.sublist(0, 32);
-    _masterKey = SecretKey(masterKeyBytes);
-
-    // 3. Save directly to SecureStorage for "Remember Me" access
-    await _storage.write(
-      key: 'master_key_raw',
-      value: base64Encode(masterKeyBytes),
-    );
-
-    // 4. Encrypt the MK with the Password (for Cloud Backup & Login)
-    await _encryptAndSaveKeyBlob(password, masterKeyBytes);
-
-    // 5. Persist encrypted mnemonic + signup-in-progress flag (crash-safety).
+    final seed = bip39.mnemonicToSeed(mnemonic); // 64 bytes
+    await _installSeed(seed, password);
     await _encryptAndSaveMnemonicBlob(mnemonic);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kSignupInProgress, true);
     await prefs.setBool(_kRecoveryShown, false);
-
     return mnemonic;
   }
 
-  /// RESTORE: Recovers account using the 12-word mnemonic and sets a new password.
+  /// Restores a vault from its mnemonic and sets a new password.
   Future<void> recoverAccount(String mnemonic, String newPassword) async {
     if (!bip39.validateMnemonic(mnemonic)) {
       throw Exception('Invalid recovery phrase');
     }
-
     final seed = bip39.mnemonicToSeed(mnemonic);
-    final masterKeyBytes = seed.sublist(0, 32);
-    _masterKey = SecretKey(masterKeyBytes);
-
-    // Update SecureStorage
-    await _storage.write(
-      key: 'master_key_raw', 
-      value: base64Encode(masterKeyBytes)
-    );
-
-    // Update the Password-Encrypted Blob
-    await _encryptAndSaveKeyBlob(newPassword, masterKeyBytes);
+    await _installSeed(seed, newPassword);
   }
 
-  /// LOGIN: Unlocks the app using the password.
-  /// (Used if the raw key is wiped from SecureStorage or on a new install context)
-  Future<bool> login(String password) async {
+  /// Derives the vault keys from [seed], writes the public key to secure
+  /// storage, and password-wraps the seed. Loads all keys into memory.
+  Future<void> _installSeed(Uint8List seed, String password) async {
+    final keys = await _deriveKeys(seed);
+    _vaultKeyPair = keys.keyPair;
+    _vaultPublicKey = keys.publicKey;
+    _kLocal = keys.kLocal;
+
+    await _storage.write(
+      key: _kVaultPub,
+      value: base64Encode(keys.publicKey.bytes),
+    );
+    await _encryptAndSaveSeedBlob(password, seed);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Unlock / lock
+  // ---------------------------------------------------------------------------
+
+  /// Unlocks the vault with the password. Derives every key from the seed,
+  /// then **verifies** the re-derived public key matches the one in secure
+  /// storage. Returns false on a wrong password; throws
+  /// [PublicKeyMismatchException] if the stored public key was tampered with.
+  Future<bool> unlock(String password) async {
+    final seed = await _decryptSeedBlob(password);
+    if (seed == null) return false; // wrong password / no account
+
+    final keys = await _deriveKeys(seed);
+    await _verifyStoredPublicKey(keys.publicKey);
+
+    _vaultKeyPair = keys.keyPair;
+    _vaultPublicKey = keys.publicKey;
+    _kLocal = keys.kLocal;
+    return true;
+  }
+
+  /// Loads ONLY the public key from secure storage — the encrypt-only path
+  /// used by the background sync isolate. Structurally cannot load the
+  /// private key. Returns false if no public key is stored.
+  Future<bool> loadPublicKeyForEncrypt() async {
+    if (_vaultPublicKey != null) return true;
+    final b64 = await _storage.read(key: _kVaultPub);
+    if (b64 == null) return false;
+    _vaultPublicKey =
+        SimplePublicKey(base64Decode(b64), type: KeyPairType.x25519);
+    return true;
+  }
+
+  /// Zeroes the private key and local secret. The public key stays resident
+  /// so background encryption keeps working. Locked = encrypt-only.
+  void lock() {
+    _vaultKeyPair = null;
+    _kLocal = null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Key derivation (frozen)
+  // ---------------------------------------------------------------------------
+
+  static Future<_DerivedKeys> _deriveKeys(Uint8List seed) async {
+    final x25519Seed = await _hkdf(seed, infoX25519, 32);
+    final kLocalBytes = await _hkdf(seed, infoLocal, 32);
+    final keyPair = await X25519().newKeyPairFromSeed(x25519Seed);
+    final publicKey = await keyPair.extractPublicKey();
+    return _DerivedKeys(
+      keyPair: keyPair,
+      publicKey: publicKey,
+      kLocal: SecretKey(kLocalBytes),
+    );
+  }
+
+  /// HKDF-SHA256 with empty salt; domain separation comes from [info]. The
+  /// seed is already uniformly random high-entropy keying material, so an
+  /// empty salt is standard practice for splitting one root into subkeys.
+  static Future<Uint8List> _hkdf(Uint8List ikm, String info, int length) async {
+    final hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: length);
+    final derived = await hkdf.deriveKey(
+      secretKey: SecretKey(ikm),
+      info: utf8.encode(info),
+    );
+    return Uint8List.fromList(await derived.extractBytes());
+  }
+
+  /// Pure derivation for the frozen-mnemonic test — no storage, no state.
+  /// Returns the vault public key and k_local so the test can pin them and
+  /// catch any drift in the frozen info strings.
+  @visibleForTesting
+  static Future<({Uint8List publicKey, Uint8List kLocal})>
+      deriveVaultKeysForTest(Uint8List seed) async {
+    final keys = await _deriveKeys(seed);
+    return (
+      publicKey: Uint8List.fromList(keys.publicKey.bytes),
+      kLocal: Uint8List.fromList(await keys.kLocal.extractBytes()),
+    );
+  }
+
+  /// Injects in-memory keys directly, bypassing storage — for format/crypto
+  /// tests that exercise encrypt/decrypt without a device.
+  @visibleForTesting
+  void installKeysForTest({
+    required SimpleKeyPair keyPair,
+    required SimplePublicKey publicKey,
+    SecretKey? kLocal,
+  }) {
+    _vaultKeyPair = keyPair;
+    _vaultPublicKey = publicKey;
+    _kLocal = kLocal;
+  }
+
+  Future<void> _verifyStoredPublicKey(SimplePublicKey derived) async {
+    final stored = await _storage.read(key: _kVaultPub);
+    if (stored == null) {
+      // First unlock after an interrupted install — write it now.
+      await _storage.write(key: _kVaultPub, value: base64Encode(derived.bytes));
+      return;
+    }
+    if (!_constantTimeEquals(base64Decode(stored), derived.bytes)) {
+      throw const PublicKeyMismatchException();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Password-wrapped seed blob
+  // ---------------------------------------------------------------------------
+
+  Future<void> _encryptAndSaveSeedBlob(String password, Uint8List seed) async {
+    final salt = _randomBytes(16);
+    final kek = await _deriveKeyFromPassword(password, salt);
+    final nonce = _randomBytes(12);
+    final box = await AesGcm.with256bits()
+        .encrypt(seed, secretKey: kek, nonce: nonce);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kSeedBlob, base64Encode(box.cipherText));
+    await prefs.setString(_kSeedNonce, base64Encode(nonce));
+    await prefs.setString(_kSeedMac, base64Encode(box.mac.bytes));
+    await prefs.setString(_kSeedSalt, base64Encode(salt));
+  }
+
+  /// Returns the 64-byte seed, or null on wrong password / missing blob.
+  Future<Uint8List?> _decryptSeedBlob(String password) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      
-      // 1. Fetch the encrypted blob and salt
-      final encryptedMkBase64 = prefs.getString('encrypted_mk');
-      final saltBase64 = prefs.getString('mk_salt');
-      final nonceBase64 = prefs.getString('mk_nonce');
-
-      if (encryptedMkBase64 == null || saltBase64 == null || nonceBase64 == null) {
-        return false; // No account found
+      final blob = prefs.getString(_kSeedBlob);
+      final salt = prefs.getString(_kSeedSalt);
+      final nonce = prefs.getString(_kSeedNonce);
+      final mac = prefs.getString(_kSeedMac);
+      if (blob == null || salt == null || nonce == null || mac == null) {
+        return null;
       }
-
-      // 2. Derive KEK (Key Encryption Key) from Password
-      final salt = base64Decode(saltBase64);
-      final kek = await _deriveKeyFromPassword(password, salt);
-
-      // 3. Decrypt the Master Key
-      final algorithm = AesGcm.with256bits();
-      final secretBox = SecretBox(
-        base64Decode(encryptedMkBase64),
-        nonce: base64Decode(nonceBase64),
-        mac: Mac(base64Decode(prefs.getString('mk_mac') ?? '')),
-      );
-
-      final clearText = await algorithm.decrypt(
-        secretBox,
+      final kek = await _deriveKeyFromPassword(password, base64Decode(salt));
+      final clear = await AesGcm.with256bits().decrypt(
+        SecretBox(
+          base64Decode(blob),
+          nonce: base64Decode(nonce),
+          mac: Mac(base64Decode(mac)),
+        ),
         secretKey: kek,
       );
-
-      _masterKey = SecretKey(clearText);
-      return true;
-    } catch (e) {
-      // Decryption failed (Wrong password)
-      return false;
+      return Uint8List.fromList(clear);
+    } catch (_) {
+      return null; // wrong password
     }
-  }
-
-  Future<bool> get canCheckBiometrics async {
-    try {
-      return await _localAuth.canCheckBiometrics && 
-             await _localAuth.isDeviceSupported();
-    } on PlatformException {
-      return false;
-    }
-  }
-
-  /// PROMPT: Asks user for FaceID/Fingerprint to unlock the Master Key
-  Future<bool> authenticateWithBiometrics() async {
-    try {
-      final isAvailable = await canCheckBiometrics;
-      if (!isAvailable) return false;
-
-      final authenticated = await _localAuth.authenticate(
-        localizedReason: 'Scan to unlock your Vault',
-        options: const AuthenticationOptions(
-          stickyAuth: true,
-          biometricOnly: true,
-        ),
-      );
-
-      if (authenticated) {
-        // If success, try to load the key from Secure Storage
-        return await attemptBiometricUnlock();
-      }
-      return false;
-    } on PlatformException {
-      return false;
-    }
-  }
-
-  /// AUTO-LOGIN: Tries to load the key from SecureStorage.
-  Future<bool> attemptBiometricUnlock() async {
-    final mkBase64 = await _storage.read(key: 'master_key_raw');
-    if (mkBase64 != null) {
-      _masterKey = SecretKey(base64Decode(mkBase64));
-      return true;
-    }
-    return false;
   }
 
   // ---------------------------------------------------------------------------
-  // Signup-in-progress crash-recovery
+  // Crash-recovery mnemonic blob (encrypted under k_local)
   // ---------------------------------------------------------------------------
 
-  /// True iff the app is in the middle of a signup: master key exists but
-  /// the recovery-phrase type-back never completed. Used by the login screen
-  /// to route back to the phrase view after unlock.
   Future<bool> hasSignupInProgress() async {
     final prefs = await SharedPreferences.getInstance();
     return (prefs.getBool(_kSignupInProgress) ?? false) &&
         !(prefs.getBool(_kRecoveryShown) ?? false);
   }
 
-  /// Decrypts and returns the pending mnemonic if a signup was interrupted.
-  /// Requires the master key to already be unlocked in memory (via [login]
-  /// or a biometric unlock). Returns null if there is no pending mnemonic,
-  /// the blob is missing / corrupted, or decryption fails for any reason.
+  /// Decrypts the pending mnemonic if a signup was interrupted. Requires the
+  /// vault to be unlocked (k_local present).
   Future<String?> retrieveMnemonicIfPending() async {
-    if (_masterKey == null) return null;
+    final kLocal = _kLocal;
+    if (kLocal == null) return null;
     final prefs = await SharedPreferences.getInstance();
     final cipher = prefs.getString(_kEncryptedMnemonic);
     final nonce = prefs.getString(_kEncryptedMnemonicNonce);
     final mac = prefs.getString(_kEncryptedMnemonicMac);
     if (cipher == null || nonce == null || mac == null) return null;
     try {
-      final secretBox = SecretBox(
-        base64Decode(cipher),
-        nonce: base64Decode(nonce),
-        mac: Mac(base64Decode(mac)),
+      final clear = await AesGcm.with256bits().decrypt(
+        SecretBox(
+          base64Decode(cipher),
+          nonce: base64Decode(nonce),
+          mac: Mac(base64Decode(mac)),
+        ),
+        secretKey: kLocal,
       );
-      final clearText = await AesGcm.with256bits().decrypt(
-        secretBox,
-        secretKey: _masterKey!,
-      );
-      return utf8.decode(clearText);
+      return utf8.decode(clear);
     } catch (_) {
       return null;
     }
   }
 
-  /// Called by the recovery-phrase screen once the type-back completes.
-  /// Wipes the encrypted mnemonic (no reason to keep it after this), sets
-  /// the recovery-shown flag, and clears the signup-in-progress flag.
   Future<void> markRecoveryShown() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kRecoveryShown, true);
@@ -245,71 +345,62 @@ class KeyManagerService {
     await prefs.remove(_kEncryptedMnemonicMac);
   }
 
-  /// Encrypts the mnemonic under the master key. Called only from within
-  /// [createAccount] while `_masterKey` is guaranteed non-null.
   Future<void> _encryptAndSaveMnemonicBlob(String mnemonic) async {
-    final algorithm = AesGcm.with256bits();
+    final kLocal = _kLocal;
+    if (kLocal == null) throw StateError('k_local not loaded');
     final nonce = _randomBytes(12);
-    final secretBox = await algorithm.encrypt(
-      utf8.encode(mnemonic),
-      secretKey: _masterKey!,
-      nonce: nonce,
-    );
+    final box = await AesGcm.with256bits()
+        .encrypt(utf8.encode(mnemonic), secretKey: kLocal, nonce: nonce);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _kEncryptedMnemonic,
-      base64Encode(secretBox.cipherText),
-    );
+    await prefs.setString(_kEncryptedMnemonic, base64Encode(box.cipherText));
     await prefs.setString(_kEncryptedMnemonicNonce, base64Encode(nonce));
-    await prefs.setString(
-      _kEncryptedMnemonicMac,
-      base64Encode(secretBox.mac.bytes),
-    );
+    await prefs.setString(_kEncryptedMnemonicMac, base64Encode(box.mac.bytes));
   }
 
-  // --- HELPERS ---
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
 
-  Future<void> _encryptAndSaveKeyBlob(String password, Uint8List masterKeyBytes) async {
-    // 1. Generate Salt for Password Hashing
-    final salt = _randomBytes(16);
-    
-    // 2. Derive KEK
-    final kek = await _deriveKeyFromPassword(password, salt);
-
-    // 3. Encrypt the Master Key
-    final algorithm = AesGcm.with256bits();
-    final nonce = _randomBytes(12);
-    final secretBox = await algorithm.encrypt(
-      masterKeyBytes,
-      secretKey: kek,
-      nonce: nonce,
-    );
-
-    // 4. Save everything to SharedPrefs (publicly accessible on phone, but encrypted)
-    // In a real app, this 'blob' is what we upload to Google Drive.
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('encrypted_mk', base64Encode(secretBox.cipherText));
-    await prefs.setString('mk_nonce', base64Encode(nonce));
-    await prefs.setString('mk_mac', base64Encode(secretBox.mac.bytes));
-    await prefs.setString('mk_salt', base64Encode(salt));
-  }
-
-  Future<SecretKey> _deriveKeyFromPassword(String password, Uint8List salt) async {
-    final secretKey = await _argon2.deriveKeyFromPassword(
-      password: password,
-      nonce: salt,
-    );
-    return secretKey;
+  Future<SecretKey> _deriveKeyFromPassword(String password, List<int> salt) {
+    // Same Argon2id call the share-password KDF uses (see
+    // EncryptionService.derivePasswordKey).
+    return _argon2.deriveKeyFromPassword(password: password, nonce: salt);
   }
 
   Uint8List _randomBytes(int length) {
     final rnd = Random.secure();
-    return Uint8List.fromList(List<int>.generate(length, (i) => rnd.nextInt(256)));
+    return Uint8List.fromList(
+        List<int>.generate(length, (_) => rnd.nextInt(256)));
   }
-  
-  /// Helper to get raw bytes for storage/upload if needed
-  Future<Uint8List> getMasterKeyBytes() async {
-     if (_masterKey == null) throw Exception('Locked');
-     return Uint8List.fromList(await _masterKey!.extractBytes());
+
+  bool _constantTimeEquals(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    var diff = 0;
+    for (var i = 0; i < a.length; i++) {
+      diff |= a[i] ^ b[i];
+    }
+    return diff == 0;
   }
+}
+
+class _DerivedKeys {
+  final SimpleKeyPair keyPair;
+  final SimplePublicKey publicKey;
+  final SecretKey kLocal;
+  const _DerivedKeys({
+    required this.keyPair,
+    required this.publicKey,
+    required this.kLocal,
+  });
+}
+
+/// Thrown when the vault public key in secure storage doesn't match the one
+/// re-derived from the seed on unlock — an integrity failure that must halt
+/// syncing and alert the user.
+class PublicKeyMismatchException implements Exception {
+  const PublicKeyMismatchException();
+  @override
+  String toString() =>
+      'Vault public key mismatch: stored key does not match the recovery '
+      'seed. Encryption is halted to protect your data.';
 }

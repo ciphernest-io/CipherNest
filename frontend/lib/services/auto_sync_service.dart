@@ -37,13 +37,11 @@ class AutoSyncService {
     int skipped = 0;
 
     try {
-      // Ensure master key is available
-      try {
-        KeyManagerService().masterKey;
-      } catch (_) {
-        final loaded = await KeyManagerService().attemptBiometricUnlock();
-        if (!loaded) return AutoSyncResult(synced: 0, failed: 0, skipped: 0);
-      }
+      // Encrypt-only: load just the vault PUBLIC key. New uploads are sealed
+      // to it via HPKE, so background sync works while the vault is locked
+      // with no secret key material in this isolate.
+      final canEncrypt = await KeyManagerService().loadPublicKeyForEncrypt();
+      if (!canEncrypt) return AutoSyncResult(synced: 0, failed: 0, skipped: 0);
 
       // Ensure cloud session is active
       final active = AccountRegistry().activeAccount;
@@ -264,7 +262,7 @@ class AutoSyncService {
         final encryptedSize =
             EncryptionService.calculateEncryptedSize(fileSize);
         final encryptedStream =
-            EncryptionService.encryptStream(file.openRead());
+            EncryptionService.encryptStream(file.openRead(), totalSize: fileSize);
         mainCloudId = await CloudService().uploadEncryptedFile(
           filename: mainCloudFilename,
           type: CnestFileType.image,
