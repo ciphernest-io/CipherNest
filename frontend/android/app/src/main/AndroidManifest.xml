@@ -10,12 +10,17 @@
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+    <!-- allowBackup MUST stay false: Auto Backup would copy the wrapped seed
+         (seed_blob_v1), the biometric blob, and the shares DB (which holds
+         magic links with raw key fragments) to the user's Google Drive.
+         Recovery story is the mnemonic, never device backup. -->
     <application
         android:label="frontend"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
         android:networkSecurityConfig="@xml/network_security_config"
-        tools:replace="android:name">
+        tools:replace="android:name,android:allowBackup">
         <activity
             android:name=".MainActivity"
             android:exported="true"
