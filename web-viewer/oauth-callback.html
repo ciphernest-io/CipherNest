@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex">
-  <title>Returning to CipherNest…</title>
+  <title>Returning to CipherNest</title>
   <style>
     body { margin: 0; min-height: 100vh; display: flex; align-items: center;
            justify-content: center; background: #0e1013; color: #e8eaed;
@@ -17,30 +17,33 @@
   </style>
 </head>
 <body>
-  <!-- Chrome renders in-tab OAuth redirects itself (App Links don't
+  <!-- Chrome renders the in-tab OAuth redirect itself (App Links don't
        intercept in-browser navigation), so this page IS the expected final
-       step of sign-in, not an error state. It must stay perfectly still and
-       wait for one tap: any scripted navigation to an app intent lacks a
-       user gesture, and Chrome's block of it destabilizes the tab (the
-       flash-and-bounce bug). The button tap is the gesture that makes the
-       hand-off legal. The code in the URL is single-use and short-lived;
-       this page is ours and sends nothing anywhere. -->
+       step of sign-in, not an error state. It hands the auth code to the
+       app via a CUSTOM-scheme intent (ciphernest://): Chrome refuses to
+       launch app intents whose embedded scheme is http/https (redirect-loop
+       guard), so scheme=https silently does nothing. A custom scheme
+       launches reliably, and the app's plugin waits on exactly this scheme.
+       The code in the URL is single-use and short-lived; this page is ours
+       and sends nothing anywhere.
+       We try once automatically on load, and the button is the manual
+       retry (a tap is a fresh user gesture if the auto-attempt was too
+       early). -->
   <div class="card">
     <h2>Sign-in complete</h2>
-    <p>One more tap to finish connecting your account.<br>
-       (Don't use the back button — tap below.)</p>
+    <p>Finishing up in the CipherNest app.<br>
+       If it doesn't reopen on its own, tap below.</p>
     <a class="btn" id="open" href="#">Open CipherNest</a>
   </div>
   <script>
-    // Re-present the SAME https URL as an explicit app intent: the plugin
-    // keys its pending sign-in on the redirect's scheme ('https'), and an
-    // explicit package-targeted intent matches the app's intent-filter even
-    // when App Link auto-verification failed. NO auto-navigation — see
-    // comment above.
-    var target = 'intent://' + location.host + location.pathname +
-      location.search +
-      '#Intent;scheme=https;package=com.example.frontend;end';
+    // Preserve the OAuth query (code/state) but re-key the scheme to the
+    // custom one the app's flutter_web_auth callback is registered under.
+    var target = 'intent://oauth-callback' + location.search +
+      '#Intent;scheme=ciphernest;package=com.example.frontend;end';
     document.getElementById('open').setAttribute('href', target);
+    // Custom-scheme intents are allowed to auto-launch in Chrome; unlike the
+    // https variant this does not destabilize the tab.
+    window.location.href = target;
   </script>
 </body>
 </html>
