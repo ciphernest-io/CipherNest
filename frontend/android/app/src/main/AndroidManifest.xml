@@ -57,10 +57,28 @@
                       android:pathPrefix="/s/"/>
             </intent-filter>
         </activity>
-        <!-- OAuth2 redirect callback for flutter_web_auth_2 -->
+        <!-- OAuth2 redirect callback for flutter_web_auth_2.
+             PRIMARY: verified https App Link. A custom-scheme redirect makes
+             login.live.com show its anti-phishing interstitial ("Are you
+             trying to sign in to CipherNest?"), and Chrome then blocks the
+             scheme hand-off without a trusted gesture — the flow hangs. An
+             https redirect skips the interstitial entirely and Android
+             routes the verified link straight into the app.
+             FALLBACK: if verification fails, the worker's /oauth-callback
+             page re-fires the same https URL as an explicit intent, which
+             matches this filter without verification. The ciphernest://
+             filter stays as a legacy/manual escape hatch. -->
         <activity
             android:name="com.linusu.flutter_web_auth_2.CallbackActivity"
             android:exported="true">
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https"
+                      android:host="ciphernest.ciphernest20.workers.dev"
+                      android:path="/oauth-callback" />
+            </intent-filter>
             <intent-filter android:label="flutter_web_auth_2">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

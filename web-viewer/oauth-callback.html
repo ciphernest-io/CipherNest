@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Returning to CipherNest…</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: flex; align-items: center;
+           justify-content: center; background: #0e1013; color: #e8eaed;
+           font-family: system-ui, sans-serif; }
+    .card { text-align: center; padding: 32px; }
+    a.btn { display: inline-block; margin-top: 20px; padding: 14px 28px;
+            background: #4c8dff; color: #fff; border-radius: 12px;
+            text-decoration: none; font-weight: 600; }
+    p { color: #9aa0a6; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <!-- This page only renders when Android App Link verification failed and
+       the sign-in redirect landed in the browser instead of the app. The
+       button hands the OAuth response to the app via its custom scheme.
+       The code in the URL is single-use and short-lived; this page is ours
+       and sends nothing anywhere. -->
+  <div class="card">
+    <h2>Sign-in complete</h2>
+    <p>Finishing up in the CipherNest app…</p>
+    <a class="btn" id="open" href="#">Open CipherNest</a>
+  </div>
+  <script>
+    // Re-present the SAME https URL as an explicit app intent: the plugin
+    // keys its pending sign-in on the redirect's scheme ('https'), and an
+    // explicit package-targeted intent matches the app's intent-filter even
+    // when App Link auto-verification failed.
+    var target = 'intent://' + location.host + location.pathname +
+      location.search +
+      '#Intent;scheme=https;package=com.example.frontend;end';
+    document.getElementById('open').setAttribute('href', target);
+    // Auto-attempt; browsers may require the button tap (user gesture).
+    location.replace(target);
+  </script>
+</body>
+</html>

@@ -20,7 +20,15 @@ class OneDriveProvider implements CloudProvider {
   // Register at https://portal.azure.com -> Microsoft Entra ID -> App registrations.
   // See plan file for exact registration steps.
   static const String _clientId = '6bd09a94-1c3b-4d09-9d35-4a684f285638';
-  static const String _redirectUri = 'ciphernest://oauth-callback';
+  // HTTPS App Link, NOT a custom scheme. Must stay in sync with three
+  // places: the Azure app registration ("Mobile and desktop applications"
+  // platform), the CallbackActivity intent-filter in AndroidManifest.xml,
+  // and the worker's /oauth-callback fallback page + assetlinks.json.
+  // Custom-scheme redirects trigger login.live.com's anti-phishing
+  // interstitial, which hangs in Custom Tabs (see authenticate() below).
+  static const String _redirectHost = 'ciphernest.ciphernest20.workers.dev';
+  static const String _redirectPath = '/oauth-callback';
+  static const String _redirectUri = 'https://$_redirectHost$_redirectPath';
   // /common/ routes any user (personal or work/school) to the right tenant
   // based on their account. /consumers/ would only work for personal-only
   // app registrations, but our app is multi-tenant + personal accounts.
@@ -63,24 +71,28 @@ class OneDriveProvider implements CloudProvider {
 
     String redirectResult;
     try {
-      // Custom Tabs (system browser) with an explicit provider order —
-      // three failure modes shaped this, do not "simplify":
+      // Custom Tabs + HTTPS App Link callback. Four failure modes shaped
+      // this configuration — do not "simplify" any of it:
       //  * Embedded WebView (useWebview:true, Jul 5) broke EVERY Microsoft
       //    account: login.live.com stalls post-credential in WebViews,
       //    which Microsoft explicitly discourages for personal accounts.
-      //  * Brave's Custom Tab (user's default browser) breaks MSA with
-      //    "Microsoft account is unavailable from this site" — shields
-      //    block the cross-site storage the passkey/confirm steps need.
-      //  * preferEphemeral made Brave WORSE (off-the-record tab = even
-      //    stricter storage blocking), so it stays false.
-      // customTabsPackageOrder routes the tab to Chrome (or Samsung
-      // Internet) ahead of the default browser; both handle MSA fine.
-      // If neither exists the plugin falls back to the default provider.
+      //  * Brave's Custom Tab breaks MSA with "Microsoft account is
+      //    unavailable from this site" (shields block cross-site storage).
+      //  * preferEphemeral makes Brave WORSE (off-the-record tab), stays
+      //    false.
+      //  * A ciphernest:// custom-scheme redirect triggers login.live.com's
+      //    anti-phishing interstitial, and Chrome blocks the scheme
+      //    hand-off without a trusted gesture — infinite spinner. The
+      //    https App Link redirect skips the interstitial entirely.
+      // callbackUrlScheme is 'https' because the plugin keys its pending
+      // call on the redirect's scheme (CallbackActivity matches by scheme).
       redirectResult = await FlutterWebAuth2.authenticate(
         url: authUrl.toString(),
-        callbackUrlScheme: 'ciphernest',
+        callbackUrlScheme: 'https',
         options: const FlutterWebAuth2Options(
           preferEphemeral: false,
+          httpsHost: _redirectHost,
+          httpsPath: _redirectPath,
           customTabsPackageOrder: [
             'com.android.chrome',
             'com.sec.android.app.sbrowser',
