@@ -63,20 +63,28 @@ class OneDriveProvider implements CloudProvider {
 
     String redirectResult;
     try {
-      // Custom Tabs (system browser), NEVER an embedded WebView. The Jul 5
-      // useWebview:true experiment broke sign-in for EVERY Microsoft
-      // account: login.live.com's post-credential confirm step stalls in
-      // embedded WebViews (Microsoft explicitly discourages them for
-      // personal accounts), so the flow hung on "confirm sign-in".
-      // preferEphemeral (incognito-style tab) stays on as the mitigation
-      // for default-browser shields (the original Brave hang): an
-      // ephemeral tab skips shield/cookie state that can eat the
-      // ciphernest:// redirect.
+      // Custom Tabs (system browser) with an explicit provider order —
+      // three failure modes shaped this, do not "simplify":
+      //  * Embedded WebView (useWebview:true, Jul 5) broke EVERY Microsoft
+      //    account: login.live.com stalls post-credential in WebViews,
+      //    which Microsoft explicitly discourages for personal accounts.
+      //  * Brave's Custom Tab (user's default browser) breaks MSA with
+      //    "Microsoft account is unavailable from this site" — shields
+      //    block the cross-site storage the passkey/confirm steps need.
+      //  * preferEphemeral made Brave WORSE (off-the-record tab = even
+      //    stricter storage blocking), so it stays false.
+      // customTabsPackageOrder routes the tab to Chrome (or Samsung
+      // Internet) ahead of the default browser; both handle MSA fine.
+      // If neither exists the plugin falls back to the default provider.
       redirectResult = await FlutterWebAuth2.authenticate(
         url: authUrl.toString(),
         callbackUrlScheme: 'ciphernest',
         options: const FlutterWebAuth2Options(
-          preferEphemeral: true,
+          preferEphemeral: false,
+          customTabsPackageOrder: [
+            'com.android.chrome',
+            'com.sec.android.app.sbrowser',
+          ],
         ),
       );
       debugPrint('OneDrive auth returned redirect: '
