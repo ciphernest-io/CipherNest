@@ -63,20 +63,20 @@ class OneDriveProvider implements CloudProvider {
 
     String redirectResult;
     try {
-      // useWebview: true forces an in-app WebView instead of Custom Tabs.
-      // Custom Tabs launches in whatever browser the user has set as
-      // default (Brave, Chrome, etc.); browser-level shields on Brave
-      // (and, apparently, some Chrome installs) can block the
-      // post-consent redirect back to the ciphernest:// scheme. The
-      // WebView path is browser-choice-agnostic and cookie-isolated, so
-      // the OAuth loop closes reliably regardless of the user's default
-      // browser. preferEphemeral is kept as a defence-in-depth hint.
+      // Custom Tabs (system browser), NEVER an embedded WebView. The Jul 5
+      // useWebview:true experiment broke sign-in for EVERY Microsoft
+      // account: login.live.com's post-credential confirm step stalls in
+      // embedded WebViews (Microsoft explicitly discourages them for
+      // personal accounts), so the flow hung on "confirm sign-in".
+      // preferEphemeral (incognito-style tab) stays on as the mitigation
+      // for default-browser shields (the original Brave hang): an
+      // ephemeral tab skips shield/cookie state that can eat the
+      // ciphernest:// redirect.
       redirectResult = await FlutterWebAuth2.authenticate(
         url: authUrl.toString(),
         callbackUrlScheme: 'ciphernest',
         options: const FlutterWebAuth2Options(
           preferEphemeral: true,
-          useWebview: true,
         ),
       );
       debugPrint('OneDrive auth returned redirect: '
