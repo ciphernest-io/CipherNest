@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../widgets/theme_icon.dart';
 import '../../config/routes.dart';
 import '../../../services/app_lock_service.dart';
+import '../../../services/biometric_unlock_service.dart';
 import '../../../services/cloud/account_registry.dart';
 import '../../../services/key_manager_service.dart';
 
@@ -17,6 +18,83 @@ class _LoginScreenState extends State<LoginScreen> {
   final _passwordController = TextEditingController();
   bool _isLoading = false;
   String? _error;
+
+  /// Biometric wrap is present and healthy — show the button + auto-fire.
+  bool _bioAvailable = false;
+
+  /// Info line under the form (invalidation / lockout), distinct from
+  /// [_error] so a fingerprint problem never masks a wrong-password error.
+  String? _bioNotice;
+
+  bool _bioPromptInFlight = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initBiometric();
+  }
+
+  /// Probes the wrap BEFORE offering the prompt so an invalidated key is a
+  /// clear message instead of a doomed fingerprint dialog.
+  Future<void> _initBiometric() async {
+    final svc = BiometricUnlockService();
+    if (!await svc.isEnabled()) return;
+    final armed = await svc.checkArmed();
+    if (!mounted) return;
+    if (armed == BiometricArmedState.armed) {
+      setState(() => _bioAvailable = true);
+      // Let the screen settle before the OS sheet slides over it.
+      await Future.delayed(const Duration(milliseconds: 350));
+      if (mounted) _unlockWithBiometric();
+    } else {
+      // Enrollment change (or OEM deleted the key). Wipe the dead wrap and
+      // say exactly what happened. The password wrap is untouched.
+      await KeyManagerService().disableBiometric();
+      setState(() => _bioNotice =
+          'Your device security settings changed. Sign in with your '
+          'password to re-enable fingerprint unlock.');
+    }
+  }
+
+  Future<void> _unlockWithBiometric() async {
+    if (_bioPromptInFlight || _isLoading) return;
+    setState(() {
+      _bioPromptInFlight = true;
+      _bioNotice = null;
+    });
+    try {
+      final ok = await KeyManagerService().unlockWithBiometric();
+      if (ok && mounted) await _routeAfterUnlock();
+    } on BiometricInvalidatedException catch (e) {
+      if (mounted) {
+        setState(() {
+          _bioAvailable = false;
+          _bioNotice = e.toString();
+        });
+      }
+    } on PublicKeyMismatchException {
+      if (mounted) {
+        setState(() => _error =
+            'Vault key integrity check failed. Do not sync. Reinstall and '
+            'restore from your recovery phrase.');
+      }
+    } on BiometricUnlockException catch (e) {
+      if (!mounted) return;
+      switch (e.code) {
+        case BiometricUnlockError.userCanceled:
+          break; // fell through to password on purpose — stay quiet
+        case BiometricUnlockError.lockout:
+        case BiometricUnlockError.lockoutPermanent:
+          setState(() =>
+              _bioNotice = 'Too many attempts — use your password.');
+        default:
+          setState(() =>
+              _bioNotice = 'Fingerprint unavailable — use your password.');
+      }
+    } finally {
+      if (mounted) setState(() => _bioPromptInFlight = false);
+    }
+  }
 
   Future<void> _loginWithPassword() async {
     setState(() {
@@ -123,6 +201,26 @@ class _LoginScreenState extends State<LoginScreen> {
                   ? const CircularProgressIndicator()
                   : const Text('Unlock Vault'),
               ),
+              if (_bioAvailable) ...[
+                const SizedBox(height: 12),
+                TextButton.icon(
+                  onPressed: _bioPromptInFlight ? null : _unlockWithBiometric,
+                  icon: ThemeIcon('fingerprint', color: cs.primary),
+                  label: const Text('Use fingerprint'),
+                ),
+              ],
+              if (_bioNotice != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _bioNotice!,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: cs.onSurface.withAlpha(160),
+                    fontSize: 12,
+                    height: 1.4,
+                  ),
+                ),
+              ],
             ],
           ),
         ),

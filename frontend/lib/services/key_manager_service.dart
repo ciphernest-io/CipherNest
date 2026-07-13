@@ -8,6 +8,8 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'biometric_unlock_service.dart';
+
 /// Key management for CipherNest's split-key architecture.
 ///
 /// ## One root secret
@@ -34,11 +36,25 @@ import 'package:shared_preferences/shared_preferences.dart';
 ///
 /// ## Lock is real
 /// [lock] zeroes the private key and `k_local`; only [unlock] (password →
-/// Argon2id → seed) brings them back. There is no silent path to the private
-/// key — the biometric-shaped bypass the old build shipped is gone. Genuine
-/// hardware-backed biometrics is a future convenience layer over this same
-/// password path (Android Keystore setUserAuthenticationRequired via a
-/// platform channel), requiring no format change and no re-encryption.
+/// Argon2id → seed) or [unlockWithBiometric] brings them back. There is no
+/// silent path to the private key — the biometric-shaped bypass the old build
+/// shipped is gone.
+///
+/// ## Biometric unlock is a second wrap, not a second root
+/// The same 64-byte seed carries a second wrap: AES-256-GCM under an
+/// AndroidKeyStore key with setUserAuthenticationRequired(true), usable only
+/// through a BiometricPrompt.CryptoObject (TEE/StrongBox-enforced, see
+/// BiometricSeedVault.kt). Both unlock paths converge on the identical
+/// derive-and-verify sequence, so the anti-tamper public-key check applies
+/// equally. The password wrap remains the sole root of trust: enrollment
+/// changes destroy the Keystore key by design (anti-tamper), and recovery is
+/// always "type your password, re-arm if you like".
+///
+/// Threat-model note: during arm/unlock the seed transits the platform
+/// channel and is briefly resident in both the Dart and JVM heaps. Neither
+/// runtime supports reliable zeroization (we overwrite our copies anyway).
+/// This is the same exposure class as the password path — one more transit
+/// of an already-transiting secret, not a new class of exposure.
 class KeyManagerService {
   static final KeyManagerService _instance = KeyManagerService._internal();
   factory KeyManagerService() => _instance;
@@ -150,6 +166,11 @@ class KeyManagerService {
       value: base64Encode(keys.publicKey.bytes),
     );
     await _encryptAndSaveSeedBlob(password, seed);
+
+    // A fresh vault must never inherit a biometric wrap: a stale wrap from a
+    // previous vault would biometric-unlock the OLD seed and detonate the
+    // public-key integrity check with a message the user can't act on.
+    await disableBiometric();
   }
 
   // ---------------------------------------------------------------------------
@@ -187,9 +208,76 @@ class KeyManagerService {
 
   /// Zeroes the private key and local secret. The public key stays resident
   /// so background encryption keeps working. Locked = encrypt-only.
+  ///
+  /// The Keystore biometric wrap deliberately survives a lock — surviving
+  /// locks is its entire purpose. Its key is auth-per-use hardware-gated, so
+  /// a locked app holds no usable decrypt capability.
   void lock() {
     _vaultKeyPair = null;
     _kLocal = null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Biometric unlock (second wrap of the same seed — see class doc)
+  // ---------------------------------------------------------------------------
+
+  /// Arms biometric unlock. The seed exists in memory only during a password
+  /// entry, so enabling ALWAYS requires the password — there is no other
+  /// legitimate moment to re-wrap it. Shows a biometric prompt (the encrypt
+  /// itself needs a fresh authentication).
+  ///
+  /// Returns false on a wrong password. Throws [BiometricUnlockException]
+  /// for prompt-level failures (canceled, lockout, …).
+  Future<bool> enableBiometric(String password) async {
+    final seed = await _decryptSeedBlob(password);
+    if (seed == null) return false;
+    try {
+      await BiometricUnlockService().wrapSeed(seed);
+      await BiometricUnlockService().setEnabled(true);
+      return true;
+    } finally {
+      seed.fillRange(0, seed.length, 0);
+    }
+  }
+
+  /// Unlocks the vault via the hardware-backed biometric wrap. Runs the
+  /// SAME derive-and-verify sequence as the password path, including the
+  /// stored-public-key anti-tamper check.
+  ///
+  /// Throws [BiometricInvalidatedException] when Android destroyed the key
+  /// (fingerprint enrolled/removed, PIN changed, lock screen removed) — the
+  /// wrap and flag are already wiped when this surfaces, and the password
+  /// path is untouched. Other prompt failures rethrow as
+  /// [BiometricUnlockException] for the UI to route to password entry.
+  Future<bool> unlockWithBiometric() async {
+    Uint8List seed;
+    try {
+      seed = await BiometricUnlockService().unwrapSeed();
+    } on BiometricUnlockException catch (e) {
+      if (e.code == BiometricUnlockError.invalidated ||
+          e.code == BiometricUnlockError.keyMissing) {
+        await disableBiometric();
+        throw const BiometricInvalidatedException();
+      }
+      rethrow;
+    }
+    try {
+      final keys = await _deriveKeys(seed);
+      await _verifyStoredPublicKey(keys.publicKey);
+      _vaultKeyPair = keys.keyPair;
+      _vaultPublicKey = keys.publicKey;
+      _kLocal = keys.kLocal;
+      return true;
+    } finally {
+      seed.fillRange(0, seed.length, 0);
+    }
+  }
+
+  /// Disarms biometric unlock: destroys the Keystore key and wrapped blob,
+  /// clears the flag. Idempotent, never throws.
+  Future<void> disableBiometric() async {
+    await BiometricUnlockService().teardown();
+    await BiometricUnlockService().setEnabled(false);
   }
 
   // ---------------------------------------------------------------------------
@@ -392,6 +480,19 @@ class _DerivedKeys {
     required this.publicKey,
     required this.kLocal,
   });
+}
+
+/// Thrown when Android permanently destroyed the biometric Keystore key —
+/// fired by enrollment changes (fingerprint added/removed), PIN changes, or
+/// lock-screen removal. This is the OS's anti-tamper working as designed.
+/// By the time this surfaces the wrap is already wiped; the password wrap is
+/// untouched and remains the source of truth. Zero data loss.
+class BiometricInvalidatedException implements Exception {
+  const BiometricInvalidatedException();
+  @override
+  String toString() =>
+      'Your device security settings changed. Sign in with your password to '
+      're-enable fingerprint unlock.';
 }
 
 /// Thrown when the vault public key in secure storage doesn't match the one

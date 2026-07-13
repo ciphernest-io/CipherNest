@@ -14,7 +14,10 @@ import '../../../services/app_lock_service.dart';
 import '../../../services/audio_player_service.dart';
 import '../../../services/auto_sync_service.dart';
 import '../../../services/auto_sync_worker.dart';
+import '../../../services/biometric_unlock_service.dart';
 import '../../../services/gallery_prefs.dart';
+import '../../../services/key_manager_service.dart';
+import '../../widgets/password_confirm_dialog.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../config/theme_packs.dart';
 import '../../config/theme_controller.dart';
@@ -47,12 +50,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // Security
   int _autoLockMinutes = AppLockService.defaultMinutes;
+  BiometricCapability _bioCapability = BiometricCapability.unavailable;
+  bool _bioEnabled = false;
+  String? _bioSubtitleOverride; // invalidation notice, shown once detected
 
   @override
   void initState() {
     super.initState();
     _loadStats();
     _loadPreferences(); // ENABLED
+    _loadBiometricState();
     // Any cache mutation (invalidate on delete, LRU sweep on sync, wipe on
     // recycle-bin permanent-delete) now bumps CacheManagerService's
     // notifier. Without this listener the "Cache size" tile only re-scans
@@ -87,6 +94,66 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _lastSyncDisplay = '${dt.month}/${dt.day} ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}';
         }
       });
+    }
+  }
+
+  Future<void> _loadBiometricState() async {
+    final svc = BiometricUnlockService();
+    final capability = await svc.capability();
+    var enabled = await svc.isEnabled();
+    String? notice;
+    if (enabled) {
+      // Detect enrollment-change invalidation here too, so the toggle never
+      // lies: wipe the dead wrap and render off with an explanation.
+      final armed = await svc.checkArmed();
+      if (armed != BiometricArmedState.armed) {
+        await KeyManagerService().disableBiometric();
+        enabled = false;
+        notice = 'Device security settings changed — re-enable to continue '
+            'using fingerprint unlock.';
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _bioCapability = capability;
+      _bioEnabled = enabled;
+      _bioSubtitleOverride = notice;
+    });
+  }
+
+  Future<void> _toggleBiometric(bool v) async {
+    if (!v) {
+      await KeyManagerService().disableBiometric();
+      if (mounted) {
+        setState(() {
+          _bioEnabled = false;
+          _bioSubtitleOverride = null;
+        });
+      }
+      return;
+    }
+    final password = await showPasswordConfirmDialog(context);
+    if (password == null || !mounted) return;
+    try {
+      final ok = await KeyManagerService().enableBiometric(password);
+      if (!mounted) return;
+      if (!ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Incorrect password')),
+        );
+        return;
+      }
+      setState(() {
+        _bioEnabled = true;
+        _bioSubtitleOverride = null;
+      });
+    } on BiometricUnlockException catch (e) {
+      if (!mounted || e.code == BiometricUnlockError.userCanceled) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content:
+                Text('Could not enable fingerprint unlock (${e.code.name})')),
+      );
     }
   }
 
@@ -603,6 +670,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
             trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: _pickAutoLock,
           ),
+          // Hidden outright when the device can never support it (no sensor /
+          // no lock screen) — an impossible toggle is worse than none.
+          if (_bioCapability != BiometricCapability.noHardware &&
+              _bioCapability != BiometricCapability.noLockScreen)
+            SwitchListTile(
+              secondary: ThemeIcon('fingerprint', color: cs.primary),
+              title: Text('Unlock with fingerprint',
+                  style: TextStyle(color: cs.onSurface)),
+              subtitle: Text(
+                _bioSubtitleOverride ??
+                    (_bioCapability == BiometricCapability.noneEnrolled
+                        ? 'No fingerprints enrolled — add one in Android Settings'
+                        : 'Hardware-backed. Your master password always works.'),
+                style: TextStyle(color: cs.onSurface.withAlpha(140)),
+              ),
+              value: _bioEnabled,
+              onChanged: _bioCapability == BiometricCapability.available
+                  ? _toggleBiometric
+                  : null,
+            ),
           ListTile(
             leading: ThemeIcon('key', color: cs.primary),
             title: Text('Key Management', style: TextStyle(color: cs.onSurface)),

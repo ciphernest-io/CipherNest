@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../services/auto_sync_worker.dart';
+import '../../../services/biometric_unlock_service.dart';
+import '../../../services/key_manager_service.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
+import '../../widgets/password_confirm_dialog.dart';
 import '../../widgets/theme_icon.dart';
 
 /// One-time convenience screen shown after successful signup or restore,
@@ -28,10 +31,55 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
   static const _kShownFlag = 'quick_settings_shown_v1';
 
   bool _autoSyncOn = false;
+  bool _bioOn = false;
+  bool _bioOfferable = false;
 
   @override
   void initState() {
     super.initState();
+    _probeBiometric();
+  }
+
+  Future<void> _probeBiometric() async {
+    final capability = await BiometricUnlockService().capability();
+    if (!mounted) return;
+    setState(() =>
+        _bioOfferable = capability == BiometricCapability.available);
+  }
+
+  /// Same invariant as Settings: the seed exists in memory only during a
+  /// password entry, so arming asks for the password — even here, minutes
+  /// after the user chose it. No signup special case.
+  Future<void> _toggleBiometric(bool v) async {
+    if (!v) {
+      await KeyManagerService().disableBiometric();
+      if (mounted) setState(() => _bioOn = false);
+      return;
+    }
+    final password = await showPasswordConfirmDialog(
+      context,
+      message: 'Enter the master password you just created to set up '
+          'fingerprint unlock.',
+    );
+    if (password == null || !mounted) return;
+    try {
+      final ok = await KeyManagerService().enableBiometric(password);
+      if (!mounted) return;
+      if (!ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Incorrect password')),
+        );
+        return;
+      }
+      setState(() => _bioOn = true);
+    } on BiometricUnlockException catch (e) {
+      if (!mounted || e.code == BiometricUnlockError.userCanceled) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content:
+                Text('Could not enable fingerprint unlock (${e.code.name})')),
+      );
+    }
   }
 
   Future<void> _toggleAutoSync(bool v) async {
@@ -81,7 +129,7 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                'Two quick settings.',
+                _bioOfferable ? 'Two quick settings.' : 'One quick setting.',
                 style: text.headlineMedium
                     ?.copyWith(fontWeight: FontWeight.w600),
               ),
@@ -102,6 +150,18 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
                 value: _autoSyncOn,
                 onChanged: _toggleAutoSync,
               ),
+              if (_bioOfferable) ...[
+                const SizedBox(height: 12),
+                _SettingRow(
+                  icon: 'fingerprint',
+                  title: 'Unlock with fingerprint',
+                  subtitle:
+                      'Hardware-backed fingerprint unlock on this device. '
+                      'Your master password always works.',
+                  value: _bioOn,
+                  onChanged: _toggleBiometric,
+                ),
+              ],
               const Spacer(),
               SizedBox(
                 width: double.infinity,
