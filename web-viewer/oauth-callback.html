@@ -17,27 +17,30 @@
   </style>
 </head>
 <body>
-  <!-- This page only renders when Android App Link verification failed and
-       the sign-in redirect landed in the browser instead of the app. The
-       button hands the OAuth response to the app via its custom scheme.
-       The code in the URL is single-use and short-lived; this page is ours
-       and sends nothing anywhere. -->
+  <!-- Chrome renders in-tab OAuth redirects itself (App Links don't
+       intercept in-browser navigation), so this page IS the expected final
+       step of sign-in, not an error state. It must stay perfectly still and
+       wait for one tap: any scripted navigation to an app intent lacks a
+       user gesture, and Chrome's block of it destabilizes the tab (the
+       flash-and-bounce bug). The button tap is the gesture that makes the
+       hand-off legal. The code in the URL is single-use and short-lived;
+       this page is ours and sends nothing anywhere. -->
   <div class="card">
     <h2>Sign-in complete</h2>
-    <p>Finishing up in the CipherNest app…</p>
+    <p>One more tap to finish connecting your account.<br>
+       (Don't use the back button — tap below.)</p>
     <a class="btn" id="open" href="#">Open CipherNest</a>
   </div>
   <script>
     // Re-present the SAME https URL as an explicit app intent: the plugin
     // keys its pending sign-in on the redirect's scheme ('https'), and an
     // explicit package-targeted intent matches the app's intent-filter even
-    // when App Link auto-verification failed.
+    // when App Link auto-verification failed. NO auto-navigation — see
+    // comment above.
     var target = 'intent://' + location.host + location.pathname +
       location.search +
       '#Intent;scheme=https;package=com.example.frontend;end';
     document.getElementById('open').setAttribute('href', target);
-    // Auto-attempt; browsers may require the button tap (user gesture).
-    location.replace(target);
   </script>
 </body>
 </html>
