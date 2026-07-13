@@ -99,7 +99,12 @@ class BiometricUnlockService {
         throw const BiometricUnlockException(
             BiometricUnlockError.failed, 'Bad seed from platform');
       }
-      return seed;
+      // The channel codec returns an UNMODIFIABLE view — zeroing it throws,
+      // which silently killed the whole unlock (a throw in the caller's
+      // `finally` replaces its return). Hand out a mutable copy; the codec's
+      // own buffer is unreachable for zeroing either way (documented heap
+      // caveat).
+      return Uint8List.fromList(seed);
     } on PlatformException catch (e) {
       throw _map(e);
     }

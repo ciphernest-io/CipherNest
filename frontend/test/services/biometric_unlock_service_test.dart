@@ -69,6 +69,18 @@ void main() {
       expect(out, seed);
     });
 
+    test('returned seed is mutable even when the channel yields an '
+        'unmodifiable view (zeroing must not throw)', () async {
+      // Production regression: the real codec returns unmodifiable typed
+      // data; KeyManagerService zeroes the seed in a finally, and the throw
+      // replaced unlock's return — every biometric unlock died silently.
+      final seed = Uint8List.fromList(List.generate(64, (i) => i));
+      handler = (_) => seed.asUnmodifiableView();
+      final out = await BiometricUnlockService().unwrapSeed();
+      expect(() => out.fillRange(0, out.length, 0), returnsNormally);
+      expect(out.every((b) => b == 0), isTrue);
+    });
+
     test('rejects a wrong-length seed', () async {
       handler = (_) => Uint8List(32);
       expect(

@@ -91,6 +91,16 @@ class _LoginScreenState extends State<LoginScreen> {
           setState(() =>
               _bioNotice = 'Fingerprint unavailable — use your password.');
       }
+    } catch (e) {
+      // Whatever goes wrong, the user must never be stranded on a silent
+      // login screen — surface it and keep the password path front and
+      // center. (This caught a real one: zeroing the codec's unmodifiable
+      // seed buffer threw an Error no typed clause matched.)
+      debugPrint('Biometric unlock failed unexpectedly: $e');
+      if (mounted) {
+        setState(() =>
+            _bioNotice = 'Fingerprint unavailable — use your password.');
+      }
     } finally {
       if (mounted) setState(() => _bioPromptInFlight = false);
     }
