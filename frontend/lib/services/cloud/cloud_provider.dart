@@ -47,7 +47,19 @@ abstract class CloudProvider {
   Future<void> deleteFile(String cloudId);
 
   // Returns generic Maps so we don't depend on provider-specific types.
+  // Each entry carries `sealed_meta` (HPKE-sealed name+type) and, during the
+  // transition window, legacy plaintext `type` / `original_name`.
   Future<List<Map<String, dynamic>>> listCloudFiles();
+
+  /// Rewrites one vault blob's cloud metadata to the sealed format and
+  /// removes the legacy plaintext (Drive: metadata-only files.update;
+  /// OneDrive: item rename). Content is never re-uploaded. Used by the
+  /// one-time metadata migration; must be idempotent.
+  Future<void> sealLegacyMetadata({
+    required String cloudId,
+    required String cloudName,
+    required String sealedMeta,
+  });
 
   // Lookup
   Future<String?> findFileByName(String name);

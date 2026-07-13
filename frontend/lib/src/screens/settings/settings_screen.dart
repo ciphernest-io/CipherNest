@@ -17,6 +17,7 @@ import '../../../services/auto_sync_worker.dart';
 import '../../../services/biometric_unlock_service.dart';
 import '../../../services/gallery_prefs.dart';
 import '../../../services/key_manager_service.dart';
+import '../../../services/metadata_migration_service.dart';
 import '../../widgets/password_confirm_dialog.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../config/theme_packs.dart';
@@ -119,6 +120,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _bioEnabled = enabled;
       _bioSubtitleOverride = notice;
     });
+  }
+
+  Future<void> _runMetadataMigration() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final count = await MetadataMigrationService().scanLegacyCount();
+    if (!mounted) return;
+    if (count == 0) {
+      messenger.showSnackBar(const SnackBar(
+          content: Text('All cloud metadata is already encrypted')));
+      return;
+    }
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Encrypt cloud metadata?'),
+        content: Text(
+          '$count file${count == 1 ? '' : 's'} in your cloud vault still '
+          'carry a readable filename in their metadata. This rewrites the '
+          'metadata only — no file content is re-uploaded. You can '
+          'interrupt and re-run anytime.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Encrypt')),
+        ],
+      ),
+    );
+    if (go != true) return;
+    final result = await MetadataMigrationService().run();
+    if (!mounted) return;
+    messenger.showSnackBar(SnackBar(
+      content: Text(result.failed == 0
+          ? 'Cloud metadata encrypted (${result.done} files)'
+          : 'Encrypted ${result.done}, ${result.failed} failed — re-run to retry'),
+    ));
   }
 
   Future<void> _toggleBiometric(bool v) async {
@@ -696,6 +736,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
             subtitle: Text('Check encryption integrity', style: TextStyle(color: cs.onSurface.withAlpha(140))),
             trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: () => Navigator.pushNamed(context, AppRoutes.keyManagement),
+          ),
+          ValueListenableBuilder<MetadataMigrationState>(
+            valueListenable: MetadataMigrationService().state,
+            builder: (context, mig, _) {
+              final subtitle = switch (mig.phase) {
+                MetadataMigrationPhase.running =>
+                  'Encrypting ${mig.done}/${mig.total}…',
+                MetadataMigrationPhase.done => mig.failed == 0
+                    ? 'All cloud metadata is encrypted'
+                    : '${mig.failed} of ${mig.total} failed — tap to retry',
+                MetadataMigrationPhase.error =>
+                  'Failed — tap to retry',
+                MetadataMigrationPhase.idle =>
+                  'Seal filenames in cloud metadata',
+              };
+              return ListTile(
+                leading: ThemeIcon('shieldCheck', color: cs.primary),
+                title: Text('Encrypt cloud metadata',
+                    style: TextStyle(color: cs.onSurface)),
+                subtitle: Text(subtitle,
+                    style: TextStyle(color: cs.onSurface.withAlpha(140))),
+                trailing: mig.phase == MetadataMigrationPhase.running
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : ThemeIcon('caretRight',
+                        size: 16, color: cs.onSurface.withAlpha(140)),
+                onTap: MetadataMigrationService().isRunning
+                    ? null
+                    : _runMetadataMigration,
+              );
+            },
           ),
           AnimatedBuilder(
             animation: AudioPlayerService(),

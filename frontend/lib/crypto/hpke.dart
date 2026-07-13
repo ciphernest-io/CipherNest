@@ -103,6 +103,45 @@ class Hpke {
   }
 
   // ---------------------------------------------------------------------------
+  // Public API — generic sealed payloads (domain-separated by info string)
+  // ---------------------------------------------------------------------------
+
+  /// Seal an arbitrary small payload to the vault public key under a caller-
+  /// supplied [info] string. Same base-mode single-shot construction as the
+  /// file-key wrap; the distinct info string is the domain separator that
+  /// keeps these ciphertexts and file-key wraps mutually un-decryptable.
+  /// Public-key-only, so this works while the vault is locked.
+  static Future<HpkeSealed> sealPayload(
+    SimplePublicKey recipientPublicKey,
+    Uint8List info,
+    Uint8List plaintext,
+  ) async {
+    final (enc, ct) = await _seal(
+      recipientPublicKey,
+      info: info,
+      aad: _empty,
+      pt: plaintext,
+    );
+    return HpkeSealed(enc: enc, ct: ct);
+  }
+
+  /// Open a payload sealed by [sealPayload] with the same [info] string.
+  static Future<Uint8List> openPayload(
+    SimpleKeyPair recipientKeyPair,
+    Uint8List info,
+    Uint8List enc,
+    Uint8List ct,
+  ) {
+    return _open(
+      recipientKeyPair,
+      enc: enc,
+      ct: ct,
+      info: info,
+      aad: _empty,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // RFC 9180 §5.1 — DeriveKeyPair (used for our vault keypair from the seed)
   // ---------------------------------------------------------------------------
 

@@ -11,6 +11,7 @@ import 'account_registry.dart';
 import 'cloud_account.dart';
 import 'cloud_provider.dart';
 import 'drive_layout.dart';
+import 'sealed_metadata.dart';
 
 /// CipherNest OneDrive integration.
 /// Uses Microsoft Graph API + OAuth2 (auth code flow) for personal accounts.
@@ -244,30 +245,39 @@ class OneDriveProvider implements CloudProvider {
 
   // ---- Filename-encoded metadata (OneDrive lacks appProperties) ----
 
-  /// Encodes type + original_name into the cloud filename so reconcile() can
-  /// recover them later. Format: `{stem}__{type}__{b64UrlOriginalName}.cnest`
-  /// where `stem` is the file UUID (and possibly `_thumb`) preserved as-is.
-  String _encodeFilename(String stem, String type, String originalName) {
-    final safeName = base64Url.encode(utf8.encode(originalName));
-    return '$stem.cnest__${type}__$safeName';
+  /// Encodes the HPKE-sealed metadata blob into the cloud filename:
+  /// `{stem}.cnest__m__{sealedB64url}`. The base64url alphabet is
+  /// filename-safe; the sealed payload's name budget keeps the whole thing
+  /// under OneDrive's path-segment ceiling. The plaintext-name legacy format
+  /// (`{stem}.cnest__{type}__{b64name}`) is decode-only during the
+  /// transition — never written again.
+  String _encodeFilename(String stem, String sealedMeta) {
+    return '$stem.cnest__m__$sealedMeta';
   }
 
-  /// Parses an encoded filename back into (id, type, originalName).
-  /// Returns null if the filename doesn't match the encoded pattern.
+  /// Parses an encoded filename back into
+  /// `(stem, sealed_meta?, type?, original_name?)`.
+  /// Returns null if the filename doesn't match any known pattern.
   Map<String, dynamic>? _decodeFilename(String name) {
-    // Pattern: {stem}.cnest__{type}__{b64name}
-    final encodedMarker = '.cnest__';
+    const encodedMarker = '.cnest__';
     final idx = name.indexOf(encodedMarker);
     if (idx < 0) {
       // Plain `.cnest` file (e.g. ciphernest_db_backup.cnest) — return defaults
       if (name.endsWith('.cnest')) {
         final stem = name.substring(0, name.length - '.cnest'.length);
-        return {'stem': stem, 'type': null, 'original_name': null};
+        return {'stem': stem};
       }
       return null;
     }
     final stem = name.substring(0, idx);
     final tail = name.substring(idx + encodedMarker.length);
+
+    // Sealed format: m__{sealedB64url}
+    if (tail.startsWith('m__')) {
+      return {'stem': stem, 'sealed_meta': tail.substring(3)};
+    }
+
+    // Legacy plaintext format: {type}__{b64name} — transition-era decode.
     final parts = tail.split('__');
     if (parts.length != 2) return null;
     final type = parts[0];
@@ -300,12 +310,23 @@ class OneDriveProvider implements CloudProvider {
         : filename;
 
     // Special files (DB backup) keep their original name unencoded and land
-    // in backup/; everything else is a vault file in vault/.
+    // in backup/; everything else is a vault file in vault/. Vault names
+    // carry ONLY the sealed metadata blob — public-key seal, so locked
+    // background sync keeps working. If sealing is impossible (no vault key
+    // on this device) the name is a bare `{stem}.cnest`; reconcile falls
+    // back to the UUID display name.
     final isBackup = filename == DatabaseBackupService.backupFileName;
     final folder = isBackup ? DriveLayout.backupFolder : DriveLayout.vaultFolder;
-    final cloudName = isBackup
-        ? filename
-        : _encodeFilename(stem, type.wireName, originalName ?? filename);
+    String cloudName;
+    if (isBackup) {
+      cloudName = filename;
+    } else {
+      final sealed = await SealedMetadata.seal(
+        name: originalName ?? filename,
+        type: type,
+      );
+      cloudName = sealed == null ? '$stem.cnest' : _encodeFilename(stem, sealed);
+    }
 
     // Graph auto-creates missing parent folders on upload; drop the README
     // once the tree exists.
@@ -486,6 +507,34 @@ class OneDriveProvider implements CloudProvider {
   }
 
   @override
+  Future<void> sealLegacyMetadata({
+    required String cloudId,
+    required String cloudName,
+    required String sealedMeta,
+  }) async {
+    // OneDrive metadata lives in the filename, so migration is a rename —
+    // the blob content is never re-uploaded. The stem (local UUID) must be
+    // preserved; only the metadata tail changes.
+    final decoded = _decodeFilename(cloudName);
+    final stem = decoded?['stem'] as String? ??
+        (cloudName.endsWith('.cnest')
+            ? cloudName.substring(0, cloudName.length - '.cnest'.length)
+            : cloudName);
+    return _withRetry(() async {
+      final headers = await _authHeaders();
+      final resp = await http.patch(
+        Uri.parse('$_graphBase/me/drive/items/$cloudId'),
+        headers: {...headers, 'Content-Type': 'application/json'},
+        body: jsonEncode({'name': _encodeFilename(stem, sealedMeta)}),
+      );
+      if (resp.statusCode != 200) {
+        throw Exception(
+            'OneDrive metadata rename failed (${resp.statusCode}): ${resp.body}');
+      }
+    });
+  }
+
+  @override
   Future<List<Map<String, dynamic>>> listCloudFiles() async {
     return _withRetry(() async {
       final headers = await _authHeaders();
@@ -519,8 +568,10 @@ class OneDriveProvider implements CloudProvider {
         results.add({
           'id': m['id'],
           'name': reconcileName,
+          'cloud_name': name, // raw cloud filename — migration renames need it
           'size': m['size'],
           'created': m['createdDateTime'],
+          'sealed_meta': decoded['sealed_meta'],
           'type': decoded['type'],
           'original_name': decoded['original_name'],
           if (isThumb) '_isThumb': true,

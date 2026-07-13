@@ -80,6 +80,17 @@ class CloudService {
   Future<List<Map<String, dynamic>>> listCloudFiles() =>
       _getProvider().listCloudFiles();
 
+  Future<void> sealLegacyMetadata({
+    required String cloudId,
+    required String cloudName,
+    required String sealedMeta,
+  }) =>
+      _getProvider().sealLegacyMetadata(
+        cloudId: cloudId,
+        cloudName: cloudName,
+        sealedMeta: sealedMeta,
+      );
+
   // --- LOOKUP ---
   Future<String?> findFileByName(String name) =>
       _getProvider().findFileByName(name);

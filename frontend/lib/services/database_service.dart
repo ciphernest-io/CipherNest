@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import '../src/models/file_model.dart';
@@ -7,6 +8,7 @@ import '../src/models/album_model.dart';
 import '../src/models/share_model.dart';
 import 'cache_manager_service.dart';
 import 'cloud/account_registry.dart';
+import 'cloud/sealed_metadata.dart';
 
 /// [DatabaseService] extends [ChangeNotifier] so screens can rebuild in-place
 /// when files are added, deleted, restored, or moved between albums. Every
@@ -525,28 +527,32 @@ class DatabaseService extends ChangeNotifier {
       }
     }
 
+    var unreadableMeta = 0;
     for (var file in mainFiles) {
       final name = file['name'] as String? ?? '';
-      final realFilename = file['original_name'] as String? ?? name.replaceAll('.cnest', '');
-      final typeStr = file['type'] as String?;
+      final stem = name.replaceAll('.cnest', '');
 
-      // Prefer the cloud-side wire string. Fall back to extension inference
-      // for: (a) older blobs that pre-date the audio/other tags, (b) blobs
-      // mis-tagged as `document` by the early build (which lumped everything
-      // non-image into documents). Extension inference auto-heals music files
-      // and misc binaries that would otherwise live in the wrong tab.
-      CnestFileType resolvedType = CnestFileTypeWire.fromWire(typeStr) ??
-          CnestFileTypeWire.fromFilename(realFilename);
-      if (resolvedType == CnestFileType.document) {
-        final inferred = CnestFileTypeWire.fromFilename(realFilename);
-        if (inferred == CnestFileType.audio || inferred == CnestFileType.image) {
-          resolvedType = inferred;
-        }
-      }
+      // Name/type resolution ladder: HPKE-sealed metadata → transition-era
+      // plaintext → UUID stem. An unopenable sealed blob (foreign vault key,
+      // corruption) degrades to the UUID and gets counted for Vault Health —
+      // it must never fail the sweep.
+      final sealedMeta = file['sealed_meta'] as String?;
+      final opened =
+          sealedMeta == null ? null : await SealedMetadata.tryOpen(sealedMeta);
+      final resolved = CloudNameResolver.resolve(
+        hadSealed: sealedMeta != null,
+        sealedOpened: opened,
+        legacyName: file['original_name'] as String?,
+        legacyType: file['type'] as String?,
+        stem: stem,
+      );
+      if (resolved.unreadable) unreadableMeta++;
+      final realFilename = resolved.name;
+      final resolvedType = resolved.type;
 
       String localId = file['id'];
       if (name.endsWith('.cnest')) {
-         localId = name.replaceAll('.cnest', '');
+        localId = stem;
       }
 
       int size = 0;
@@ -580,7 +586,7 @@ class DatabaseService extends ChangeNotifier {
     for (var file in thumbnailFiles) {
       final name = file['name'] as String? ?? '';
       final parentFileId = name.replaceAll('_thumb.cnest', '');
-      
+
       linkBatch.update(
         'files',
         {'thumbnail_cloud_id': file['id']},
@@ -590,7 +596,16 @@ class DatabaseService extends ChangeNotifier {
     }
 
     await linkBatch.commit(noResult: true);
+
+    // Vault Health signal: sealed metadata that would not open this sweep.
+    // Overwritten each sweep (not accumulated) so a healed vault clears it.
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(kMetaUnreadableCountPref, unreadableMeta);
   }
+
+  /// Prefs key: how many vault blobs had sealed metadata that failed to open
+  /// during the last reconcile. Surfaced in Settings (Vault Health).
+  static const String kMetaUnreadableCountPref = 'vault_meta_unreadable_v1';
 
   Future<Map<String, int>> getStorageStats() async {
     final db = await database;

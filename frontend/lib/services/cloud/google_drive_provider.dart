@@ -9,6 +9,7 @@ import '../../src/models/file_model.dart';
 import 'cloud_account.dart';
 import 'cloud_provider.dart';
 import 'drive_layout.dart';
+import 'sealed_metadata.dart';
 
 class GoogleDriveProvider implements CloudProvider {
   @override
@@ -122,14 +123,24 @@ class GoogleDriveProvider implements CloudProvider {
         ? tree.backupId
         : tree.vaultId;
 
+    // Filename + type travel ONLY as an HPKE-sealed blob, chunked across
+    // appProperties (m0..mN) to fit Drive's 124-byte per-property cap.
+    // Sealing is public-key-only, so locked background sync still works.
+    // The DB backup keeps its fixed name and carries no metadata.
+    Map<String, String>? props;
+    if (parentId == tree.vaultId) {
+      final sealed = await SealedMetadata.seal(
+        name: originalName ?? filename,
+        type: type,
+      );
+      if (sealed != null) props = SealedMetadata.chunkForAppProperties(sealed);
+    }
+
     final driveFile = drive.File()
       ..name = filename
       ..parents = [parentId]
       ..mimeType = 'application/octet-stream'
-      ..appProperties = {
-        'type': type.wireName,
-        'original_name': originalName ?? filename,
-      };
+      ..appProperties = props;
 
     drive.Media? media;
 
@@ -214,19 +225,47 @@ class GoogleDriveProvider implements CloudProvider {
         pageToken: pageToken,
       );
       for (final f in fileList.files ?? const <drive.File>[]) {
+        // Legacy plaintext props are read during the transition window and
+        // normalized so a migration-cleared '' reads as absent.
+        String? legacy(String key) {
+          final v = f.appProperties?[key];
+          return (v == null || v.isEmpty) ? null : v;
+        }
+
         out.add({
           'id': f.id,
           'name': f.name,
+          'cloud_name': f.name,
           'size': f.size,
           'created': f.createdTime?.toIso8601String(),
-          'type': f.appProperties?['type'],
-          'original_name': f.appProperties?['original_name'],
+          'sealed_meta': SealedMetadata.fromAppProperties(f.appProperties),
+          'type': legacy('type'),
+          'original_name': legacy('original_name'),
         });
       }
       pageToken = fileList.nextPageToken;
     } while (pageToken != null);
 
     return out;
+  }
+
+  @override
+  Future<void> sealLegacyMetadata({
+    required String cloudId,
+    required String cloudName,
+    required String sealedMeta,
+  }) async {
+    final api = await _getApi();
+    // Metadata-only files.update — the blob content is never re-uploaded.
+    // The googleapis map can't carry nulls, so the legacy plaintext keys are
+    // overwritten with '' (cleared); listCloudFiles normalizes '' to absent.
+    final patch = drive.File()
+      ..appProperties = {
+        ...SealedMetadata.chunkForAppProperties(sealedMeta),
+        'original_name': '',
+        'type': '',
+      };
+    await api.files.update(patch, cloudId);
   }
 
   @override
