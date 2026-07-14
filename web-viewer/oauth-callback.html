@@ -17,23 +17,22 @@
   </style>
 </head>
 <body>
-  <!-- Fallback ONLY for the brief window after install before Android has
-       verified the App Link. Once verified, the redirect routes straight
-       into the app and this page never renders. The button re-fires the
-       same https URL as an explicit, package-targeted app intent so it
-       reaches CallbackActivity's https filter (the plugin waits on the
-       'https' scheme). The code in the URL is single-use and short-lived;
-       this page is ours and sends nothing anywhere. -->
+  <!-- This page is the ALWAYS-rendered final step of sign-in (the app does
+       not claim this URL, on purpose - see CallbackActivity in the app
+       manifest). The button converts the https redirect into a
+       ciphernest:// app intent: Chrome dispatches custom-scheme intents on
+       a user gesture, and never dispatches http/https ones. No scripted
+       auto-navigation: without a gesture Chrome blocks it and can
+       destabilize the tab. The code in the URL is single-use and
+       short-lived; this page is ours and sends nothing anywhere. -->
   <div class="card">
     <h2>Sign-in complete</h2>
-    <p>Finishing up in the CipherNest app.<br>
-       If it doesn't reopen on its own, tap below.</p>
+    <p>Tap below to return to the app and finish connecting.</p>
     <a class="btn" id="open" href="#">Open CipherNest</a>
   </div>
   <script>
-    var target = 'intent://' + location.host + location.pathname +
-      location.search +
-      '#Intent;scheme=https;package=com.example.frontend;end';
+    var target = 'intent://oauth-callback' + location.search +
+      '#Intent;scheme=ciphernest;package=com.example.frontend;end';
     document.getElementById('open').setAttribute('href', target);
   </script>
 </body>
