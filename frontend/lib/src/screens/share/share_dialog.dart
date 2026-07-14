@@ -4,9 +4,11 @@ import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../config/routes.dart';
 import '../../models/file_model.dart';
 import '../../models/share_model.dart';
 import '../../../services/share_service.dart';
+import '../../../services/subscription_service.dart';
 
 /// Bottom-sheet dialog for creating a new share. Shows expiry dropdown,
 /// optional password field, and a "Create link" button. After creation,
@@ -40,6 +42,24 @@ class _ShareDialogState extends State<ShareDialog> {
   bool _creating = false;
   CnestShare? _result;
   String? _error;
+  String? _upsell;
+  // Bumped when a gated expiry pick is rejected — forces the form field to
+  // rebuild from `initialValue`, since its internal state already committed
+  // the selection we refused.
+  int _expiryFieldEpoch = 0;
+
+  bool get _isPlus => SubscriptionService().isPlus;
+
+  /// Free tier keeps the 7-day default (and anything shorter); longer or
+  /// non-expiring links are Plus.
+  bool _isGatedExpiry(String label) {
+    final d = ShareService.expiryOptions[label];
+    return d == null || d > const Duration(days: 7);
+  }
+
+  void _showPlusUpsell(String message) {
+    setState(() => _upsell = message);
+  }
 
   @override
   void dispose() {
@@ -119,12 +139,36 @@ class _ShareDialogState extends State<ShareDialog> {
           style: TextStyle(color: cs.onSurface.withAlpha(180), fontSize: 13)),
       const SizedBox(height: 8),
       DropdownButtonFormField<String>(
+        key: ValueKey('share-expiry-$_expiryFieldEpoch'),
         initialValue: _expiryLabel,
         items: ShareService.expiryOptions.keys
-            .map((k) => DropdownMenuItem(value: k, child: Text(k)))
+            .map((k) => DropdownMenuItem(
+                  value: k,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(k),
+                      if (!_isPlus && _isGatedExpiry(k)) ...[
+                        const SizedBox(width: 6),
+                        ThemeIcon('lock',
+                            size: 13, color: cs.onSurface.withAlpha(120)),
+                      ],
+                    ],
+                  ),
+                ))
             .toList(),
         onChanged: (v) {
-          if (v != null) setState(() => _expiryLabel = v);
+          if (v == null) return;
+          if (!_isPlus && _isGatedExpiry(v)) {
+            setState(() => _expiryFieldEpoch++);
+            _showPlusUpsell(
+                'Links longer than 7 days need CipherNest Plus.');
+            return;
+          }
+          setState(() {
+            _expiryLabel = v;
+            _upsell = null;
+          });
         },
       ),
       const SizedBox(height: 16),
@@ -132,13 +176,31 @@ class _ShareDialogState extends State<ShareDialog> {
         children: [
           Switch(
             value: _passwordEnabled,
-            onChanged: (v) => setState(() => _passwordEnabled = v),
+            onChanged: (v) {
+              if (v && !_isPlus) {
+                _showPlusUpsell(
+                    'Password-protected links need CipherNest Plus.');
+                return;
+              }
+              setState(() {
+                _passwordEnabled = v;
+                _upsell = null;
+              });
+            },
           ),
           const SizedBox(width: 8),
           Text('Require password',
               style: TextStyle(color: cs.onSurface, fontSize: 14)),
+          if (!_isPlus) ...[
+            const SizedBox(width: 6),
+            ThemeIcon('lock', size: 13, color: cs.onSurface.withAlpha(120)),
+          ],
         ],
       ),
+      if (_upsell != null) ...[
+        const SizedBox(height: 12),
+        _buildUpsellRow(cs),
+      ],
       if (_passwordEnabled) ...[
         const SizedBox(height: 8),
         TextField(
@@ -175,6 +237,34 @@ class _ShareDialogState extends State<ShareDialog> {
         label: Text(_creating ? 'Creating share…' : 'Create link'),
       ),
     ];
+  }
+
+  Widget _buildUpsellRow(ColorScheme cs) {
+    final t = ThemeController().tokens;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: cs.primary.withAlpha(24),
+        borderRadius: BorderRadius.circular(t.rInput),
+      ),
+      child: Row(
+        children: [
+          ThemeIcon('workspace_premium', size: 16, color: cs.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _upsell!,
+              style: TextStyle(color: cs.onSurface, fontSize: 12),
+            ),
+          ),
+          TextButton(
+            onPressed: () =>
+                Navigator.pushNamed(context, AppRoutes.subscription),
+            child: const Text('See Plus'),
+          ),
+        ],
+      ),
+    );
   }
 
   // ---- Result (post-create) ----

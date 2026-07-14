@@ -44,6 +44,7 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
   late final Uint8List? _fragmentKey; // plain mode
   late final Uint8List? _fragmentSalt; // password mode
   late final DateTime? _expiresAt;
+  String? _sharedFilename; // from the n= fragment param (sender's filename)
 
   final _passwordController = TextEditingController();
   bool _passwordSubmitting = false;
@@ -98,6 +99,19 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
       _expiresAt = expStr == null
           ? null
           : DateTime.fromMillisecondsSinceEpoch(int.parse(expStr));
+
+      // Original filename travels base64url-encoded in the fragment (n=…),
+      // same as the web viewer. Purely cosmetic — a malformed value must
+      // never kill the link, so decode failures just drop the name.
+      final nameB64 = fragParams['n'];
+      if (nameB64 != null) {
+        try {
+          _sharedFilename =
+              utf8.decode(base64Url.decode(_padBase64(nameB64)));
+        } catch (_) {
+          _sharedFilename = null;
+        }
+      }
 
       if (!_hasPassword && _fragmentKey == null) {
         throw const FormatException('Missing key/salt in fragment');
@@ -234,13 +248,36 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
 
   Future<File> _writeToTemp(Uint8List bytes) async {
     final dir = await getTemporaryDirectory();
-    // Per-link unique filename so we don't clash with other shares.
+    // Per-link unique tag so shares with the same filename don't clash.
     final tag = _downloadUrl.hashCode.toUnsigned(32).toRadixString(16);
+    final safeName = _sanitizeFilename(_sharedFilename);
     final ext = _extensionForKind(_sniffKind(bytes));
-    final path = '${dir.path}/share_$tag$ext';
-    final f = File(path);
+    // Keep the sender's filename when present — "Open with…" hands the path
+    // to external apps, and many key off the name/extension.
+    final basename = safeName == null
+        ? 'share_$tag$ext'
+        : 'share_$tag-$safeName${safeName.contains('.') ? '' : ext}';
+    final f = File('${dir.path}/$basename');
     await f.writeAsBytes(bytes, flush: true);
     return f;
+  }
+
+  /// Strips path separators and filesystem-hostile characters from an
+  /// attacker-controllable fragment value. Returns null if nothing safe
+  /// remains, so callers fall back to the sniffed extension.
+  String? _sanitizeFilename(String? name) {
+    if (name == null) return null;
+    var out = name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    out = out.replaceAll(RegExp(r'[\x00-\x1F]'), '');
+    out = out.replaceAll(RegExp(r'\.{2,}'), '.').trim();
+    if (out.isEmpty || out == '.') return null;
+    if (out.length > 80) {
+      // Preserve the extension when truncating.
+      final dot = out.lastIndexOf('.');
+      final ext = dot > 0 ? out.substring(dot) : '';
+      out = out.substring(0, 80 - ext.length) + ext;
+    }
+    return out;
   }
 
   String _extensionForKind(_MediaKind k) {
@@ -345,7 +382,10 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Shared with you'),
+        title: Text(
+          _sharedFilename ?? 'Shared with you',
+          overflow: TextOverflow.ellipsis,
+        ),
         leading: IconButton(
           icon: ThemeIcon('arrowLeft'),
           onPressed: () => Navigator.pop(context),
@@ -546,7 +586,7 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
             ),
             const SizedBox(height: 16),
             Text(
-              f.path.split(Platform.pathSeparator).last,
+              _sharedFilename ?? f.path.split(Platform.pathSeparator).last,
               style: TextStyle(color: cs.onSurface, fontSize: 14),
               textAlign: TextAlign.center,
             ),

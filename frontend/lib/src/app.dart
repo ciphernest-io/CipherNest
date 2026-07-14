@@ -7,6 +7,7 @@ import '../services/app_lock_service.dart';
 import '../services/audio_player_service.dart';
 import '../services/recycle_bin_service.dart';
 import '../services/share_service.dart';
+import '../services/subscription_service.dart';
 import '../services/video_streaming_server.dart';
 import 'config/constants.dart';
 import 'config/routes.dart';
@@ -30,6 +31,9 @@ class _AppState extends State<App> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _themeController.addListener(_onThemeChanged);
+    // Warm the entitlement cache so Plus gates read correctly from the
+    // first frame instead of flashing Free state.
+    unawaited(SubscriptionService().init());
     _bootstrapDeepLinks();
     // Auto-lock: defers while music plays or a video streams so playback
     // never cuts mid-session.
