@@ -11,6 +11,10 @@ import 'hlc.dart';
 enum SyncOpKind {
   createFile,
   deleteFile,
+
+  /// Un-deletes from the Recycle Bin. Discovered wiring 2d: without an
+  /// explicit restore op, an un-deleted file re-tombstones on every replay.
+  restoreFile,
   renameFile,
   moveFile,
   setFavorite,

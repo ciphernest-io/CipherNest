@@ -212,6 +212,12 @@ void main() {
                 deviceIndex: 0,
                 at: i,
                 targetId: fileIds[rnd.nextInt(fileIds.length)]);
+          } else if (roll < 0.56) {
+            action = LocalAction(
+                kind: ActionKind.restoreFile,
+                deviceIndex: 0,
+                at: i,
+                targetId: fileIds[rnd.nextInt(fileIds.length)]);
           } else if (roll < 0.62) {
             action = LocalAction(
                 kind: ActionKind.renameFile,

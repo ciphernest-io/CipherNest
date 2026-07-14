@@ -21,6 +21,7 @@ const int msPerDay = 24 * 60 * 60 * 1000;
 enum ActionKind {
   createFile,
   deleteFile,
+  restoreFile, // un-delete from the Recycle Bin
   renameFile,
   moveFile,
   setFavorite,

@@ -33,6 +33,9 @@ class StateMachine {
       case ActionKind.deleteFile:
         final f = live.remove(a.targetId);
         if (f != null) binned[a.targetId] = f;
+      case ActionKind.restoreFile:
+        final f = binned.remove(a.targetId);
+        if (f != null) live[a.targetId] = f;
       case ActionKind.renameFile:
         final f = live[a.targetId];
         if (f != null) {

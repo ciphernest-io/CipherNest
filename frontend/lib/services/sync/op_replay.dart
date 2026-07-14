@@ -163,6 +163,16 @@ VaultState replayOps(Iterable<SyncOp> ops) {
         } else if (!f.deleted) {
           files[op.targetId] = f.copyWith(deleted: true);
         }
+      case SyncOpKind.restoreFile:
+        // Un-delete from the Recycle Bin. In the total order a restore the
+        // user performed necessarily follows the delete they saw (HLC
+        // causality), so folding it later is exactly right. A concurrent
+        // delete elsewhere with a later HLC re-deletes — converged either
+        // way, and the loser is always recoverable from the bin.
+        final f = files[op.targetId];
+        if (f != null && f.deleted) {
+          files[op.targetId] = f.copyWith(deleted: false);
+        }
       case SyncOpKind.renameFile:
         final f = files[op.targetId];
         if (f != null && !f.deleted && op.name != null) {

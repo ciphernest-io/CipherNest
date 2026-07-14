@@ -34,6 +34,10 @@ class DatabaseService extends ChangeNotifier {
     return _database!;
   }
 
+  /// External-change signal for services that rewrite rows outside this
+  /// class (SyncEngine.applyMergedState) so screens rebuild in place.
+  void notifyFilesChanged() => notifyListeners();
+
   Future<String> getDatabasePath() async {
     final dbPath = await getDatabasesPath();
     return join(dbPath, 'ciphernest_v3.db');
@@ -52,9 +56,10 @@ class DatabaseService extends ChangeNotifier {
 
     final db = await openDatabase(
       path,
-      version: 8,
+      version: 9,
       onCreate: (db, version) async {
         await _createSchema(db);
+        await _createSyncSchema(db);
         await _seedSmartAlbums(db);
         await _seedSmartPlaylists(db);
       },
@@ -113,6 +118,12 @@ class DatabaseService extends ChangeNotifier {
           );
           await _seedSmartPlaylists(db);
         }
+        // v9 adds the multi-device sync op-log tables (Stage 2d). SQLite
+        // becomes a MATERIALIZED VIEW of the op-log for op-derived fields;
+        // see SyncEngine.applyMergedState.
+        if (oldVersion < 9) {
+          await _createSyncSchema(db);
+        }
       },
     );
     await db.execute('PRAGMA foreign_keys = ON');
@@ -133,6 +144,58 @@ class DatabaseService extends ChangeNotifier {
         FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
       )
     ''';
+
+  /// Runs the REAL sync-table DDL on [db] — so engine tests exercise the
+  /// production schema, not a hand-copied one that can drift.
+  @visibleForTesting
+  static Future<void> createSyncSchemaForTest(Database db) =>
+      _createSyncSchema(db);
+
+  /// Multi-device sync op-log storage (Stage 2d).
+  ///
+  ///  * `sync_ops` — the local cache of the append-only log, plus this
+  ///    device's not-yet-uploaded ops (`pending = 1`). Crash-safe pending
+  ///    queue: a process death never loses a recorded user action.
+  ///  * `sync_seen_segments` — cloud segment names already merged.
+  ///  * `sync_state` — per-account HLC/seq/segment counters.
+  static Future<void> _createSyncSchema(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS sync_ops(
+        op_key TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        hlc_wall INTEGER NOT NULL,
+        hlc_counter INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        name TEXT,
+        folder_id TEXT,
+        favorite INTEGER,
+        pending INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_sync_ops_account ON sync_ops(account_id)');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_sync_ops_pending ON sync_ops(account_id, pending)');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS sync_seen_segments(
+        account_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        PRIMARY KEY (account_id, name)
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS sync_state(
+        account_id TEXT PRIMARY KEY,
+        hlc_wall INTEGER NOT NULL DEFAULT 0,
+        hlc_counter INTEGER NOT NULL DEFAULT 0,
+        next_seq INTEGER NOT NULL DEFAULT 0,
+        next_segment INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+  }
 
   static Future<void> _createSchema(Database db) async {
     await db.execute('''

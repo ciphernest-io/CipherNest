@@ -26,6 +26,7 @@ SyncOp opFromAction(
   final kind = switch (a.kind) {
     ActionKind.createFile => SyncOpKind.createFile,
     ActionKind.deleteFile => SyncOpKind.deleteFile,
+    ActionKind.restoreFile => SyncOpKind.restoreFile,
     ActionKind.renameFile => SyncOpKind.renameFile,
     ActionKind.moveFile => SyncOpKind.moveFile,
     ActionKind.setFavorite => SyncOpKind.setFavorite,

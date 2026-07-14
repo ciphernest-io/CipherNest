@@ -144,13 +144,21 @@ Scenario generateScenario(
             ? folderIds[rnd.nextInt(folderIds.length)]
             : null,
       )));
-    } else if (roll < 0.66 && fileIds.isNotEmpty) {
+    } else if (roll < 0.63 && fileIds.isNotEmpty) {
       events.add(ActionEvent(LocalAction(
         kind: ActionKind.setFavorite,
         deviceIndex: actionDevice(),
         at: now,
         targetId: fileIds[rnd.nextInt(fileIds.length)],
         favorite: rnd.nextBool(),
+      )));
+    } else if (roll < 0.66 && fileIds.isNotEmpty) {
+      // Restore-from-bin: exercises delete/restore conflict resolution.
+      events.add(ActionEvent(LocalAction(
+        kind: ActionKind.restoreFile,
+        deviceIndex: actionDevice(),
+        at: now,
+        targetId: fileIds[rnd.nextInt(fileIds.length)],
       )));
     } else if (roll < 0.72) {
       final id = 'folder${nextFolder++}';

@@ -53,6 +53,7 @@ List<InvariantViolation> checkInvariants({
 
   final durableCreates = <String>{};
   final durableDeletes = <String>{};
+  final everRestored = <String>{};
   var anyFolderDelete = false;
   final anyDelete = <String>{};
   for (final r in history) {
@@ -62,12 +63,21 @@ List<InvariantViolation> checkInvariants({
       case ActionKind.deleteFile:
         anyDelete.add(r.action.targetId);
         if (r.durable && r.effective) durableDeletes.add(r.action.targetId);
+      case ActionKind.restoreFile:
+        // Once a file has BOTH deletes and restores, which one wins is
+        // legitimately decided by HLC order, which under clock skew may
+        // differ from the runner's wall-clock ordering. Asserting either
+        // outcome would be unsound — such files are excused from strict
+        // invariant 2 and remain covered by convergence (1) and
+        // presence (3).
+        everRestored.add(r.action.targetId);
       case ActionKind.deleteFolder:
         anyFolderDelete = true;
       default:
         break;
     }
   }
+  durableDeletes.removeAll(everRestored);
 
   for (var d = 0; d < deviceStates.length; d++) {
     final s = deviceStates[d];
