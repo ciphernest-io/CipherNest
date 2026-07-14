@@ -61,6 +61,11 @@ abstract class CloudProvider {
     required String sealedMeta,
   });
 
+  /// Lists the backup/ folder (DB snapshots): entries carry `id`, `name`,
+  /// `size`, `modified` (ISO-8601 string or null). A missing backup folder
+  /// is an empty list, never an error.
+  Future<List<Map<String, dynamic>>> listBackups();
+
   // Lookup
   Future<String?> findFileByName(String name);
 

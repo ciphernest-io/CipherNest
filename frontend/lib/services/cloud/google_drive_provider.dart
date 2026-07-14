@@ -117,9 +117,9 @@ class GoogleDriveProvider implements CloudProvider {
   }) async {
     final api = await _getApi();
     final tree = await _ensureTree();
-    // The DB backup goes to backup/; everything else (vault files + thumbs)
-    // to vault/. Discriminated by the backup's fixed filename.
-    final parentId = filename == DatabaseBackupService.backupFileName
+    // DB snapshots (per-device `db_backup_<id>.cnest` or the legacy fixed
+    // name) go to backup/; everything else (vault files + thumbs) to vault/.
+    final parentId = DatabaseBackupService.isBackupFile(filename)
         ? tree.backupId
         : tree.vaultId;
 
@@ -246,6 +246,32 @@ class GoogleDriveProvider implements CloudProvider {
       pageToken = fileList.nextPageToken;
     } while (pageToken != null);
 
+    return out;
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> listBackups() async {
+    final api = await _getApi();
+    final tree = await _ensureTree();
+    final out = <Map<String, dynamic>>[];
+    String? pageToken;
+    do {
+      final fileList = await api.files.list(
+        q: "trashed = false and '${tree.backupId}' in parents",
+        $fields: 'nextPageToken, files(id, name, size, modifiedTime)',
+        pageSize: 100,
+        pageToken: pageToken,
+      );
+      for (final f in fileList.files ?? const <drive.File>[]) {
+        out.add({
+          'id': f.id,
+          'name': f.name,
+          'size': f.size,
+          'modified': f.modifiedTime?.toIso8601String(),
+        });
+      }
+      pageToken = fileList.nextPageToken;
+    } while (pageToken != null);
     return out;
   }
 

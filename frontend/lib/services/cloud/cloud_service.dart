@@ -91,6 +91,9 @@ class CloudService {
         sealedMeta: sealedMeta,
       );
 
+  Future<List<Map<String, dynamic>>> listBackups() =>
+      _getProvider().listBackups();
+
   // --- LOOKUP ---
   Future<String?> findFileByName(String name) =>
       _getProvider().findFileByName(name);

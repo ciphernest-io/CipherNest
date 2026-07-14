@@ -332,13 +332,13 @@ class OneDriveProvider implements CloudProvider {
         ? filename.substring(0, filename.length - '.cnest'.length)
         : filename;
 
-    // Special files (DB backup) keep their original name unencoded and land
-    // in backup/; everything else is a vault file in vault/. Vault names
-    // carry ONLY the sealed metadata blob — public-key seal, so locked
-    // background sync keeps working. If sealing is impossible (no vault key
-    // on this device) the name is a bare `{stem}.cnest`; reconcile falls
-    // back to the UUID display name.
-    final isBackup = filename == DatabaseBackupService.backupFileName;
+    // Special files (DB snapshots, both generations) keep their name
+    // unencoded and land in backup/; everything else is a vault file in
+    // vault/. Vault names carry ONLY the sealed metadata blob — public-key
+    // seal, so locked background sync keeps working. If sealing is
+    // impossible (no vault key on this device) the name is a bare
+    // `{stem}.cnest`; reconcile falls back to the UUID display name.
+    final isBackup = DatabaseBackupService.isBackupFile(filename);
     final folder = isBackup ? DriveLayout.backupFolder : DriveLayout.vaultFolder;
     String cloudName;
     if (isBackup) {
@@ -526,6 +526,39 @@ class OneDriveProvider implements CloudProvider {
       if (resp.statusCode != 204 && resp.statusCode != 404) {
         throw Exception('OneDrive delete failed (${resp.statusCode}): ${resp.body}');
       }
+    });
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> listBackups() async {
+    return _withRetry(() async {
+      final headers = await _authHeaders();
+      final results = <Map<String, dynamic>>[];
+      String url =
+          '$_graphBase/me/drive/root:/${DriveLayout.rootFolder}/${DriveLayout.backupFolder}:/children?\$top=100&\$select=id,name,size,lastModifiedDateTime';
+      while (true) {
+        final resp = await http.get(Uri.parse(url), headers: headers);
+        // No backup folder yet = no snapshots, not an error.
+        if (resp.statusCode == 404) return results;
+        if (resp.statusCode != 200) {
+          throw Exception(
+              'OneDrive backup list failed (${resp.statusCode}): ${resp.body}');
+        }
+        final json = jsonDecode(resp.body) as Map<String, dynamic>;
+        for (final item in (json['value'] as List?) ?? const []) {
+          final m = item as Map<String, dynamic>;
+          results.add({
+            'id': m['id'],
+            'name': m['name'],
+            'size': m['size'],
+            'modified': m['lastModifiedDateTime'],
+          });
+        }
+        final next = json['@odata.nextLink'] as String?;
+        if (next == null) break;
+        url = next;
+      }
+      return results;
     });
   }
 

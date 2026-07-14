@@ -151,11 +151,14 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
 
       DatabaseService().setCurrentAccount(newAccount.id);
 
-      // Restore DB backup, if any (skip in add-another mode).
+      // Restore DB backup, if any (skip in add-another mode). Snapshots are
+      // per-device since Stage 1 of multi-device sync: list them all, let
+      // the user pick when more than one exists, and surface the
+      // multi-device notice when another device's snapshot is present.
       if (_mode != CloudSelectionMode.addAnother) {
         setState(() => _statusMsg = 'Checking for backup...');
-        final hasBackup = await DatabaseBackupService().hasCloudBackup();
-        if (hasBackup) {
+        final snapshots = await DatabaseBackupService().listSnapshots();
+        if (snapshots.isNotEmpty) {
           final localImages =
               await DatabaseService().getFilesByType(CnestFileType.image);
           final localDocs =
@@ -168,10 +171,23 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
           }
 
           if (shouldRestore) {
-            final restored = await DatabaseBackupService().restoreDatabase();
-            if (restored) {
-              DatabaseService().setCurrentAccount(newAccount.id);
+            BackupSnapshot? pick = snapshots.first;
+            if (snapshots.length > 1 && mounted) {
+              pick = await _pickSnapshot(snapshots);
             }
+            if (pick != null) {
+              final restored = await DatabaseBackupService()
+                  .restoreDatabase(cloudId: pick.cloudId);
+              if (restored) {
+                DatabaseService().setCurrentAccount(newAccount.id);
+              }
+            }
+          }
+
+          final hasForeign =
+              snapshots.any((s) => !s.isLegacy && !s.isThisDevice);
+          if (hasForeign && mounted) {
+            await _showMultiDeviceNoticeOnce();
           }
         }
       }
@@ -344,6 +360,85 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Restore'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Snapshot picker for vaults with more than one per-device backup.
+  /// Newest is listed first; returning null skips the restore.
+  Future<BackupSnapshot?> _pickSnapshot(List<BackupSnapshot> snapshots) {
+    String label(BackupSnapshot s) {
+      if (s.isLegacy) return 'Older backup (previous app version)';
+      return s.isThisDevice ? 'This device' : 'Another device';
+    }
+
+    String subtitle(BackupSnapshot s) {
+      final when = s.modified;
+      final date = when == null
+          ? 'unknown date'
+          : '${when.toLocal().year}-${when.toLocal().month.toString().padLeft(2, '0')}-${when.toLocal().day.toString().padLeft(2, '0')} '
+              '${when.toLocal().hour.toString().padLeft(2, '0')}:${when.toLocal().minute.toString().padLeft(2, '0')}';
+      final kb = (s.sizeBytes / 1024).round();
+      return '$date · $kb KB';
+    }
+
+    return showDialog<BackupSnapshot>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Choose a backup to restore'),
+        children: [
+          for (final s in snapshots)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, s),
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: ThemeIcon(
+                  s.isThisDevice ? 'smartphone' : 'cloudArrowDown',
+                  color: Theme.of(ctx).colorScheme.primary,
+                ),
+                title: Text(label(s)),
+                subtitle: Text(subtitle(s)),
+              ),
+            ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text('Skip restore'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// One-time notice when another device's snapshot is detected on the
+  /// vault. Stage 1 of multi-device sync: nothing is destroyed anymore,
+  /// but each device still keeps its own view until the op-log ships.
+  Future<void> _showMultiDeviceNoticeOnce() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool('multi_device_notice_shown_v1') ?? false) return;
+    await prefs.setBool('multi_device_notice_shown_v1', true);
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Vault used on multiple devices'),
+        content: const Text(
+          'This vault is connected on another device too. Your files are '
+          'shared through the cloud, but for now each device keeps its own '
+          'index backup, so folder organization and deletions do not sync '
+          'between devices yet.\n\n'
+          'Full multi-device sync is coming in an upcoming update. Nothing '
+          'is ever overwritten or lost in the meantime.',
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Got it'),
           ),
         ],
       ),
