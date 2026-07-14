@@ -567,6 +567,11 @@ class OneDriveProvider implements CloudProvider {
 
       while (true) {
         final resp = await http.get(Uri.parse(url), headers: headers);
+        // A fresh OneDrive account has no /CipherNest/vault tree yet (Graph
+        // only auto-creates it on first upload), so itemNotFound here means
+        // "empty vault", not an error. Without this, the post-sign-in
+        // canary and every sync 404s until the first file is uploaded.
+        if (resp.statusCode == 404) return results;
         if (resp.statusCode != 200) {
           throw Exception('OneDrive list failed (${resp.statusCode}): ${resp.body}');
         }
