@@ -24,7 +24,8 @@ class HarnessResult {
   bool get passed => violations.isEmpty;
 }
 
-HarnessResult runScenario(Scenario scenario, EngineFactory factory) {
+Future<HarnessResult> runScenario(
+    Scenario scenario, EngineFactory factory) async {
   final cloud = SimCloud();
   var globalNow = 0;
   cloud.now = 0;
@@ -46,10 +47,10 @@ HarnessResult runScenario(Scenario scenario, EngineFactory factory) {
   final pending = List<List<OracleRecord>>.generate(
       scenario.deviceCount, (_) => []);
 
-  void trySync(DeviceSim d, {int? crashBudget}) {
+  Future<void> trySync(DeviceSim d, {int? crashBudget}) async {
     cloud.setCrashBudget(d.deviceId, crashBudget);
     try {
-      d.engine.syncCycle(cloud);
+      await d.engine.syncCycle(cloud);
       // Fault-free completion: everything applied so far on this install
       // is now durable.
       for (final r in pending[d.index]) {
@@ -85,7 +86,7 @@ HarnessResult runScenario(Scenario scenario, EngineFactory factory) {
         pending[action.deviceIndex].add(record);
         devices[action.deviceIndex].engine.applyLocal(action);
       case SyncEvent(:final deviceIndex, :final crashBudget):
-        trySync(devices[deviceIndex], crashBudget: crashBudget);
+        await trySync(devices[deviceIndex], crashBudget: crashBudget);
       case PartitionEvent(:final deviceIndex, :final offline):
         cloud.setOffline(devices[deviceIndex].deviceId, offline);
       case TimeJumpEvent(:final days):
@@ -100,7 +101,7 @@ HarnessResult runScenario(Scenario scenario, EngineFactory factory) {
       case CompactEvent(:final deviceIndex):
         final d = devices[deviceIndex];
         try {
-          d.engine.maybeCompact(cloud);
+          await d.engine.maybeCompact(cloud);
         } on SimCrash {
           // tolerated
         } on SimOffline {
@@ -121,7 +122,7 @@ HarnessResult runScenario(Scenario scenario, EngineFactory factory) {
   var quiesced = false;
   for (var round = 0; round < maxRounds; round++) {
     for (final d in devices) {
-      trySync(d);
+      await trySync(d);
     }
     final states = devices.map((d) => d.engine.materialize()).toList();
     if (previous != null &&

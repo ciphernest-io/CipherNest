@@ -66,6 +66,18 @@ abstract class CloudProvider {
   /// is an empty list, never an error.
   Future<List<Map<String, dynamic>>> listBackups();
 
+  /// Uploads an immutable object into backup/log/ (op-log segments and
+  /// compaction snapshots). Returns the cloud id.
+  Future<String?> uploadLogObject({
+    required String name,
+    required Uint8List bytes,
+  });
+
+  /// Lists backup/log/: entries carry `id`, `name`, `size`, `uploaded`
+  /// (ISO-8601 provider timestamp — used ONLY as the compaction safety
+  /// floor, never for conflict resolution). Missing folder = empty list.
+  Future<List<Map<String, dynamic>>> listLogObjects();
+
   // Lookup
   Future<String?> findFileByName(String name);
 

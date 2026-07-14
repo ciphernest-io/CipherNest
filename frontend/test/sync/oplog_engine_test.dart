@@ -18,11 +18,12 @@ import 'scenario.dart';
 import 'sim_model.dart';
 
 void main() {
-  test('op-log engine: 500 seeds, all invariants, full fault battery', () {
+  test('op-log engine: 500 seeds, all invariants, full fault battery',
+      () async {
     var totalActions = 0;
     var durableActions = 0;
     for (var seed = 0; seed < 500; seed++) {
-      final result = runScenario(
+      final result = await runScenario(
         generateScenario(seed),
         (deviceId, clock) => OpLogSimEngine(deviceId, clock),
       );

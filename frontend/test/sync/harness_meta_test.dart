@@ -28,7 +28,7 @@ import 'sim_model.dart';
 
 void main() {
   group('GATE A — sensitivity: the harness catches the old LWW model', () {
-    test('destruction is detected across seeds, in both flavors', () {
+    test('destruction is detected across seeds, in both flavors', () async {
       const seeds = 200;
       var caught = 0;
       var vanishSeeds = 0;
@@ -37,7 +37,7 @@ void main() {
 
       for (var seed = 0; seed < seeds; seed++) {
         final scenario = generateScenario(seed);
-        final result = runScenario(
+        final result = await runScenario(
           scenario,
           (deviceId, clock) => LwwStrawman(deviceId, clock),
         );
@@ -80,10 +80,10 @@ void main() {
   });
 
   group('GATE B — specificity: perfect-sync reference is never flagged', () {
-    test('zero violations across 300 seeds', () {
+    test('zero violations across 300 seeds', () async {
       for (var seed = 0; seed < 300; seed++) {
         final shared = GodShared();
-        final result = runScenario(
+        final result = await runScenario(
           generateScenario(seed),
           (deviceId, clock) => GodReference(deviceId, clock, shared),
         );
@@ -96,9 +96,9 @@ void main() {
 
   group('GATE C — specificity: single-writer reference, writer-only load',
       () {
-    test('zero violations across 300 seeds', () {
+    test('zero violations across 300 seeds', () async {
       for (var seed = 0; seed < 300; seed++) {
-        final result = runScenario(
+        final result = await runScenario(
           generateScenario(seed, writerOnlyActions: true),
           (deviceId, clock) => SingleWriterReference(
             deviceId,
@@ -129,14 +129,14 @@ void main() {
     });
 
     test('runs are deterministic per seed (same violations, same stats)',
-        () {
+        () async {
       for (final seed in [3, 11, 99]) {
-        HarnessResult run() => runScenario(
+        Future<HarnessResult> run() => runScenario(
               generateScenario(seed),
               (deviceId, clock) => LwwStrawman(deviceId, clock),
             );
-        final a = run();
-        final b = run();
+        final a = await run();
+        final b = await run();
         expect(a.passed, b.passed);
         expect(a.violations.map((v) => v.toString()).toList(),
             b.violations.map((v) => v.toString()).toList());

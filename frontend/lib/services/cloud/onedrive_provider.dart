@@ -529,6 +529,66 @@ class OneDriveProvider implements CloudProvider {
     });
   }
 
+  static String get _logFolderPath =>
+      '${DriveLayout.rootFolder}/${DriveLayout.backupFolder}/${DriveLayout.logFolder}';
+
+  @override
+  Future<String?> uploadLogObject({
+    required String name,
+    required Uint8List bytes,
+  }) async {
+    return _withRetry(() async {
+      final headers = await _authHeaders();
+      final encodedName = Uri.encodeComponent(name);
+      // Graph auto-creates missing parent folders on path-based upload.
+      final resp = await http.put(
+        Uri.parse(
+            '$_graphBase/me/drive/root:/$_logFolderPath/$encodedName:/content'),
+        headers: {...headers, 'Content-Type': 'application/octet-stream'},
+        body: bytes,
+      );
+      if (resp.statusCode != 200 && resp.statusCode != 201) {
+        throw Exception(
+            'OneDrive log upload failed (${resp.statusCode}): ${resp.body}');
+      }
+      final j = jsonDecode(resp.body) as Map<String, dynamic>;
+      return j['id'] as String?;
+    });
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> listLogObjects() async {
+    return _withRetry(() async {
+      final headers = await _authHeaders();
+      final results = <Map<String, dynamic>>[];
+      String url =
+          '$_graphBase/me/drive/root:/$_logFolderPath:/children?\$top=200&\$select=id,name,size,createdDateTime';
+      while (true) {
+        final resp = await http.get(Uri.parse(url), headers: headers);
+        // No log folder yet = no segments, not an error.
+        if (resp.statusCode == 404) return results;
+        if (resp.statusCode != 200) {
+          throw Exception(
+              'OneDrive log list failed (${resp.statusCode}): ${resp.body}');
+        }
+        final json = jsonDecode(resp.body) as Map<String, dynamic>;
+        for (final item in (json['value'] as List?) ?? const []) {
+          final m = item as Map<String, dynamic>;
+          results.add({
+            'id': m['id'],
+            'name': m['name'],
+            'size': m['size'],
+            'uploaded': m['createdDateTime'],
+          });
+        }
+        final next = json['@odata.nextLink'] as String?;
+        if (next == null) break;
+        url = next;
+      }
+      return results;
+    });
+  }
+
   @override
   Future<List<Map<String, dynamic>>> listBackups() async {
     return _withRetry(() async {

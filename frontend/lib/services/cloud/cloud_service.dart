@@ -94,6 +94,15 @@ class CloudService {
   Future<List<Map<String, dynamic>>> listBackups() =>
       _getProvider().listBackups();
 
+  Future<String?> uploadLogObject({
+    required String name,
+    required Uint8List bytes,
+  }) =>
+      _getProvider().uploadLogObject(name: name, bytes: bytes);
+
+  Future<List<Map<String, dynamic>>> listLogObjects() =>
+      _getProvider().listLogObjects();
+
   // --- LOOKUP ---
   Future<String?> findFileByName(String name) =>
       _getProvider().findFileByName(name);

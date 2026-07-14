@@ -26,12 +26,13 @@ abstract class SimSyncEngine {
   void applyLocal(LocalAction action);
 
   /// Push pending local changes and pull others'. Throws SimCrash/SimOffline
-  /// when the harness injects faults; the harness swallows those.
-  void syncCycle(SimCloud cloud);
+  /// when the harness injects faults; the harness swallows those. Async so
+  /// engines can run the REAL sealing crypto.
+  Future<void> syncCycle(SimCloud cloud);
 
   /// Opportunity to compact (harness invokes to simulate concurrent
   /// compaction). Same fault rules as syncCycle. Default: nothing.
-  void maybeCompact(SimCloud cloud) {}
+  Future<void> maybeCompact(SimCloud cloud) async {}
 
   /// Encrypt-locked mode: while locked, the engine may append create-type
   /// ops but must not need decrypt capability. References ignore this;

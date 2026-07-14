@@ -95,8 +95,16 @@ class OpLogSimEngine implements SimSyncEngine {
 
   String get _currentSegmentName => '$segmentPrefix${deviceId}_$_segSeq';
 
+  /// Payload codec hooks — the plain adapter stores op lists directly; the
+  /// sealed adapter (Stage 2c) overrides with the REAL HPKE segment codec.
+  Future<Object> encodeSegment(List<SyncOp> ops) async =>
+      List<SyncOp>.unmodifiable(ops);
+
+  Future<List<SyncOp>?> decodeSegment(Object payload) async =>
+      payload is List ? payload.whereType<SyncOp>().toList() : null;
+
   @override
-  void syncCycle(SimCloud cloud) {
+  Future<void> syncCycle(SimCloud cloud) async {
     // ---- PUSH (works while locked: appending needs no decrypt) ----------
     // Crash-safety: the segment name is fixed BEFORE the put; on retry we
     // first check whether the put already landed. Every prefix of this
@@ -108,9 +116,13 @@ class OpLogSimEngine implements SimSyncEngine {
         _pending.clear();
       }
       final name = _currentSegmentName;
+      // Seal BEFORE the existence check: with a crash budget the put must
+      // be the very next cloud call after the check, or the window between
+      // them stops being the one we think we are testing.
+      final sealed = await encodeSegment(_inFlight);
       final existing = cloud.get(deviceId, name);
       if (existing == null) {
-        cloud.put(deviceId, name, List<SyncOp>.unmodifiable(_inFlight));
+        cloud.put(deviceId, name, sealed);
       }
       _seenSegments.add(name);
       _segSeq++;
@@ -123,18 +135,21 @@ class OpLogSimEngine implements SimSyncEngine {
     for (final seg in segments) {
       if (_seenSegments.contains(seg.name)) continue;
       final payload = cloud.get(deviceId, seg.name);
-      if (payload is List) {
-        for (final op in payload.whereType<SyncOp>()) {
+      final ops = payload == null ? null : await decodeSegment(payload);
+      if (ops != null) {
+        for (final op in ops) {
           _log.putIfAbsent(op.opKey, () => op);
           _lastHlc = Hlc.receive(_lastHlc, op.hlc, clock());
         }
+        // Only a successfully decoded segment counts as seen — an
+        // unreadable one must be retried/surfaced, never absorbed.
+        _seenSegments.add(seg.name);
       }
-      _seenSegments.add(seg.name);
     }
   }
 
   @override
-  void maybeCompact(SimCloud cloud) {
+  Future<void> maybeCompact(SimCloud cloud) async {
     // Stage 2e. Until then the log only grows — invariant-safe by default.
   }
 

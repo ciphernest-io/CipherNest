@@ -38,10 +38,10 @@ class GodReference implements SimSyncEngine {
   void applyLocal(LocalAction action) => shared.state.apply(action);
 
   @override
-  void syncCycle(SimCloud cloud) {} // replication is already perfect
+  Future<void> syncCycle(SimCloud cloud) async {} // replication is already perfect
 
   @override
-  void maybeCompact(SimCloud cloud) {}
+  Future<void> maybeCompact(SimCloud cloud) async {}
 
   @override
   set locked(bool value) {}
@@ -80,7 +80,7 @@ class SingleWriterReference implements SimSyncEngine {
   }
 
   @override
-  void syncCycle(SimCloud cloud) {
+  Future<void> syncCycle(SimCloud cloud) async {
     if (isWriter) {
       if (!_writerRestored) {
         final snap = cloud.get(deviceId, snapshotName);
@@ -111,7 +111,7 @@ class SingleWriterReference implements SimSyncEngine {
   }
 
   @override
-  void maybeCompact(SimCloud cloud) {}
+  Future<void> maybeCompact(SimCloud cloud) async {}
 
   @override
   set locked(bool value) {}
@@ -145,7 +145,7 @@ class LwwStrawman implements SimSyncEngine {
   void applyLocal(LocalAction action) => _local.apply(action);
 
   @override
-  void syncCycle(SimCloud cloud) {
+  Future<void> syncCycle(SimCloud cloud) async {
     if (!_restoredOnce) {
       // Connect-time restore: "replaces your current local index".
       final snap = cloud.get(deviceId, snapshotName);
@@ -158,7 +158,7 @@ class LwwStrawman implements SimSyncEngine {
   }
 
   @override
-  void maybeCompact(SimCloud cloud) {}
+  Future<void> maybeCompact(SimCloud cloud) async {}
 
   @override
   set locked(bool value) {}

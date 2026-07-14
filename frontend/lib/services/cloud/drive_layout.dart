@@ -20,6 +20,10 @@ class DriveLayout {
   static const String rootFolder = 'CipherNest';
   static const String vaultFolder = 'vault';
   static const String backupFolder = 'backup';
+
+  /// backup/log/ — append-only multi-device op-log segments + compaction
+  /// snapshots. Objects here are immutable once written.
+  static const String logFolder = 'log';
   static const String sharesFolder = 'shares';
   static const String readmeName = 'README.txt';
 

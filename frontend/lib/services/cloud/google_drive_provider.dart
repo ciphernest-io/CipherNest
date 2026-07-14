@@ -275,6 +275,64 @@ class GoogleDriveProvider implements CloudProvider {
     return out;
   }
 
+  String? _cachedLogFolderId;
+
+  Future<String> _ensureLogFolder() async {
+    final cached = _cachedLogFolderId;
+    if (cached != null) return cached;
+    final api = await _getApi();
+    final tree = await _ensureTree();
+    final id =
+        await _ensureFolder(api, DriveLayout.logFolder, tree.backupId);
+    _cachedLogFolderId = id;
+    return id;
+  }
+
+  @override
+  Future<String?> uploadLogObject({
+    required String name,
+    required Uint8List bytes,
+  }) async {
+    final api = await _getApi();
+    final logId = await _ensureLogFolder();
+    final driveFile = drive.File()
+      ..name = name
+      ..parents = [logId]
+      ..mimeType = 'application/octet-stream';
+    final media = drive.Media(
+      Future.value(bytes).asStream().asBroadcastStream(),
+      bytes.length,
+    );
+    final result = await api.files.create(driveFile, uploadMedia: media);
+    return result.id;
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> listLogObjects() async {
+    final api = await _getApi();
+    final logId = await _ensureLogFolder();
+    final out = <Map<String, dynamic>>[];
+    String? pageToken;
+    do {
+      final fileList = await api.files.list(
+        q: "trashed = false and '$logId' in parents",
+        $fields: 'nextPageToken, files(id, name, size, createdTime)',
+        pageSize: 1000,
+        pageToken: pageToken,
+      );
+      for (final f in fileList.files ?? const <drive.File>[]) {
+        out.add({
+          'id': f.id,
+          'name': f.name,
+          'size': f.size,
+          'uploaded': f.createdTime?.toIso8601String(),
+        });
+      }
+      pageToken = fileList.nextPageToken;
+    } while (pageToken != null);
+    return out;
+  }
+
   @override
   Future<void> sealLegacyMetadata({
     required String cloudId,
