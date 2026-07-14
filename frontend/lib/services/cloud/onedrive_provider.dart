@@ -84,18 +84,19 @@ class OneDriveProvider implements CloudProvider {
       //    anti-phishing interstitial, and Chrome blocks the scheme
       //    hand-off without a trusted gesture — infinite spinner. The
       //    https App Link redirect skips the interstitial entirely.
-      // Hybrid handoff: the OAuth redirect_uri is the https App Link (kills
-      // the interstitial), but the plugin waits on the CUSTOM scheme. The
-      // worker's /oauth-callback page receives the https redirect in-tab and
-      // re-fires it as a ciphernest:// intent — Chrome launches custom-scheme
-      // intents reliably but refuses https-scheme ones. CallbackActivity's
-      // ciphernest:// filter delivers it and the plugin matches
-      // callbacks['ciphernest'].
+      // The OAuth redirect_uri is the verified https App Link (no
+      // interstitial). On a device where the link is verified, Android
+      // routes the redirect straight into CallbackActivity with scheme
+      // 'https', so the plugin MUST wait on 'https' to match. The
+      // worker's /oauth-callback page is the fallback only for the brief
+      // post-install window before verification completes.
       redirectResult = await FlutterWebAuth2.authenticate(
         url: authUrl.toString(),
-        callbackUrlScheme: 'ciphernest',
+        callbackUrlScheme: 'https',
         options: const FlutterWebAuth2Options(
           preferEphemeral: false,
+          httpsHost: _redirectHost,
+          httpsPath: _redirectPath,
           customTabsPackageOrder: [
             'com.android.chrome',
             'com.sec.android.app.sbrowser',

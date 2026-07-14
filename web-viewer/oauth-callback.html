@@ -17,18 +17,13 @@
   </style>
 </head>
 <body>
-  <!-- Chrome renders the in-tab OAuth redirect itself (App Links don't
-       intercept in-browser navigation), so this page IS the expected final
-       step of sign-in, not an error state. It hands the auth code to the
-       app via a CUSTOM-scheme intent (ciphernest://): Chrome refuses to
-       launch app intents whose embedded scheme is http/https (redirect-loop
-       guard), so scheme=https silently does nothing. A custom scheme
-       launches reliably, and the app's plugin waits on exactly this scheme.
-       The code in the URL is single-use and short-lived; this page is ours
-       and sends nothing anywhere.
-       We try once automatically on load, and the button is the manual
-       retry (a tap is a fresh user gesture if the auto-attempt was too
-       early). -->
+  <!-- Fallback ONLY for the brief window after install before Android has
+       verified the App Link. Once verified, the redirect routes straight
+       into the app and this page never renders. The button re-fires the
+       same https URL as an explicit, package-targeted app intent so it
+       reaches CallbackActivity's https filter (the plugin waits on the
+       'https' scheme). The code in the URL is single-use and short-lived;
+       this page is ours and sends nothing anywhere. -->
   <div class="card">
     <h2>Sign-in complete</h2>
     <p>Finishing up in the CipherNest app.<br>
@@ -36,14 +31,10 @@
     <a class="btn" id="open" href="#">Open CipherNest</a>
   </div>
   <script>
-    // Preserve the OAuth query (code/state) but re-key the scheme to the
-    // custom one the app's flutter_web_auth callback is registered under.
-    var target = 'intent://oauth-callback' + location.search +
-      '#Intent;scheme=ciphernest;package=com.example.frontend;end';
+    var target = 'intent://' + location.host + location.pathname +
+      location.search +
+      '#Intent;scheme=https;package=com.example.frontend;end';
     document.getElementById('open').setAttribute('href', target);
-    // Custom-scheme intents are allowed to auto-launch in Chrome; unlike the
-    // https variant this does not destabilize the tab.
-    window.location.href = target;
   </script>
 </body>
 </html>
