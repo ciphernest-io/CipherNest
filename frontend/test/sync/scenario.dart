@@ -74,6 +74,12 @@ class Scenario {
 Scenario generateScenario(
   int seed, {
   bool writerOnlyActions = false,
+  // Terminal purge (permanent delete) is a product op validated by the
+  // op-log engine test. The god / single-writer REFERENCE engines don't
+  // model reinstall-vs-purge terminality, so their specificity gates omit
+  // it (excluding it never weakens what those gates check: false positives
+  // on a correct engine over the rest of the op set).
+  bool includePurge = true,
 }) {
   final rnd = Random(seed);
 
@@ -152,10 +158,18 @@ Scenario generateScenario(
         targetId: fileIds[rnd.nextInt(fileIds.length)],
         favorite: rnd.nextBool(),
       )));
-    } else if (roll < 0.66 && fileIds.isNotEmpty) {
+    } else if (roll < 0.645 && fileIds.isNotEmpty) {
       // Restore-from-bin: exercises delete/restore conflict resolution.
       events.add(ActionEvent(LocalAction(
         kind: ActionKind.restoreFile,
+        deviceIndex: actionDevice(),
+        at: now,
+        targetId: fileIds[rnd.nextInt(fileIds.length)],
+      )));
+    } else if (roll < 0.66 && includePurge && fileIds.isNotEmpty) {
+      // Permanent purge (30-day bin sweep) — terminal, must converge.
+      events.add(ActionEvent(LocalAction(
+        kind: ActionKind.purgeFile,
         deviceIndex: actionDevice(),
         at: now,
         targetId: fileIds[rnd.nextInt(fileIds.length)],

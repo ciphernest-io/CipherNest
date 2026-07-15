@@ -18,6 +18,7 @@ import '../../../services/biometric_unlock_service.dart';
 import '../../../services/gallery_prefs.dart';
 import '../../../services/key_manager_service.dart';
 import '../../../services/metadata_migration_service.dart';
+import '../../../services/sync/vault_health_service.dart';
 import '../../widgets/password_confirm_dialog.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../config/theme_packs.dart';
@@ -120,6 +121,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _bioEnabled = enabled;
       _bioSubtitleOverride = notice;
     });
+  }
+
+  bool _vaultHealthScanning = false;
+  VaultHealthReport? _vaultHealth;
+
+  String _vaultHealthSubtitle(ColorScheme cs) {
+    final r = _vaultHealth;
+    if (r == null) return 'Check for orphaned or missing files';
+    if (r.isHealthy) return 'Everything looks good';
+    final parts = <String>[
+      if (r.orphanBlobIds.isNotEmpty) '${r.orphanBlobIds.length} orphaned',
+      if (r.missingBlobFileIds.isNotEmpty)
+        '${r.missingBlobFileIds.length} missing',
+      if (r.unreadableSegments > 0) '${r.unreadableSegments} unreadable',
+    ];
+    return parts.join(' · ');
+  }
+
+  Future<void> _runVaultHealthScan() async {
+    final account = AccountRegistry().activeAccount;
+    if (account == null) return;
+    setState(() => _vaultHealthScanning = true);
+    VaultHealthReport? report;
+    try {
+      report = await VaultHealthService().scan(accountId: account.id);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Vault Health scan failed: $e')));
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _vaultHealthScanning = false;
+      _vaultHealth = report;
+    });
+    if (report == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => _VaultHealthSheet(report: report!),
+    );
   }
 
   Future<void> _runMetadataMigration() async {
@@ -737,6 +780,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
             trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: () => Navigator.pushNamed(context, AppRoutes.keyManagement),
           ),
+          ListTile(
+            leading: ThemeIcon('heart', color: cs.primary),
+            title: Text('Vault Health', style: TextStyle(color: cs.onSurface)),
+            subtitle: Text(_vaultHealthSubtitle(cs),
+                style: TextStyle(color: cs.onSurface.withAlpha(140))),
+            trailing: _vaultHealthScanning
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : ThemeIcon('caretRight',
+                    size: 16, color: cs.onSurface.withAlpha(140)),
+            onTap: _vaultHealthScanning ? null : _runVaultHealthScan,
+          ),
           ValueListenableBuilder<MetadataMigrationState>(
             valueListenable: MetadataMigrationService().state,
             builder: (context, mig, _) {
@@ -1045,4 +1102,97 @@ class _ThemePackTile extends StatelessWidget {
       ),
     );
   }
+}
+/// Bottom sheet detailing a Vault Health scan. Orphans and missing files are
+/// SURFACED, never auto-deleted — the user decides. (Recover/forget actions
+/// are wired in a follow-up; this ships the honest report first.)
+class _VaultHealthSheet extends StatelessWidget {
+  final VaultHealthReport report;
+  const _VaultHealthSheet({required this.report});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                ThemeIcon(report.isHealthy ? 'shieldCheck' : 'warning',
+                    color: report.isHealthy ? cs.primary : cs.error, size: 22),
+                const SizedBox(width: 10),
+                Text('Vault Health',
+                    style: Theme.of(context).textTheme.titleLarge),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (report.isHealthy)
+              Text('Every file in your cloud is accounted for, and every '
+                  'file the app knows about has its data. Nothing to do.',
+                  style: TextStyle(color: cs.onSurface.withAlpha(180))),
+            if (report.orphanBlobIds.isNotEmpty) ...[
+              _row(cs, 'file', '${report.orphanBlobIds.length} orphaned file'
+                  '${report.orphanBlobIds.length == 1 ? '' : 's'}',
+                  'Encrypted data in your cloud that the app no longer '
+                  'references. Nothing is deleted automatically — a future '
+                  'update will let you recover or remove these.'),
+            ],
+            if (report.missingBlobFileIds.isNotEmpty) ...[
+              _row(cs, 'warningCircle',
+                  '${report.missingBlobFileIds.length} missing file'
+                  '${report.missingBlobFileIds.length == 1 ? '' : 's'}',
+                  'Files the app expects but whose encrypted data is gone '
+                  'from your cloud — likely deleted in the cloud\'s own web '
+                  'interface. Their entries remain so you know what was lost.'),
+            ],
+            if (report.unreadableSegments > 0) ...[
+              _row(cs, 'lockKey', '${report.unreadableSegments} unreadable '
+                  'sync record${report.unreadableSegments == 1 ? '' : 's'}',
+                  'Multi-device sync data that could not be decrypted. These '
+                  'are retried on every sync and never discarded.'),
+            ],
+            const SizedBox(height: 20),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Close'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _row(ColorScheme cs, String icon, String title, String body) => Padding(
+        padding: const EdgeInsets.only(bottom: 14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ThemeIcon(icon, color: cs.error, size: 18),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: TextStyle(
+                          color: cs.onSurface, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  Text(body,
+                      style: TextStyle(
+                          color: cs.onSurface.withAlpha(160),
+                          fontSize: 12,
+                          height: 1.35)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
 }

@@ -53,6 +53,7 @@ List<InvariantViolation> checkInvariants({
 
   final durableCreates = <String>{};
   final durableDeletes = <String>{};
+  final durablePurges = <String>{}; // terminal: may be absent, never live
   final everRestored = <String>{};
   var anyFolderDelete = false;
   final anyDelete = <String>{};
@@ -64,6 +65,8 @@ List<InvariantViolation> checkInvariants({
       case ActionKind.deleteFile:
         anyDelete.add(r.action.targetId);
         if (r.durable && r.effective) durableDeletes.add(r.action.targetId);
+      case ActionKind.purgeFile:
+        if (r.durable) durablePurges.add(r.action.targetId);
       case ActionKind.restoreFile:
         // Once a file has BOTH deletes and restores, which one wins is
         // legitimately decided by HLC order, which under clock skew may
@@ -95,6 +98,15 @@ List<InvariantViolation> checkInvariants({
         ));
       }
     }
+    // A durably PURGED file is terminal — never live, never binned, gone.
+    for (final id in durablePurges) {
+      if (s.live.containsKey(id) || s.binned.containsKey(id)) {
+        violations.add(InvariantViolation(
+          2,
+          'file $id was durably purged but reappeared on device[$d]',
+        ));
+      }
+    }
     // Nothing enters the bin without a cause.
     for (final id in s.binned.keys) {
       if (!anyDelete.contains(id) && !anyFolderDelete) {
@@ -109,10 +121,13 @@ List<InvariantViolation> checkInvariants({
     // ---- Invariant 3: no vanish ----------------------------------------
     // With eternal tombstones (no GC), every durably-created file must be
     // PRESENT (live or binned) on every device — deletion bins it, it is
-    // never forgotten. A concurrent folder-vs-create ordering may leave it
-    // live on one device and binned on another, but "present" holds either
-    // way, and invariant 1 guarantees the two devices still agree.
+    // never forgotten. EXCEPT a durably-PURGED file, which is meant to be
+    // gone (the 30-day bin sweep). A concurrent folder-vs-create ordering
+    // may leave a file live on one device and binned on another, but
+    // "present" holds either way, and invariant 1 guarantees the two
+    // devices still agree.
     for (final id in durableCreates) {
+      if (durablePurges.contains(id)) continue; // terminal, meant to be gone
       if (!s.live.containsKey(id) && !s.binned.containsKey(id)) {
         violations.add(InvariantViolation(
           3,

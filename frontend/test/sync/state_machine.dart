@@ -36,6 +36,10 @@ class StateMachine {
       case ActionKind.restoreFile:
         final f = binned.remove(a.targetId);
         if (f != null) live[a.targetId] = f;
+      case ActionKind.purgeFile:
+        // Terminal: gone from everywhere, unrecoverable.
+        live.remove(a.targetId);
+        binned.remove(a.targetId);
       case ActionKind.renameFile:
         final f = live[a.targetId];
         if (f != null) {

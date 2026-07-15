@@ -15,6 +15,12 @@ enum SyncOpKind {
   /// Un-deletes from the Recycle Bin. Discovered wiring 2d: without an
   /// explicit restore op, an un-deleted file re-tombstones on every replay.
   restoreFile,
+
+  /// PERMANENT deletion — the 30-day Recycle Bin sweep. Terminal and
+  /// order-independent (purge always wins): the blob is physically gone, so
+  /// no later restore can bring it back. Makes the bin sweep converge across
+  /// devices instead of one device silently keeping a row another purged.
+  purgeFile,
   renameFile,
   moveFile,
   setFavorite,

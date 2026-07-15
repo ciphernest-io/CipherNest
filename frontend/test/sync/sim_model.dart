@@ -22,6 +22,7 @@ enum ActionKind {
   createFile,
   deleteFile,
   restoreFile, // un-delete from the Recycle Bin
+  purgeFile, // permanent deletion (30-day bin sweep) — terminal
   renameFile,
   moveFile,
   setFavorite,

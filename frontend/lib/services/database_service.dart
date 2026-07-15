@@ -400,9 +400,15 @@ class DatabaseService extends ChangeNotifier {
   /// Hard delete — used by the Recycle Bin "Delete forever" path and by the
   /// 30-day sweeper. Callers are responsible for the cloud blob and any
   /// cached artifacts; this only removes the SQLite row.
+  ///
+  /// Records a terminal `purgeFile` sync op so the permanent deletion
+  /// CONVERGES: without it, a device that swept the row and a device that
+  /// still holds the tombstone would disagree forever. Purge wins over any
+  /// later restore in replay — the blob is physically gone.
   Future<void> permanentlyDeleteFile(String id) async {
     final db = await database;
     await db.delete('files', where: 'id = ?', whereArgs: [id]);
+    await SyncCoordinator().record(SyncOpKind.purgeFile, id);
     notifyListeners();
   }
 

@@ -20,6 +20,7 @@
 library;
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../src/models/file_model.dart';
@@ -27,6 +28,7 @@ import '../database_service.dart';
 import '../device_identity_service.dart';
 import 'compaction.dart';
 import 'hlc.dart';
+import 'vault_health_service.dart';
 import 'op_replay.dart';
 import 'segment_codec.dart';
 import 'sync_op.dart';
@@ -281,6 +283,10 @@ class SyncEngine {
           lastPullWall: _wallClock());
     });
 
+    // Persist the unreadable count for Vault Health (surfaced in Settings).
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(kUnreadableSegmentsPref, unreadable);
+
     if (merged > 0 || unreadable > 0) {
       await applyMergedState();
     }
@@ -428,6 +434,21 @@ class SyncEngine {
         where: 'account_id = ?',
         whereArgs: [accountId]);
     final existing = {for (final r in fileRows) r['id'] as String: r};
+
+    // Purged files are removed from replay's state, so drop their rows too —
+    // this is how a device that only just learned of a peer's permanent
+    // deletion converges (the row disappears everywhere).
+    final purgedIds = <String>{
+      for (final op in allOps)
+        if (op.kind == SyncOpKind.purgeFile) op.targetId,
+    };
+    final batchPurge = db.batch();
+    for (final id in purgedIds) {
+      if (existing.containsKey(id)) {
+        batchPurge.delete('files', where: 'id = ?', whereArgs: [id]);
+      }
+    }
+    await batchPurge.commit(noResult: true);
 
     final batch = db.batch();
     final nowMs = _wallClock();

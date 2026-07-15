@@ -84,7 +84,7 @@ void main() {
       for (var seed = 0; seed < 300; seed++) {
         final shared = GodShared();
         final result = await runScenario(
-          generateScenario(seed),
+          generateScenario(seed, includePurge: false),
           (deviceId, clock) => GodReference(deviceId, clock, shared),
         );
         if (!result.passed) {
@@ -99,7 +99,7 @@ void main() {
     test('zero violations across 300 seeds', () async {
       for (var seed = 0; seed < 300; seed++) {
         final result = await runScenario(
-          generateScenario(seed, writerOnlyActions: true),
+          generateScenario(seed, writerOnlyActions: true, includePurge: false),
           (deviceId, clock) => SingleWriterReference(
             deviceId,
             clock,

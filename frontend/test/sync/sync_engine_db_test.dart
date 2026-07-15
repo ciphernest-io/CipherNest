@@ -10,6 +10,7 @@ library;
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:ciphernest/services/database_service.dart';
@@ -122,6 +123,7 @@ void main() {
   });
 
   setUp(() async {
+    SharedPreferences.setMockInitialValues({});
     // Deterministic key shared with the sealed-engine test — the
     // KeyManagerService singleton is process-wide, so identical keys make
     // concurrent test files harmless to each other.
@@ -374,6 +376,36 @@ void main() {
     await b.pullAndMerge();
     expect(await fileRow(dbB, 'zfile0'), isNotNull);
     expect(await fileRow(dbB, 'zfile1'), isNotNull);
+  });
+
+  test('purge converges: a swept file disappears on the peer, terminally',
+      () async {
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFile, targetId: 'f1', name: 'x.jpg'));
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.deleteFile, targetId: 'f1'));
+    await a.syncCycle();
+    await b.syncCycle();
+    expect((await fileRow(dbB, 'f1'))!['is_deleted'], 1);
+
+    // A's 30-day sweep permanently deletes f1 (purge op).
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.purgeFile, targetId: 'f1'));
+    await a.syncCycle();
+    await b.syncCycle();
+    // Gone on BOTH — B's lingering tombstone row is removed by the purge.
+    expect(await fileRow(dbA, 'f1'), isNull);
+    expect(await fileRow(dbB, 'f1'), isNull);
+
+    // A late restore from a device that hadn't seen the purge cannot win.
+    await b.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.restoreFile, targetId: 'f1'));
+    await b.syncCycle();
+    await a.syncCycle();
+    await b.syncCycle();
+    expect(await fileRow(dbA, 'f1'), isNull,
+        reason: 'purge is terminal — restore cannot resurrect');
+    expect(await fileRow(dbB, 'f1'), isNull);
   });
 
   test('unreadable segment: counted, retried, never marked seen', () async {

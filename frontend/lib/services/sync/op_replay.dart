@@ -100,6 +100,11 @@ VaultState replayOps(Iterable<SyncOp> ops) {
   final files = <String, FileState>{};
   final folders = <String, FolderState>{};
   final devices = <String, String>{};
+  // Permanently purged file ids. Purge is TERMINAL and order-independent:
+  // once a file is purged (its blob physically deleted by the bin sweep) no
+  // op — not even a later-ordering restore — can bring it back. Collected
+  // across the whole fold, then applied at the end.
+  final purged = <String>{};
 
   String? liveFolderOrRoot(String? id) =>
       id != null && folders.containsKey(id) && !folders[id]!.deleted
@@ -173,6 +178,8 @@ VaultState replayOps(Iterable<SyncOp> ops) {
         if (f != null && f.deleted) {
           files[op.targetId] = f.copyWith(deleted: false);
         }
+      case SyncOpKind.purgeFile:
+        purged.add(op.targetId);
       case SyncOpKind.renameFile:
         final f = files[op.targetId];
         if (f != null && !f.deleted && op.name != null) {
@@ -222,6 +229,13 @@ VaultState replayOps(Iterable<SyncOp> ops) {
       case SyncOpKind.registerDevice:
         devices[op.targetId] = op.name ?? op.targetId;
     }
+  }
+
+  // Terminal purge: forget purged files entirely — no row, no tombstone.
+  // Every device that has the purge op reaches the same result, so the
+  // 30-day bin sweep converges (no old-swept vs fresh-rebuilt divergence).
+  for (final id in purged) {
+    files.remove(id);
   }
 
   return VaultState(files: files, folders: folders, devices: devices);

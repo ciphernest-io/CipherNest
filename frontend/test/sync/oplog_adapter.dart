@@ -28,6 +28,7 @@ SyncOp opFromAction(
     ActionKind.createFile => SyncOpKind.createFile,
     ActionKind.deleteFile => SyncOpKind.deleteFile,
     ActionKind.restoreFile => SyncOpKind.restoreFile,
+    ActionKind.purgeFile => SyncOpKind.purgeFile,
     ActionKind.renameFile => SyncOpKind.renameFile,
     ActionKind.moveFile => SyncOpKind.moveFile,
     ActionKind.setFavorite => SyncOpKind.setFavorite,
