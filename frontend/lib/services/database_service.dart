@@ -194,7 +194,8 @@ class DatabaseService extends ChangeNotifier {
         hlc_wall INTEGER NOT NULL DEFAULT 0,
         hlc_counter INTEGER NOT NULL DEFAULT 0,
         next_seq INTEGER NOT NULL DEFAULT 0,
-        next_segment INTEGER NOT NULL DEFAULT 0
+        next_segment INTEGER NOT NULL DEFAULT 0,
+        last_pull_wall INTEGER NOT NULL DEFAULT 0
       )
     ''');
   }

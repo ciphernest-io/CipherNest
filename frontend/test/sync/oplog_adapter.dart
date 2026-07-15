@@ -8,6 +8,7 @@
 /// (SQLite-backed in 2d).
 library;
 
+import 'package:ciphernest/services/sync/compaction.dart';
 import 'package:ciphernest/services/sync/hlc.dart';
 import 'package:ciphernest/services/sync/op_replay.dart';
 import 'package:ciphernest/services/sync/sync_op.dart';
@@ -47,6 +48,7 @@ SyncOp opFromAction(
 
 class OpLogSimEngine implements SimSyncEngine {
   static const String segmentPrefix = 'oplog/ops_';
+  static const String snapshotPrefix = 'oplog/state_';
 
   @override
   final String deviceId;
@@ -132,27 +134,87 @@ class OpLogSimEngine implements SimSyncEngine {
 
     // ---- PULL + MERGE (requires decrypt capability -> not while locked) -
     if (_locked) return;
-    final segments = cloud.list(deviceId, prefix: segmentPrefix);
-    for (final seg in segments) {
-      if (_seenSegments.contains(seg.name)) continue;
-      final payload = cloud.get(deviceId, seg.name);
-      final ops = payload == null ? null : await decodeSegment(payload);
-      if (ops != null) {
-        for (final op in ops) {
-          _log.putIfAbsent(op.opKey, () => op);
-          _lastHlc = Hlc.receive(_lastHlc, op.hlc, clock());
+    // Snapshots first, then segments — either provides ops; merging both is
+    // idempotent (dedupe by op key).
+    for (final prefix in [snapshotPrefix, segmentPrefix]) {
+      final objects = cloud.list(deviceId, prefix: prefix);
+      for (final obj in objects) {
+        if (_seenSegments.contains(obj.name)) continue;
+        final payload = cloud.get(deviceId, obj.name);
+        final ops = payload == null ? null : await decodeSegment(payload);
+        if (ops != null) {
+          for (final op in ops) {
+            _log.putIfAbsent(op.opKey, () => op);
+            _lastHlc = Hlc.receive(_lastHlc, op.hlc, clock());
+          }
+          _seenSegments.add(obj.name);
         }
-        // Only a successfully decoded segment counts as seen — an
-        // unreadable one must be retried/surfaced, never absorbed.
-        _seenSegments.add(seg.name);
       }
     }
   }
 
+  int _snapSeq = 0;
+
   @override
   Future<void> maybeCompact(SimCloud cloud) async {
-    // Stage 2e. Until then the log only grows — invariant-safe by default.
+    if (_locked) return;
+    // Fold objects older than the fold floor (by PROVIDER upload time).
+    final foldable = <CloudObject>[];
+    for (final prefix in [snapshotPrefix, segmentPrefix]) {
+      for (final obj in cloud.list(deviceId, prefix: prefix)) {
+        if (cloud.now - obj.uploadedAt >= Compaction.foldableAgeMs) {
+          foldable.add(obj);
+        }
+      }
+    }
+    if (foldable.length < Compaction.minFoldable) return;
+
+    // Open all; any unreadable aborts (never delete what we can't read).
+    final foldedNames = <String>[];
+    final byKey = <String, SyncOp>{};
+    for (final obj in foldable) {
+      final ops = await decodeSegment(cloud.get(deviceId, obj.name)!);
+      if (ops == null) return;
+      foldedNames.add(obj.name);
+      for (final op in ops) {
+        byKey.putIfAbsent(op.opKey, () => op);
+      }
+    }
+
+    final snapOps = Compaction.snapshotOps(byKey.values.toList());
+    final snapName = '$snapshotPrefix${deviceId}_$_snapSeq';
+    _snapSeq++;
+
+    final sealed = await encodeSnapshot(snapOps);
+    if (cloud.get(deviceId, snapName) == null) {
+      cloud.put(deviceId, snapName, sealed);
+    }
+    // Read-back verify before deleting anything.
+    final verify =
+        await decodeSegment(cloud.get(deviceId, snapName)!);
+    if (verify == null || verify.length != snapOps.length) return;
+
+    for (final name in foldedNames) {
+      cloud.delete(deviceId, name);
+    }
+    _seenSegments.add(snapName);
+    // CRITICAL: merge the folded ops into our OWN log. Compaction reads
+    // segments from the cloud that this device may NOT have merged yet;
+    // without this, folding + deleting them + marking the snapshot seen
+    // would lose those ops from this device's view forever (harness seed 9).
+    // No GC: folding is verbatim, so replay(snapshot) == replay(segments).
+    for (final op in snapOps) {
+      _log.putIfAbsent(op.opKey, () => op);
+    }
   }
+
+  /// Debug hook only.
+  List<SyncOp> get logForSpy => _log.values.toList();
+
+  /// Snapshot payload codec — plain adapter stores op lists; sealed adapter
+  /// overrides with the real snapshot codec.
+  Future<Object> encodeSnapshot(List<SyncOp> ops) async =>
+      List<SyncOp>.unmodifiable(ops);
 
   @override
   MaterializedState materialize() {

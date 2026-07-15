@@ -20,4 +20,8 @@ class CloudSyncTransport implements SyncTransport {
   }) async {
     await CloudService().uploadLogObject(name: name, bytes: bytes);
   }
+
+  @override
+  Future<void> deleteObject(String cloudId) =>
+      CloudService().deleteFile(cloudId);
 }

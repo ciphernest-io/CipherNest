@@ -25,6 +25,7 @@ import 'package:sqflite/sqflite.dart';
 import '../../src/models/file_model.dart';
 import '../database_service.dart';
 import '../device_identity_service.dart';
+import 'compaction.dart';
 import 'hlc.dart';
 import 'op_replay.dart';
 import 'segment_codec.dart';
@@ -39,6 +40,10 @@ abstract class SyncTransport {
     required String name,
     required Uint8List bytes,
   });
+
+  /// Deletes a folded log object (compaction only — nothing else in the
+  /// engine ever deletes cloud state).
+  Future<void> deleteObject(String cloudId);
 }
 
 /// A semantic user action, as [recordLocalOp] accepts it. Deliberately NOT
@@ -65,11 +70,6 @@ class SyncEngine {
   final String accountId;
   final Future<Database> Function() _db;
   final Future<String> Function() _deviceId;
-
-  /// Milliseconds a tombstone stays materialized for devices that never had
-  /// the row — matches the Recycle Bin TTL, so ancient ghosts don't appear
-  /// in a fresh device's bin.
-  static const int ghostTombstoneTtlMs = 30 * 24 * 60 * 60 * 1000;
 
   SyncEngine({
     required this.transport,
@@ -121,6 +121,7 @@ class SyncEngine {
         hlcCounter: hlc.counter,
         nextSeq: state.nextSeq + 1,
         nextSegment: state.nextSegment,
+        lastPullWall: state.lastPullWall,
       );
       return op;
     }).then((op) async {
@@ -140,6 +141,10 @@ class SyncEngine {
   /// segments, then re-materializes the files table. [pullAndMerge] (and
   /// therefore decrypting segments) requires the unlocked vault; pushing
   /// does not — call [pushPending] alone from locked/background contexts.
+  ///
+  /// No staleness gate is needed: tombstones are eternal (compaction never
+  /// GCs), so a straggler create can never out-live its tombstone and
+  /// resurrect. A device offline for years simply pulls and converges.
   Future<void> syncCycle() async {
     await pushPending();
     await pullAndMerge();
@@ -200,7 +205,8 @@ class SyncEngine {
             hlcWall: s.hlcWall,
             hlcCounter: s.hlcCounter,
             nextSeq: s.nextSeq,
-            nextSegment: s.nextSegment + 1);
+            nextSegment: s.nextSegment + 1,
+            lastPullWall: s.lastPullWall);
       });
     }
   }
@@ -223,9 +229,16 @@ class SyncEngine {
     for (final obj in objects) {
       final name = obj['name'] as String? ?? '';
       if (seen.contains(name)) continue;
-      if (SegmentCodec.parseName(name) == null) continue; // snapshots: 2e
+      final isSegment = SegmentCodec.parseName(name) != null;
+      final isSnapshot = SegmentCodec.parseSnapshotName(name) != null;
+      if (!isSegment && !isSnapshot) continue;
       final bytes = await transport.downloadObject(obj['id'] as String);
-      final ops = await SegmentCodec.tryOpen(bytes);
+      // Merge-everything is sound: ops dedupe by key, and GC only ever
+      // removes whole-file op-sets, so overlapping snapshots/segments can
+      // only re-add consistent pairs.
+      final ops = isSnapshot
+          ? (await SegmentCodec.tryOpenSnapshot(bytes))?.ops
+          : await SegmentCodec.tryOpen(bytes);
       if (ops == null) {
         unreadable++;
         continue; // NOT marked seen — retried, never silently absorbed
@@ -251,15 +264,139 @@ class SyncEngine {
             hlcWall: local.wallMs,
             hlcCounter: local.counter,
             nextSeq: s.nextSeq,
-            nextSegment: s.nextSegment);
+            nextSegment: s.nextSegment,
+            lastPullWall: s.lastPullWall);
       });
       merged += ops.length;
     }
+
+    // Pull completed: stamp the staleness watermark.
+    await db.transaction((txn) async {
+      final s = await _loadState(txn);
+      await _saveState(txn,
+          hlcWall: s.hlcWall,
+          hlcCounter: s.hlcCounter,
+          nextSeq: s.nextSeq,
+          nextSegment: s.nextSegment,
+          lastPullWall: _wallClock());
+    });
 
     if (merged > 0 || unreadable > 0) {
       await applyMergedState();
     }
     return unreadable;
+  }
+
+  // ---------------------------------------------------------------------
+  // COMPACTION (Stage 2e)
+  // ---------------------------------------------------------------------
+
+  /// Folds old log objects into one snapshot. Deterministic and safe by
+  /// construction:
+  ///  * only objects whose PROVIDER upload time is older than the fold
+  ///    floor are touched (its only use — never conflict resolution);
+  ///  * the snapshot carries the folded ops VERBATIM except whole-file GC
+  ///    of long-dead tombstones (see compaction.dart for why);
+  ///  * the snapshot is uploaded, DOWNLOADED BACK and verified readable
+  ///    before a single folded object is deleted;
+  ///  * concurrent compactors write differently-named snapshots whose
+  ///    merge is idempotent — nothing is ever overwritten.
+  Future<void> compactIfDue() async {
+    final db = await _db();
+    final deviceId = await _deviceId();
+    final objects = await transport.listLogObjects();
+    final nowMs = _wallClock();
+
+    final foldable = <Map<String, dynamic>>[];
+    for (final obj in objects) {
+      final name = obj['name'] as String? ?? '';
+      if (SegmentCodec.parseName(name) == null &&
+          SegmentCodec.parseSnapshotName(name) == null) {
+        continue;
+      }
+      final uploadedStr = obj['uploaded'] as String?;
+      final uploaded =
+          uploadedStr == null ? null : DateTime.tryParse(uploadedStr);
+      if (uploaded == null) continue; // unknown age: never fold
+      if (nowMs - uploaded.millisecondsSinceEpoch <
+          Compaction.foldableAgeMs) {
+        continue;
+      }
+      foldable.add(obj);
+    }
+    if (foldable.length < Compaction.minFoldable) return;
+
+    // Open every foldable object; ANY unreadable one aborts the whole
+    // compaction — we never delete what we could not read.
+    final foldedNames = <String>[];
+    final opsByKey = <String, SyncOp>{};
+    for (final obj in foldable) {
+      final name = obj['name'] as String;
+      final bytes = await transport.downloadObject(obj['id'] as String);
+      final ops = SegmentCodec.parseSnapshotName(name) != null
+          ? (await SegmentCodec.tryOpenSnapshot(bytes))?.ops
+          : await SegmentCodec.tryOpen(bytes);
+      if (ops == null) {
+        debugPrint('SyncEngine.compact: $name unreadable — aborting');
+        return;
+      }
+      foldedNames.add(name);
+      for (final op in ops) {
+        opsByKey.putIfAbsent(op.opKey, () => op);
+      }
+    }
+
+    final snapshotOps = Compaction.snapshotOps(opsByKey.values.toList());
+
+    final state = await _loadState(db);
+    final snapName = SegmentCodec.snapshotName(deviceId, state.nextSegment);
+    final sealed = await SegmentCodec.sealSnapshot(
+        foldedNames: foldedNames, ops: snapshotOps);
+    if (sealed == null) return;
+    await transport.uploadLogObject(name: snapName, bytes: sealed);
+
+    // Read-back verification before any deletion.
+    final listed = await transport.listLogObjects();
+    final uploadedObj = listed.where((o) => o['name'] == snapName).toList();
+    if (uploadedObj.isEmpty) return;
+    final verify = await SegmentCodec.tryOpenSnapshot(
+        await transport.downloadObject(uploadedObj.first['id'] as String));
+    if (verify == null ||
+        verify.ops.length != snapshotOps.length ||
+        verify.folded.length != foldedNames.length) {
+      debugPrint('SyncEngine.compact: read-back verification failed — '
+          'folded objects NOT deleted');
+      return;
+    }
+
+    for (final obj in foldable) {
+      await transport.deleteObject(obj['id'] as String);
+    }
+
+    // Local bookkeeping: the snapshot is by-construction merged; folded
+    // names stay harmlessly in seen.
+    await db.transaction((txn) async {
+      final batch = txn.batch();
+      batch.insert(
+          'sync_seen_segments', {'account_id': accountId, 'name': snapName},
+          conflictAlgorithm: ConflictAlgorithm.ignore);
+      // CRITICAL: merge the folded ops into our own log. Compaction reads
+      // segments from the cloud this device may not have merged yet;
+      // folding + deleting them + marking the snapshot seen would otherwise
+      // lose those ops from this device forever (property harness seed 9).
+      for (final op in snapshotOps) {
+        batch.insert('sync_ops', _opToRow(op, pending: false),
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+      final s = await _loadState(txn);
+      await _saveState(txn,
+          hlcWall: s.hlcWall,
+          hlcCounter: s.hlcCounter,
+          nextSeq: s.nextSeq,
+          nextSegment: s.nextSegment + 1,
+          lastPullWall: s.lastPullWall);
+      await batch.commit(noResult: true);
+    });
   }
 
   // ---------------------------------------------------------------------
@@ -279,10 +416,12 @@ class SyncEngine {
   /// log, exactly the property that kills resurrection.
   Future<void> applyMergedState() async {
     final db = await _db();
+    // pending 0 = synced, 1 = local not-yet-uploaded; both are in the view.
     final opRows = await db.query('sync_ops',
         where: 'account_id = ?', whereArgs: [accountId]);
     if (opRows.isEmpty) return;
-    final state = replayOps(opRows.map(_rowToOp));
+    final allOps = opRows.map(_rowToOp).toList();
+    final state = replayOps(allOps);
 
     final fileRows = await db.query('files',
         columns: ['id', 'filename', 'is_favorite', 'is_deleted'],
@@ -296,13 +435,12 @@ class SyncEngine {
       final id = e.key;
       final f = e.value;
       final row = existing[id];
+      // Every file the log knows is materialized, live or binned. Tombstones
+      // are eternal and identical on every device (no GC), so this converges
+      // without any age-based "ghost" cutoff. The Recycle Bin screen filters
+      // by deleted_at age for DISPLAY — a pure function of the tombstone's
+      // own timestamp, so display stays consistent too.
       if (row == null) {
-        if (f.deleted) {
-          // Ghost rule: a tombstone for a file this device never had only
-          // materializes while it would still be visible in the bin.
-          final tombstoneAge = nowMs - _tombstoneWall(opRows, id);
-          if (tombstoneAge > ghostTombstoneTtlMs) continue;
-        }
         batch.insert(
             'files',
             {
@@ -409,12 +547,24 @@ class SyncEngine {
   // Per-account engine state
   // ---------------------------------------------------------------------
 
-  Future<({int hlcWall, int hlcCounter, int nextSeq, int nextSegment})>
-      _loadState(DatabaseExecutor db) async {
+  Future<
+      ({
+        int hlcWall,
+        int hlcCounter,
+        int nextSeq,
+        int nextSegment,
+        int lastPullWall
+      })> _loadState(DatabaseExecutor db) async {
     final rows = await db.query('sync_state',
         where: 'account_id = ?', whereArgs: [accountId], limit: 1);
     if (rows.isEmpty) {
-      return (hlcWall: 0, hlcCounter: 0, nextSeq: 0, nextSegment: 0);
+      return (
+        hlcWall: 0,
+        hlcCounter: 0,
+        nextSeq: 0,
+        nextSegment: 0,
+        lastPullWall: 0
+      );
     }
     final r = rows.first;
     return (
@@ -422,6 +572,7 @@ class SyncEngine {
       hlcCounter: r['hlc_counter'] as int,
       nextSeq: r['next_seq'] as int,
       nextSegment: r['next_segment'] as int,
+      lastPullWall: (r['last_pull_wall'] as int?) ?? 0,
     );
   }
 
@@ -431,6 +582,7 @@ class SyncEngine {
     required int hlcCounter,
     required int nextSeq,
     required int nextSegment,
+    required int lastPullWall,
   }) async {
     await db.insert(
         'sync_state',
@@ -440,6 +592,7 @@ class SyncEngine {
           'hlc_counter': hlcCounter,
           'next_seq': nextSeq,
           'next_segment': nextSegment,
+          'last_pull_wall': lastPullWall,
         },
         conflictAlgorithm: ConflictAlgorithm.replace);
   }

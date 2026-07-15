@@ -56,6 +56,7 @@ List<InvariantViolation> checkInvariants({
   final everRestored = <String>{};
   var anyFolderDelete = false;
   final anyDelete = <String>{};
+
   for (final r in history) {
     switch (r.action.kind) {
       case ActionKind.createFile:
@@ -106,8 +107,11 @@ List<InvariantViolation> checkInvariants({
     }
 
     // ---- Invariant 3: no vanish ----------------------------------------
-    // Every durably created file must be PRESENT (live or binned) on every
-    // device. Absent = vanished = the bug class this harness exists for.
+    // With eternal tombstones (no GC), every durably-created file must be
+    // PRESENT (live or binned) on every device — deletion bins it, it is
+    // never forgotten. A concurrent folder-vs-create ordering may leave it
+    // live on one device and binned on another, but "present" holds either
+    // way, and invariant 1 guarantees the two devices still agree.
     for (final id in durableCreates) {
       if (!s.live.containsKey(id) && !s.binned.containsKey(id)) {
         violations.add(InvariantViolation(

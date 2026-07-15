@@ -81,4 +81,76 @@ class SegmentCodec {
       return null;
     }
   }
+
+  // ------------------------------------------------------------------
+  // Compaction snapshots: `state_<deviceId>_<seq>.cnest`
+  // ------------------------------------------------------------------
+  //
+  // A snapshot is op-PRESERVING consolidation, not summarization: it
+  // carries the folded segments' ops verbatim (minus whole-file GC of
+  // tombstones past the retention horizon). Individually dropping
+  // "superseded" ops is UNSOUND in this CRDT — edits are conditional on
+  // liveness and folder moves on tree shape, so an early op can determine
+  // final state; devices merging a summarized snapshot would diverge from
+  // devices holding full history (invariant 1). Verbatim folding keeps
+  // replay(snapshot + straggler segments) == replay(original history).
+
+  static const String snapshotPrefix = 'state_';
+
+  static String snapshotName(String deviceId, int seq) =>
+      '$snapshotPrefix${deviceId}_$seq$nameSuffix';
+
+  static ({String deviceId, int seq})? parseSnapshotName(String name) {
+    if (!name.startsWith(snapshotPrefix) || !name.endsWith(nameSuffix)) {
+      return null;
+    }
+    final core = name.substring(
+        snapshotPrefix.length, name.length - nameSuffix.length);
+    final cut = core.lastIndexOf('_');
+    if (cut <= 0 || cut == core.length - 1) return null;
+    final seq = int.tryParse(core.substring(cut + 1));
+    if (seq == null || seq < 0) return null;
+    return (deviceId: core.substring(0, cut), seq: seq);
+  }
+
+  /// Seals a compaction snapshot: the folded object names + their ops.
+  static Future<Uint8List?> sealSnapshot({
+    required List<String> foldedNames,
+    required List<SyncOp> ops,
+  }) async {
+    try {
+      final payload = utf8.encode(jsonEncode({
+        'v': payloadVersion,
+        'kind': 'snapshot',
+        'folded': foldedNames,
+        'ops': [for (final op in ops) op.toJson()],
+      }));
+      return await EncryptionService.encryptFile(
+          Uint8List.fromList(payload));
+    } catch (e) {
+      debugPrint('SegmentCodec.sealSnapshot failed: $e');
+      return null;
+    }
+  }
+
+  /// Opens a snapshot; null on any failure (same contract as [tryOpen]).
+  static Future<({List<String> folded, List<SyncOp> ops})?> tryOpenSnapshot(
+      Uint8List blob) async {
+    try {
+      final plain = await EncryptionService.decryptFile(blob);
+      final json = jsonDecode(utf8.decode(plain)) as Map<String, dynamic>;
+      if (json['v'] != payloadVersion || json['kind'] != 'snapshot') {
+        return null;
+      }
+      return (
+        folded: [for (final n in (json['folded'] as List)) n as String],
+        ops: [
+          for (final op in (json['ops'] as List))
+            SyncOp.fromJson(op as Map<String, dynamic>),
+        ],
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 }

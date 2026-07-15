@@ -33,17 +33,35 @@ class SealedOpLogSimEngine extends OpLogSimEngine {
   }
 
   @override
-  Future<List<SyncOp>?> decodeSegment(Object payload) =>
-      payload is Uint8List
-          ? SegmentCodec.tryOpen(payload)
-          : Future.value(null);
+  Future<List<SyncOp>?> decodeSegment(Object payload) async {
+    if (payload is! Uint8List) return null;
+    // A payload is either a segment or a snapshot; try both (real codecs).
+    final seg = await SegmentCodec.tryOpen(payload);
+    if (seg != null) return seg;
+    final snap = await SegmentCodec.tryOpenSnapshot(payload);
+    return snap?.ops;
+  }
+
+  @override
+  Future<Object> encodeSnapshot(List<SyncOp> ops) async {
+    final sealed =
+        await SegmentCodec.sealSnapshot(foldedNames: const [], ops: ops);
+    if (sealed == null) throw StateError('snapshot seal failed');
+    return sealed;
+  }
 }
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  setUpAll(() async {
-    final keyPair = await X25519().newKeyPair();
+  // DETERMINISTIC key: the KeyManagerService singleton is process-wide and
+  // shared across concurrently-running sync test files. Installing the SAME
+  // keypair everywhere makes that sharing harmless — a segment sealed in one
+  // test opens in another. (Random per-test keys corrupt each other's
+  // in-flight seal/open under the runner's async interleaving.)
+  setUp(() async {
+    final keyPair = await X25519().newKeyPairFromSeed(
+        Uint8List.fromList(List<int>.generate(32, (i) => i + 1)));
     KeyManagerService().installKeysForTest(
       keyPair: keyPair,
       publicKey: await keyPair.extractPublicKey(),

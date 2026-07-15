@@ -124,6 +124,19 @@ Future<HarnessResult> runScenario(
     for (final d in devices) {
       await trySync(d);
     }
+    // Let a device compact mid-convergence: snapshots must exist and be
+    // merged into the final states, or convergence (invariant 1) would
+    // never actually exercise the compacted path. One compactor is
+    // enough — its snapshot propagates to the rest.
+    if (round == 1 && devices.isNotEmpty) {
+      try {
+        await devices.first.engine.maybeCompact(cloud);
+      } on SimCrash {
+        // tolerated
+      } on SimOffline {
+        // tolerated
+      }
+    }
     final states = devices.map((d) => d.engine.materialize()).toList();
     if (previous != null &&
         List.generate(states.length, (i) => states[i] == previous![i])
