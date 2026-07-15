@@ -9,6 +9,8 @@ import '../src/models/share_model.dart';
 import 'cache_manager_service.dart';
 import 'cloud/account_registry.dart';
 import 'cloud/sealed_metadata.dart';
+import 'sync/sync_coordinator.dart';
+import 'sync/sync_op.dart';
 
 /// [DatabaseService] extends [ChangeNotifier] so screens can rebuild in-place
 /// when files are added, deleted, restored, or moved between albums. Every
@@ -313,7 +315,17 @@ class DatabaseService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> markAsUploaded(String id, String cloudId, String? thumbId) async {
+  /// Marks the blob durably uploaded — and ONLY here does the file's
+  /// createFile op enter the sync log, preserving crash ordering (blob
+  /// before op: a crash in between leaves an orphan blob, never a
+  /// dangling reference). [filename] comes from the caller's in-flight
+  /// action context — never read back from a row.
+  Future<void> markAsUploaded(
+    String id,
+    String cloudId,
+    String? thumbId, {
+    String? filename,
+  }) async {
     final db = await database;
     await db.update(
       'files',
@@ -325,6 +337,10 @@ class DatabaseService extends ChangeNotifier {
       where: 'id = ?',
       whereArgs: [id],
     );
+    if (filename != null) {
+      await SyncCoordinator()
+          .record(SyncOpKind.createFile, id, name: filename);
+    }
     notifyListeners();
   }
 
@@ -376,6 +392,7 @@ class DatabaseService extends ChangeNotifier {
         thumbnailCloudId: rows.first['thumbnail_cloud_id'] as String?,
       );
     }
+    await SyncCoordinator().record(SyncOpKind.deleteFile, id);
     notifyListeners();
   }
 
@@ -428,6 +445,7 @@ class DatabaseService extends ChangeNotifier {
       where: 'id = ?',
       whereArgs: [id],
     );
+    await SyncCoordinator().record(SyncOpKind.restoreFile, id);
     notifyListeners();
   }
 
@@ -467,6 +485,8 @@ class DatabaseService extends ChangeNotifier {
       where: 'id = ?',
       whereArgs: [id],
     );
+    await SyncCoordinator()
+        .record(SyncOpKind.setFavorite, id, favorite: favorite);
   }
 
   /// Updates the user-visible filename. The cloud blob keeps its `<uuid>.cnest`
@@ -481,6 +501,8 @@ class DatabaseService extends ChangeNotifier {
       where: 'id = ?',
       whereArgs: [id],
     );
+    await SyncCoordinator()
+        .record(SyncOpKind.renameFile, id, name: newFilename);
     notifyListeners();
   }
 
@@ -645,6 +667,24 @@ class DatabaseService extends ChangeNotifier {
     
     await insertBatch.commit(noResult: true);
     final linkBatch = db.batch();
+
+    // Join op-created rows to their blobs: a file that arrived via the
+    // sync log exists locally with cloud_id NULL until this pass matches
+    // the blob by its uuid stem. Only NULL cloud_ids are touched — the
+    // op-log never owns blob bookkeeping and vice versa.
+    for (var file in mainFiles) {
+      final name = file['name'] as String? ?? '';
+      if (!name.endsWith('.cnest')) continue;
+      linkBatch.update(
+        'files',
+        {
+          'cloud_id': file['id'],
+          'provider': AccountRegistry().activeAccount?.providerType ?? 0,
+        },
+        where: 'id = ? AND cloud_id IS NULL',
+        whereArgs: [name.replaceAll('.cnest', '')],
+      );
+    }
 
     for (var file in thumbnailFiles) {
       final name = file['name'] as String? ?? '';

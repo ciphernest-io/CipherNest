@@ -478,7 +478,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       if (mainCloudId == null) throw Exception('Main upload failed');
 
-      await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId);
+      await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId,
+          filename: filename);
       DatabaseBackupService().scheduleBackup();
 
       // --- 6. CACHE MANAGEMENT ---

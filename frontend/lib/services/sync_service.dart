@@ -7,6 +7,7 @@ import 'auto_sync_worker.dart';
 import 'cache_manager_service.dart';
 import 'cloud/cloud_service.dart';
 import 'database_service.dart';
+import 'sync/sync_coordinator.dart';
 
 class SyncService {
   static final SyncService _instance = SyncService._internal();
@@ -37,7 +38,10 @@ class SyncService {
       final oldMap = await DatabaseService().getCloudToLocalIdMap();
       final oldCloudIds = oldMap.keys.toSet();
 
-      // 2. Fetch cloud state and reconcile
+      // 2. Multi-device op-log first (tombstones, renames, foreign creates
+      //    land before the blob pass), then blob reconcile (fills cloud_id
+      //    for op-created rows, prunes remotely-deleted blobs).
+      await SyncCoordinator().sync();
       final cloudFiles = await CloudService().listCloudFiles();
       await DatabaseService().reconcile(cloudFiles.cast<Map<String, dynamic>>());
 

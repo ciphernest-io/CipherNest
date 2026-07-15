@@ -341,7 +341,8 @@ class MigrationService {
       );
     }
 
-    await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId);
+    await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId,
+        filename: filename);
     return true;
   }
 }

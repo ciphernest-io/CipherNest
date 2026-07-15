@@ -95,9 +95,11 @@ class ImageEditService {
       throw Exception('Edit upload failed: main blob did not upload');
     }
 
-    // 5. Mark uploaded (updates cloud_id + thumbnail_cloud_id for both modes).
-    await DatabaseService()
-        .markAsUploaded(fileId, mainCloudId, thumbCloudId);
+    // 5. Mark uploaded (updates cloud_id + thumbnail_cloud_id for both
+    // modes). Records the createFile sync op — for replace-original the
+    // duplicate create (same uuid) is dead on arrival in replay, by design.
+    await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId,
+        filename: editedFilename);
 
     // 6. Replace-mode cleanup: delete old cloud blobs and stale cache.
     if (replaceOriginal) {

@@ -14,6 +14,7 @@ import 'database_backup_service.dart';
 import 'database_service.dart';
 import 'encryption_service.dart';
 import 'key_manager_service.dart';
+import 'sync/sync_coordinator.dart';
 import 'sync_service.dart';
 
 class AutoSyncService {
@@ -96,6 +97,10 @@ class AutoSyncService {
       );
       if (synced > 0) {
         DatabaseBackupService().scheduleBackup();
+        // Push the createFile ops for this batch. Push-only: sealing is
+        // public-key-only, so this works from the locked background
+        // worker — encrypt-while-locked extends to the sync log.
+        await SyncCoordinator().pushOnly();
       }
 
       // Notify all subscribed screens (gallery, documents) to refresh
@@ -295,8 +300,10 @@ class AutoSyncService {
         );
       }
 
-      // Mark as uploaded
-      await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId);
+      // Mark as uploaded — also records the createFile sync op (blob is
+      // durable at this point; op-after-blob crash ordering holds).
+      await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId,
+          filename: filename);
 
       return true;
     } catch (e) {

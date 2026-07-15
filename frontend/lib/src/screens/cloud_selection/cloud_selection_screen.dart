@@ -9,6 +9,7 @@ import '../../../services/cloud/google_drive_provider.dart';
 import '../../../services/cloud/onedrive_provider.dart';
 import '../../../services/cnest_errors.dart';
 import '../../../services/database_backup_service.dart';
+import '../../../services/sync/sync_coordinator.dart';
 import '../../../services/database_service.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
@@ -193,6 +194,9 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       }
 
       setState(() => _statusMsg = 'Loading your files...');
+      // Op-log first (multi-device state), then blob reconcile (joins
+      // op-created rows to their blobs by uuid stem).
+      await SyncCoordinator().sync();
       final files = await CloudService().listCloudFiles();
       await DatabaseService().reconcile(files.cast<Map<String, dynamic>>());
 
