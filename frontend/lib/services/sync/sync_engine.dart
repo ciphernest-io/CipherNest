@@ -48,6 +48,22 @@ abstract class SyncTransport {
   Future<void> deleteObject(String cloudId);
 }
 
+/// An edit-vs-delete conflict surfaced to the user after a sync.
+class SyncConflict {
+  final String fileId;
+  final String fileName;
+  final String deleterDeviceId;
+
+  /// True if permanently purged (gone), false if soft-deleted (in the bin).
+  final bool purged;
+  const SyncConflict({
+    required this.fileId,
+    required this.fileName,
+    required this.deleterDeviceId,
+    required this.purged,
+  });
+}
+
 /// A semantic user action, as [recordLocalOp] accepts it. Deliberately NOT
 /// constructible from a database row — it has no fromMap, and every field
 /// is what the user just did, not what storage contains.
@@ -287,6 +303,19 @@ class SyncEngine {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(kUnreadableSegmentsPref, unreadable);
 
+    // Clock-skew advisory: if the newest op we've seen carries a wall time
+    // far from this device's clock, some device's clock is wrong. This is
+    // benign for correctness (HLC handles it — see hlc.dart) but worth
+    // telling the user, since a very wrong clock can make that device win
+    // cosmetic edit conflicts until clocks realign.
+    final maxRow = await db.rawQuery(
+        'SELECT MAX(hlc_wall) AS m FROM sync_ops WHERE account_id = ?',
+        [accountId]);
+    final newestWall = (maxRow.first['m'] as int?) ?? 0;
+    final skewMs = (newestWall - _wallClock()).abs();
+    await prefs.setBool(kClockSkewPref,
+        newestWall > 0 && skewMs > kClockSkewThresholdMs);
+
     if (merged > 0 || unreadable > 0) {
       await applyMergedState();
     }
@@ -497,6 +526,73 @@ class SyncEngine {
     }
     await batch.commit(noResult: true);
     DatabaseService().notifyFilesChanged();
+  }
+
+  /// Detects edit-vs-delete conflicts to surface to the user: a file this
+  /// device has a pending edit on (rename / move / favorite / restore) that
+  /// a DIFFERENT device deleted or purged. Delete wins (the file is in the
+  /// Recycle Bin, or gone if purged); this lets the UI say so plainly. Read
+  /// after a sync; returns at most a handful of the most relevant.
+  Future<List<SyncConflict>> detectConflicts() async {
+    final db = await _db();
+    final thisDevice = await _deviceId();
+    final allOps =
+        (await db.query('sync_ops', where: 'account_id = ?', whereArgs: [
+      accountId
+    ]))
+            .map(_rowToOp)
+            .toList();
+    final state = replayOps(allOps);
+    final purged = <String>{
+      for (final op in allOps)
+        if (op.kind == SyncOpKind.purgeFile) op.targetId,
+    };
+
+    // Files this device has a pending edit on.
+    const editKinds = {'renameFile', 'moveFile', 'setFavorite', 'restoreFile'};
+    final pendingEdits = await db.query('sync_ops',
+        where: 'account_id = ? AND pending = 1 AND device_id = ?',
+        whereArgs: [accountId, thisDevice]);
+    final myEditedIds = <String, String?>{
+      for (final r in pendingEdits)
+        if (editKinds.contains(r['kind'])) r['target_id'] as String: null,
+    };
+    if (myEditedIds.isEmpty) return const [];
+
+    // Who deleted/purged each — only a FOREIGN deletion is a conflict.
+    String? foreignDeleter(String id) {
+      String? who;
+      Hlc? best;
+      for (final op in allOps) {
+        if (op.targetId != id) continue;
+        if (op.kind != SyncOpKind.deleteFile &&
+            op.kind != SyncOpKind.purgeFile) {
+          continue;
+        }
+        if (best == null || op.hlc > best) {
+          best = op.hlc;
+          who = op.deviceId;
+        }
+      }
+      return (who != null && who != thisDevice) ? who : null;
+    }
+
+    final out = <SyncConflict>[];
+    for (final id in myEditedIds.keys) {
+      final isGone = purged.contains(id);
+      final f = state.files[id];
+      final isDeleted = isGone || (f?.deleted ?? false);
+      if (!isDeleted) continue;
+      final deleter = foreignDeleter(id);
+      if (deleter == null) continue;
+      out.add(SyncConflict(
+        fileId: id,
+        fileName: f?.name ?? id,
+        deleterDeviceId: deleter,
+        purged: isGone,
+      ));
+    }
+    return out;
   }
 
   /// Full resync for a device returning from beyond the compaction horizon

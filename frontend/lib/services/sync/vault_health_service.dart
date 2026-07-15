@@ -9,6 +9,10 @@ import 'sync_op.dart';
 /// Pref key: unreadable segments from the last pull (written by SyncEngine).
 const String kUnreadableSegmentsPref = 'sync_unreadable_segments_v1';
 
+/// Pref key + threshold: a device clock looked far off at the last pull.
+const String kClockSkewPref = 'sync_clock_skew_v1';
+const int kClockSkewThresholdMs = 24 * 60 * 60 * 1000;
+
 /// A snapshot of vault integrity for the Settings "Vault Health" surface.
 class VaultHealthReport {
   /// Cloud blobs in vault/ that NO sync op references — data the app can no
@@ -23,16 +27,21 @@ class VaultHealthReport {
   /// foreign). Surfaced, retried each cycle, never silently absorbed.
   final int unreadableSegments;
 
+  /// A device's clock looked far off at the last pull (advisory only).
+  final bool clockSkewDetected;
+
   const VaultHealthReport({
     required this.orphanBlobIds,
     required this.missingBlobFileIds,
     required this.unreadableSegments,
+    required this.clockSkewDetected,
   });
 
   bool get isHealthy =>
       orphanBlobIds.isEmpty &&
       missingBlobFileIds.isEmpty &&
-      unreadableSegments == 0;
+      unreadableSegments == 0 &&
+      !clockSkewDetected;
 }
 
 /// Diffs the cloud vault against the op-log's known file set.
@@ -83,9 +92,27 @@ class VaultHealthService {
       orphanBlobIds: orphans,
       missingBlobFileIds: missing,
       unreadableSegments: prefs.getInt(kUnreadableSegmentsPref) ?? 0,
+      clockSkewDetected: prefs.getBool(kClockSkewPref) ?? false,
     );
     lastReport.value = report;
     return report;
+  }
+
+  /// Permanently removes an orphan blob (and its thumb, if any). Requires
+  /// explicit user confirmation upstream — we never auto-delete user data.
+  Future<void> forgetOrphan(String stem) async {
+    final cloudFiles = await CloudService().listCloudFiles();
+    for (final f in cloudFiles) {
+      final name = f['name'] as String? ?? '';
+      if (name == '$stem.cnest' || name == '${stem}_thumb.cnest') {
+        final id = f['id'] as String?;
+        if (id != null) {
+          try {
+            await CloudService().deleteFile(id);
+          } catch (_) {}
+        }
+      }
+    }
   }
 
   SyncOp _rowToOp(Map<String, Object?> row) => SyncOp.fromJson({

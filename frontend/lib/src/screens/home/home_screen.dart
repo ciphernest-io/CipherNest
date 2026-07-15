@@ -26,6 +26,7 @@ import '../../../services/cloud/cloud_service.dart';
 import '../../../services/cloud/account_registry.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/sync_service.dart';
+import '../../../services/sync/sync_coordinator.dart';
 import '../../widgets/friendly_error_sheet.dart';
 
 enum _UploadCategory { media, document, audio, other }
@@ -48,6 +49,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _initSession();
     SyncService().syncNotifier.addListener(_refreshStats);
+    // Surface multi-device edit-vs-delete conflicts as they're detected.
+    SyncCoordinator().conflicts.addListener(_showConflicts);
     // Any file mutation anywhere in the app (delete, upload, restore, album
     // move, edit) bumps DatabaseService's notifier — so vault usage updates
     // in place instead of only refreshing on cold start or after a full
@@ -56,9 +59,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     DatabaseService().addListener(_refreshStats);
   }
 
+  void _showConflicts() {
+    final messages = SyncCoordinator().conflicts.value;
+    if (messages.isEmpty || !mounted) return;
+    final text = messages.length == 1
+        ? messages.first
+        : '${messages.length} files were changed on another device. '
+            'Deletions won; edits are safe in the Recycle Bin.';
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(text),
+      duration: const Duration(seconds: 6),
+    ));
+    SyncCoordinator().clearConflicts();
+  }
+
   @override
   void dispose() {
     SyncService().syncNotifier.removeListener(_refreshStats);
+    SyncCoordinator().conflicts.removeListener(_showConflicts);
     DatabaseService().removeListener(_refreshStats);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();

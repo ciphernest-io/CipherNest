@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../cloud/account_registry.dart';
 import 'cloud_sync_transport.dart';
+import 'device_registry_service.dart';
 import 'sync_engine.dart';
 import 'sync_op.dart';
 
@@ -18,6 +19,10 @@ class SyncCoordinator {
 
   SyncEngine? _engine;
   String? _engineAccountId;
+
+  /// Edit-vs-delete conflicts from the most recent sync, as ready-to-show
+  /// messages. The UI (home screen) listens and shows a one-time notice.
+  final ValueNotifier<List<String>> conflicts = ValueNotifier(const []);
 
   /// The engine for the active account, or null when signed out.
   SyncEngine? get engine {
@@ -54,14 +59,38 @@ class SyncCoordinator {
     }
   }
 
-  /// Full cycle: push + pull + re-materialize. Requires unlocked vault.
+  /// Full cycle: register this device (once / on rename), push, pull,
+  /// re-materialize. Requires unlocked vault.
   Future<void> sync() async {
     try {
-      await engine?.syncCycle();
+      if (engine == null) return;
+      await DeviceRegistryService().ensureRegistered();
+      await engine!.syncCycle();
+      await _surfaceConflicts();
     } catch (e) {
       debugPrint('SyncCoordinator.sync failed: $e');
     }
   }
+
+  Future<void> _surfaceConflicts() async {
+    final accountId = _engineAccountId;
+    if (accountId == null) return;
+    final found = await engine!.detectConflicts();
+    if (found.isEmpty) return;
+    final messages = <String>[];
+    for (final c in found) {
+      final who = await DeviceRegistryService()
+          .nameFor(c.deleterDeviceId, accountId: accountId);
+      messages.add(c.purged
+          ? '"${c.fileName}" was permanently deleted on $who.'
+          : 'You edited "${c.fileName}", but it was deleted on $who — '
+              'it\'s in the Recycle Bin.');
+    }
+    conflicts.value = messages;
+  }
+
+  /// Clears surfaced conflicts once the UI has shown them.
+  void clearConflicts() => conflicts.value = const [];
 
   /// Push-only — safe from locked/background contexts (sealing is
   /// public-key-only; nothing is decrypted).

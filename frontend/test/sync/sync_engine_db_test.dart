@@ -408,6 +408,34 @@ void main() {
     expect(await fileRow(dbB, 'f1'), isNull);
   });
 
+  test('conflict detection: my pending edit vs a foreign delete', () async {
+    // A creates & syncs f1; B learns it.
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFile, targetId: 'f1', name: 'x.jpg'));
+    await a.syncCycle();
+    await b.syncCycle();
+
+    // B renames f1 locally (pending) — but does NOT push yet.
+    await b.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.renameFile, targetId: 'f1', name: 'mine.jpg'));
+
+    // Meanwhile A deletes f1 and pushes.
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.deleteFile, targetId: 'f1'));
+    await a.syncCycle();
+
+    // B pulls A's delete, then detects the conflict on its pending rename.
+    await b.pullAndMerge();
+    final conflicts = await b.detectConflicts();
+    expect(conflicts.length, 1);
+    expect(conflicts.first.fileId, 'f1');
+    expect(conflicts.first.deleterDeviceId, 'devA');
+    expect(conflicts.first.purged, isFalse);
+
+    // No conflict is reported for A (it did the deleting).
+    expect(await a.detectConflicts(), isEmpty);
+  });
+
   test('unreadable segment: counted, retried, never marked seen', () async {
     await cloud.uploadLogObject(
         name: 'ops_devX_0.cnest',

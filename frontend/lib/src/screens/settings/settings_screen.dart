@@ -18,6 +18,8 @@ import '../../../services/biometric_unlock_service.dart';
 import '../../../services/gallery_prefs.dart';
 import '../../../services/key_manager_service.dart';
 import '../../../services/metadata_migration_service.dart';
+import '../../../services/sync/device_registry_service.dart';
+import '../../../services/sync/sync_coordinator.dart';
 import '../../../services/sync/vault_health_service.dart';
 import '../../widgets/password_confirm_dialog.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -135,8 +137,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (r.missingBlobFileIds.isNotEmpty)
         '${r.missingBlobFileIds.length} missing',
       if (r.unreadableSegments > 0) '${r.unreadableSegments} unreadable',
+      if (r.clockSkewDetected) 'clock check',
     ];
     return parts.join(' · ');
+  }
+
+  Future<void> _openDevices() async {
+    final account = AccountRegistry().activeAccount;
+    if (account == null) return;
+    final devices =
+        await DeviceRegistryService().listDevices(accountId: account.id);
+    final currentName = await DeviceRegistryService().deviceName();
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => _DevicesSheet(
+        devices: devices,
+        currentName: currentName,
+        onRename: (name) async {
+          await DeviceRegistryService().setDeviceName(name);
+          await SyncCoordinator().pushOnly();
+        },
+      ),
+    );
   }
 
   Future<void> _runVaultHealthScan() async {
@@ -794,6 +818,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: _vaultHealthScanning ? null : _runVaultHealthScan,
           ),
+          ListTile(
+            leading: ThemeIcon('smartphone', color: cs.primary),
+            title: Text('Devices', style: TextStyle(color: cs.onSurface)),
+            subtitle: Text('Name this device, see others on your vault',
+                style: TextStyle(color: cs.onSurface.withAlpha(140))),
+            trailing: ThemeIcon('caretRight',
+                size: 16, color: cs.onSurface.withAlpha(140)),
+            onTap: _openDevices,
+          ),
           ValueListenableBuilder<MetadataMigrationState>(
             valueListenable: MetadataMigrationService().state,
             builder: (context, mig, _) {
@@ -1155,6 +1188,13 @@ class _VaultHealthSheet extends StatelessWidget {
                   'Multi-device sync data that could not be decrypted. These '
                   'are retried on every sync and never discarded.'),
             ],
+            if (report.clockSkewDetected) ...[
+              _row(cs, 'clockCountdown', 'Check a device\'s clock',
+                  'One of your devices has a clock set far from the correct '
+                  'time. Your files are safe, but until it is corrected that '
+                  'device may win when the same file is edited on two devices '
+                  'at once. Set its date & time to automatic.'),
+            ],
             const SizedBox(height: 20),
             Align(
               alignment: Alignment.centerRight,
@@ -1195,4 +1235,100 @@ class _VaultHealthSheet extends StatelessWidget {
           ],
         ),
       );
+}
+
+/// Bottom sheet: rename this device and list every device on the vault.
+class _DevicesSheet extends StatefulWidget {
+  final List<KnownDevice> devices;
+  final String currentName;
+  final Future<void> Function(String) onRename;
+  const _DevicesSheet({
+    required this.devices,
+    required this.currentName,
+    required this.onRename,
+  });
+
+  @override
+  State<_DevicesSheet> createState() => _DevicesSheetState();
+}
+
+class _DevicesSheetState extends State<_DevicesSheet> {
+  late final TextEditingController _name =
+      TextEditingController(text: widget.currentName);
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+            20, 0, 20, 20 + MediaQuery.of(context).viewInsets.bottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                ThemeIcon('smartphone', color: cs.primary, size: 22),
+                const SizedBox(width: 10),
+                Text('Devices', style: Theme.of(context).textTheme.titleLarge),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text('This device\'s name',
+                style: TextStyle(
+                    color: cs.onSurface.withAlpha(180), fontSize: 13)),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _name,
+                    decoration: const InputDecoration(isDense: true),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: _saving
+                      ? null
+                      : () async {
+                          setState(() => _saving = true);
+                          await widget.onRename(_name.text);
+                          if (context.mounted) Navigator.pop(context);
+                        },
+                  child: const Text('Save'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            Text('On this vault',
+                style: TextStyle(
+                    color: cs.onSurface.withAlpha(180), fontSize: 13)),
+            const SizedBox(height: 6),
+            if (widget.devices.isEmpty)
+              Text('Only this device so far.',
+                  style: TextStyle(color: cs.onSurface.withAlpha(140))),
+            for (final d in widget.devices)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: ThemeIcon(d.isThisDevice ? 'smartphone' : 'cloudArrowDown',
+                    color: cs.primary),
+                title: Text(d.name, style: TextStyle(color: cs.onSurface)),
+                subtitle: d.isThisDevice
+                    ? Text('This device',
+                        style: TextStyle(color: cs.onSurface.withAlpha(140)))
+                    : null,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 }

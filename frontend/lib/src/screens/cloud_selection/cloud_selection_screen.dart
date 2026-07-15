@@ -432,12 +432,12 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Vault used on multiple devices'),
         content: const Text(
-          'This vault is connected on another device too. Your files are '
-          'shared through the cloud, but for now each device keeps its own '
-          'index backup, so folder organization and deletions do not sync '
-          'between devices yet.\n\n'
-          'Full multi-device sync is coming in an upcoming update. Nothing '
-          'is ever overwritten or lost in the meantime.',
+          'This vault is connected on another device too. Changes you make — '
+          'organizing into folders, deleting, renaming — now sync across your '
+          'devices automatically.\n\n'
+          'If the same file is changed on two devices at once, deletions win '
+          'and the other change is kept safe in the Recycle Bin. Nothing is '
+          'ever silently lost.',
         ),
         actions: [
           FilledButton(
