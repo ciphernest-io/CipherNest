@@ -81,6 +81,7 @@ Future<Database> newDeviceDb() async {
       account_id TEXT,
       filename TEXT NOT NULL,
       size_bytes INTEGER,
+      content_hash TEXT,
       created_at INTEGER,
       is_uploaded INTEGER,
       local_path TEXT,
@@ -166,6 +167,122 @@ void main() {
     expect(row['is_uploaded'], 1);
     expect(row['cloud_id'], isNull,
         reason: 'blob join happens via reconcile, not the op-log');
+  });
+
+  test('createFile op carries content_hash + size to the peer (#2 fix: no '
+      '0-byte / no blank details sheet)', () async {
+    await a.recordLocalOp(const LocalSyncAction(
+      kind: SyncOpKind.createFile,
+      targetId: 'f1',
+      name: 'cat.jpg',
+      hash: 'abc123hash',
+      size: 4242,
+    ));
+    await a.syncCycle();
+    await b.syncCycle();
+
+    final row = (await fileRow(dbB, 'f1'))!;
+    // The receiving device knows the true plaintext size and identity BEFORE
+    // the blob reconciles — this is what stops the permanent "0 bytes" tile.
+    expect(row['size_bytes'], 4242);
+    expect(row['content_hash'], 'abc123hash');
+    expect(row['cloud_id'], isNull,
+        reason: 'size/hash arrive via the op, not the blob join');
+  });
+
+  test('size/hash backfill: a reconcile-seeded row (encrypted size, no hash) '
+      'is corrected by the create op it later applies', () async {
+    // Model reconcile seeding B first: the blob listing only knows the
+    // ENCRYPTED size and carries no hash. This is the row the op must fix.
+    await dbB.insert('files', {
+      'id': 'f1',
+      'account_id': account,
+      'filename': 'x.jpg',
+      'size_bytes': 5028, // encrypted size, wrong for the details sheet
+      'content_hash': null,
+      'is_uploaded': 1,
+      'is_deleted': 0,
+    });
+
+    // A's create op carries the TRUE plaintext size + identity.
+    await a.recordLocalOp(const LocalSyncAction(
+      kind: SyncOpKind.createFile,
+      targetId: 'f1',
+      name: 'x.jpg',
+      hash: 'truehash',
+      size: 5000,
+    ));
+    await a.syncCycle();
+    await b.syncCycle();
+
+    final row = (await fileRow(dbB, 'f1'))!;
+    expect(row['size_bytes'], 5000,
+        reason: 'encrypted size must be corrected to plaintext size');
+    expect(row['content_hash'], 'truehash');
+  });
+
+  test('capture time propagates and drives created_at on the peer (#1: '
+      'identical gallery order regardless of clock skew)', () async {
+    // Two photos whose CAPTURE order is the REVERSE of their upload order —
+    // exactly the clock-skew case. Ordering by created_at must follow capture.
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFile,
+        targetId: 'later_upload',
+        name: 'b.jpg',
+        captured: 100)); // captured FIRST
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFile,
+        targetId: 'earlier_upload',
+        name: 'a.jpg',
+        captured: 900)); // captured LATER but uploaded after
+    await a.syncCycle();
+    await b.syncCycle();
+
+    final b1 = (await fileRow(dbB, 'later_upload'))!;
+    final b2 = (await fileRow(dbB, 'earlier_upload'))!;
+    expect(b1['created_at'], 100);
+    expect(b2['created_at'], 900);
+    // And the origin agrees exactly — both devices sort identically.
+    expect((await fileRow(dbA, 'later_upload'))!['created_at'], 100);
+    expect((await fileRow(dbA, 'earlier_upload'))!['created_at'], 900);
+  });
+
+  test('no capture metadata falls back to the create op HLC wall, identical '
+      'on both devices', () async {
+    // wallClock is fixed at 1000000 for both engines, so the create op's HLC
+    // wall is deterministic and shared.
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFile, targetId: 'f1', name: 'screenshot.png'));
+    await a.syncCycle();
+    await b.syncCycle();
+
+    expect((await fileRow(dbA, 'f1'))!['created_at'], 1000000);
+    expect((await fileRow(dbB, 'f1'))!['created_at'], 1000000,
+        reason: 'HLC-wall fallback must be identical across devices');
+  });
+
+  test('origin convergence: a locally pre-seeded wall-clock created_at is '
+      'replaced by the canonical capture key when the op is recorded',
+      () async {
+    // Simulate addFile inserting the row FIRST with a local wall clock.
+    await dbA.insert('files', {
+      'id': 'f1',
+      'account_id': account,
+      'filename': 'photo.jpg',
+      'created_at': 123456789, // the origin's local wall — skew-vulnerable
+      'is_uploaded': 0,
+      'is_deleted': 0,
+    });
+
+    // Recording the createFile op re-materializes and converges created_at.
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFile,
+        targetId: 'f1',
+        name: 'photo.jpg',
+        captured: 777));
+
+    expect((await fileRow(dbA, 'f1'))!['created_at'], 777,
+        reason: 'origin must adopt the shipped capture time, not local wall');
   });
 
   test('rename and favorite propagate; device-local columns untouched',

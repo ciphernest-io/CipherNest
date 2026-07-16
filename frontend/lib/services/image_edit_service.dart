@@ -43,10 +43,16 @@ class ImageEditService {
       quality: 50,
     );
 
-    // 2. Encrypt main + thumb in parallel.
-    final encryptedMainFuture = EncryptionService.encryptFile(editedBytes);
+    // 2. Encrypt main + thumb in parallel; hash the edited plaintext so the
+    // NEW content identity replaces the original's — this is what stops the
+    // stale local original from being preferred for display after a
+    // replace-original edit.
+    final encryptedMainFuture =
+        EncryptionService.encryptFileWithHash(editedBytes);
     final encryptedThumbFuture = EncryptionService.encryptFile(thumbBytes);
-    final encryptedMain = await encryptedMainFuture;
+    final hashedMain = await encryptedMainFuture;
+    final encryptedMain = hashedMain.encrypted;
+    final editedHash = hashedMain.hash;
     final encryptedThumb = await encryptedThumbFuture;
 
     // 3. Determine the destination file id + filename.
@@ -95,18 +101,27 @@ class ImageEditService {
       throw Exception('Edit upload failed: main blob did not upload');
     }
 
-    // 5. Mark uploaded (updates cloud_id + thumbnail_cloud_id for both
-    // modes). Records the createFile sync op — for replace-original the
-    // duplicate create (same uuid) is dead on arrival in replay, by design.
+    // 5. Mark uploaded (updates cloud_id + thumbnail_cloud_id + content_hash
+    // for both modes). Records the createFile sync op — for replace-original
+    // the duplicate create (same uuid) is dead on arrival in replay, by
+    // design.
+    // Preserve the source's capture time as the sort key so an edited image
+    // keeps its place in the gallery timeline instead of jumping to "now".
+    final capturedMs = source.createdAt.millisecondsSinceEpoch;
     await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId,
-        filename: editedFilename);
+        filename: editedFilename,
+        contentHash: editedHash,
+        sizeBytes: editedBytes.length,
+        capturedAt: capturedMs > 0 ? capturedMs : null);
 
-    // 6. Replace-mode cleanup: delete old cloud blobs and stale cache.
+    // 6. Replace-mode cleanup: delete old cloud blobs and stale cache, and
+    // CLEAR the stale local_path/asset_id — they still point at the original,
+    // unedited gallery file. Without this, the display rungs would prefer
+    // that stale local source over the newly-uploaded edited blob.
     if (replaceOriginal) {
       await _bestEffortReplaceCleanup(source);
-      // For replace we also need to clear the filename / size update on the
-      // existing row. markAsUploaded doesn't touch size — patch it here.
       await DatabaseService().updateSizeBytes(fileId, editedBytes.length);
+      await DatabaseService().clearLocalRefs(fileId);
     }
 
     DatabaseBackupService().scheduleBackup();

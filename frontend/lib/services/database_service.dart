@@ -58,7 +58,7 @@ class DatabaseService extends ChangeNotifier {
 
     final db = await openDatabase(
       path,
-      version: 9,
+      version: 11,
       onCreate: (db, version) async {
         await _createSchema(db);
         await _createSyncSchema(db);
@@ -126,6 +126,36 @@ class DatabaseService extends ChangeNotifier {
         if (oldVersion < 9) {
           await _createSyncSchema(db);
         }
+        // v10 adds content_hash — SHA-256 of plaintext, the file's true
+        // identity (fix for "filename is not identity"). Existing rows get
+        // NULL; verification degrades to size-only until they're re-hashed.
+        // The createFile op also gains content_hash + size_bytes (identity +
+        // expected size for a peer before the blob is joined).
+        if (oldVersion < 10) {
+          await db.execute('ALTER TABLE files ADD COLUMN content_hash TEXT');
+          // sync_ops may not exist yet if jumping from a very old version;
+          // the v9 branch above creates it, so guard with a column probe.
+          final cols = await db.rawQuery('PRAGMA table_info(sync_ops)');
+          final hasHash = cols.any((c) => c['name'] == 'content_hash');
+          if (!hasHash) {
+            await db.execute(
+                'ALTER TABLE sync_ops ADD COLUMN content_hash TEXT');
+            await db.execute(
+                'ALTER TABLE sync_ops ADD COLUMN size_bytes INTEGER');
+          }
+        }
+        // v11 adds captured_at to the createFile op — the media's capture
+        // time (EXIF DateTimeOriginal / MediaStore DATE_TAKEN), so every
+        // device sorts the gallery by an identical, clock-skew-immune key.
+        // Existing ops lack it and fall back to the create op's HLC wall.
+        if (oldVersion < 11) {
+          final cols = await db.rawQuery('PRAGMA table_info(sync_ops)');
+          final hasCaptured = cols.any((c) => c['name'] == 'captured_at');
+          if (!hasCaptured) {
+            await db.execute(
+                'ALTER TABLE sync_ops ADD COLUMN captured_at INTEGER');
+          }
+        }
       },
     );
     await db.execute('PRAGMA foreign_keys = ON');
@@ -174,6 +204,9 @@ class DatabaseService extends ChangeNotifier {
         name TEXT,
         folder_id TEXT,
         favorite INTEGER,
+        content_hash TEXT,
+        size_bytes INTEGER,
+        captured_at INTEGER,
         pending INTEGER NOT NULL DEFAULT 0
       )
     ''');
@@ -217,7 +250,8 @@ class DatabaseService extends ChangeNotifier {
         is_favorite INTEGER DEFAULT 0,
         is_deleted INTEGER DEFAULT 0,
         deleted_at INTEGER,
-        type INTEGER
+        type INTEGER,
+        content_hash TEXT
       )
     ''');
     await db.execute('''
@@ -326,6 +360,9 @@ class DatabaseService extends ChangeNotifier {
     String cloudId,
     String? thumbId, {
     String? filename,
+    String? contentHash,
+    int? sizeBytes,
+    int? capturedAt,
   }) async {
     final db = await database;
     await db.update(
@@ -334,15 +371,49 @@ class DatabaseService extends ChangeNotifier {
         'is_uploaded': 1,
         'cloud_id': cloudId,
         'thumbnail_cloud_id': thumbId,
+        if (contentHash != null) 'content_hash': contentHash,
       },
       where: 'id = ?',
       whereArgs: [id],
     );
     if (filename != null) {
-      await SyncCoordinator()
-          .record(SyncOpKind.createFile, id, name: filename);
+      // The createFile op carries the content hash (identity / dedup), the
+      // plaintext size (so a peer shows the right size immediately), and the
+      // capture time (so every device sorts the gallery identically).
+      await SyncCoordinator().record(
+        SyncOpKind.createFile,
+        id,
+        name: filename,
+        hash: contentHash,
+        size: sizeBytes,
+        captured: capturedAt,
+      );
     }
     notifyListeners();
+  }
+
+  /// Hard-removes a row WITHOUT recording a sync op — for rolling back a
+  /// failed/never-completed upload. Such a file never recorded a createFile
+  /// op (that happens in [markAsUploaded]), so there is nothing to converge
+  /// and a purge op would be spurious. Just erase the phantom row.
+  Future<void> rollbackFailedUpload(String id) async {
+    final db = await database;
+    await db.delete('files', where: 'id = ?', whereArgs: [id]);
+    notifyListeners();
+  }
+
+  /// Clears the local-gallery references (`local_path`, `asset_id`) for a
+  /// file — used after a replace-original edit, whose new bytes have no
+  /// counterpart in the phone gallery, so the display shortcut must fall
+  /// through to the (edited) cloud blob instead of the stale original.
+  Future<void> clearLocalRefs(String id) async {
+    final db = await database;
+    await db.update(
+      'files',
+      {'local_path': null, 'asset_id': null},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   /// Patches the size of an existing row. Used after the in-app editor

@@ -68,6 +68,11 @@ class CnestFile {
   final bool isFavorite;
   final CnestFileType type;
 
+  /// SHA-256 hex of the PLAINTEXT bytes — the file's true content identity.
+  /// Null for legacy rows uploaded before hashing existed; verification
+  /// falls back to size-only in that case.
+  final String? contentHash;
+
   CnestFile({
     required this.id,
     this.cloudId,
@@ -82,6 +87,7 @@ class CnestFile {
     this.assetId,
     this.isFavorite = false,
     required this.type,
+    this.contentHash,
   });
 
   Map<String, dynamic> toMap() {
@@ -99,6 +105,7 @@ class CnestFile {
       'asset_id': assetId,
       'is_favorite': isFavorite ? 1 : 0,
       'type': type.index,
+      'content_hash': contentHash,
     };
   }
 
@@ -117,6 +124,7 @@ class CnestFile {
       assetId: map['asset_id'],
       isFavorite: (map['is_favorite'] as int? ?? 0) == 1,
       type: CnestFileType.values[map['type'] ?? 0],
+      contentHash: map['content_hash'] as String?,
     );
   }
 }

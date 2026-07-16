@@ -51,6 +51,23 @@ class SyncOp {
 
   final bool? favorite;
 
+  /// createFile only: SHA-256 hex of the plaintext (content identity, for
+  /// cross-device dedup / reinstall matching) and the plaintext byte size
+  /// (so a peer knows the expected size immediately — fixes the 0-byte
+  /// display before reconcile joins the blob). Additive & optional: older
+  /// ops simply lack them, newer clients ignore their absence.
+  final String? hash;
+  final int? size;
+
+  /// createFile only: the moment the media was CAPTURED (EXIF DateTimeOriginal
+  /// for photos, MediaStore DATE_TAKEN for gallery picks), as epoch ms. It is
+  /// computed ONCE on the origin from the plaintext and shipped verbatim, so
+  /// every device derives an IDENTICAL gallery order independent of either
+  /// device's wall clock. Null for files with no capture metadata (screenshots
+  /// without EXIF, downloads, documents); those fall back to the create op's
+  /// HLC wall, which is also identical on every device. Additive & optional.
+  final int? captured;
+
   const SyncOp({
     required this.kind,
     required this.deviceId,
@@ -60,6 +77,9 @@ class SyncOp {
     this.name,
     this.folderId,
     this.favorite,
+    this.hash,
+    this.size,
+    this.captured,
   });
 
   /// Idempotency key.
@@ -74,6 +94,9 @@ class SyncOp {
         if (name != null) 'n': name,
         if (folderId != null) 'f': folderId,
         if (favorite != null) 'v': favorite,
+        if (hash != null) 'ch': hash,
+        if (size != null) 'sz': size,
+        if (captured != null) 'ca': captured,
       };
 
   factory SyncOp.fromJson(Map<String, dynamic> json) => SyncOp(
@@ -85,6 +108,9 @@ class SyncOp {
         name: json['n'] as String?,
         folderId: json['f'] as String?,
         favorite: json['v'] as bool?,
+        hash: json['ch'] as String?,
+        size: json['sz'] as int?,
+        captured: json['ca'] as int?,
       );
 
   @override

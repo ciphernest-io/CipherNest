@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -139,6 +140,84 @@ class EncryptionService {
   static Future<Uint8List> decryptFile(Uint8List encryptedBundle) async {
     final fileKey = await decryptFileKeyFromHeader(encryptedBundle);
     return decryptBody(encryptedBundle.sublist(headerSize), fileKey);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Content hash (plaintext identity)
+  // ---------------------------------------------------------------------------
+  //
+  // A stable SHA-256 of the PLAINTEXT bytes, hex-encoded. This is the file's
+  // true identity — the fix for "filename is not identity": before trusting a
+  // local gallery file as a display shortcut, the app compares this hash; it
+  // also enables real content dedup and cross-device / reinstall matching.
+  // The hash is computed in the SAME single pass as encryption (one read):
+  // whole-file for images ([encryptFileWithHash]), streamed for video
+  // ([encryptStreamWithHash]). SHA-256 per 512 KB chunk is far cheaper than
+  // the AES-GCM already running there, so it adds no new blocking; the
+  // cooperative chunked stream that keeps large-video encryption off the
+  // "one long freeze" path is preserved.
+
+  static final Sha256 _sha256 = Sha256();
+
+  static String _hex(List<int> bytes) {
+    final sb = StringBuffer();
+    for (final b in bytes) {
+      sb.write(b.toRadixString(16).padLeft(2, '0'));
+    }
+    return sb.toString();
+  }
+
+  /// SHA-256 hex of an in-memory plaintext buffer (already read once).
+  static Future<String> hashPlaintext(Uint8List bytes) async {
+    final digest = await _sha256.hash(bytes);
+    return _hex(digest.bytes);
+  }
+
+  /// Encrypts [fileBytes] and returns the ciphertext plus the plaintext
+  /// SHA-256 hex. One disk read (the caller's `readAsBytes`); the hash and the
+  /// encryption both run over the in-memory buffer.
+  static Future<({Uint8List encrypted, String hash})> encryptFileWithHash(
+    Uint8List fileBytes,
+  ) async {
+    final hash = await hashPlaintext(fileBytes);
+    final encrypted = await encryptFile(fileBytes);
+    return (encrypted: encrypted, hash: hash);
+  }
+
+  /// Wraps [source] so the plaintext is hashed in the SAME pass that feeds
+  /// encryption — the stream is read exactly once. Returns the encrypted
+  /// stream plus a future that completes with the plaintext SHA-256 hex once
+  /// the source drains (i.e. when the upload has consumed the whole file).
+  static ({Stream<List<int>> stream, Future<String> hash})
+      encryptStreamWithHash(
+    Stream<List<int>> source, {
+    required int totalSize,
+  }) {
+    final sink = _sha256.newHashSink();
+    final completer = Completer<String>();
+    final tapped = source.transform(
+      StreamTransformer<List<int>, List<int>>.fromHandlers(
+        handleData: (chunk, out) {
+          sink.add(chunk);
+          out.add(chunk);
+        },
+        handleDone: (out) {
+          sink.close();
+          sink.hash().then((h) {
+            if (!completer.isCompleted) completer.complete(_hex(h.bytes));
+          });
+          out.close();
+        },
+        handleError: (e, st, out) {
+          if (!completer.isCompleted) completer.completeError(e, st);
+          out.addError(e, st);
+        },
+      ),
+    );
+    return (
+      stream: encryptStream(tapped, totalSize: totalSize),
+      hash: completer.future,
+    );
   }
 
   // ---------------------------------------------------------------------------

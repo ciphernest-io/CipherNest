@@ -12,6 +12,7 @@ import '../../utils/date_grouper.dart';
 import '../../../services/cache_manager_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
+import '../../../services/local_content_guard.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/auto_sync_service.dart';
@@ -502,6 +503,14 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
   bool _loading = true;
   bool _isVideo = false;
   bool _wipedCorruptThumb = false;
+  // Set only when the local original passed LocalContentGuard (content, not
+  // just presence). build() renders Image.file only when this is true, so a
+  // stale/mismatched local file never masquerades as the vault entry.
+  bool _localVerified = false;
+  // A just-synced file whose blob isn't downloadable yet (cloud eventual
+  // consistency, or size/hash not joined). Drives a calm "Syncing…" tile
+  // that auto-retries on the next sync — never a broken/error tile.
+  bool _syncing = false;
 
   /// A corrupt cached thumb (partial write, interrupted decrypt) would
   /// otherwise error-paint forever. Delete it once and re-fetch; if the
@@ -539,7 +548,8 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
     if (widget.file.assetId != null) {
       try {
         final asset = await AssetEntity.fromId(widget.file.assetId!);
-        if (asset != null) {
+        if (asset != null &&
+            await LocalContentGuard.matches(widget.file, asset: asset)) {
           final bytes = await asset.thumbnailDataWithSize(
             const ThumbnailSize(300, 300),
           );
@@ -573,7 +583,8 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
     // Image.file directly when localPath is set.
     if (!_isVideo && widget.file.localPath != null) {
       final localFile = File(widget.file.localPath!);
-      if (await localFile.exists()) {
+      if (await localFile.exists() &&
+          await LocalContentGuard.matches(widget.file, localFile: localFile)) {
         // Same reclaim as rung 1 — local file is authoritative now, the
         // encrypted-cache copy is redundant.
         unawaited(CacheManagerService().invalidateFile(
@@ -581,7 +592,12 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
           cloudId: widget.file.cloudId,
           thumbnailCloudId: widget.file.thumbnailCloudId,
         ));
-        if (mounted) setState(() => _loading = false);
+        if (mounted) {
+          setState(() {
+            _localVerified = true;
+            _loading = false;
+          });
+        }
         return;
       }
     }
@@ -596,7 +612,21 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
       final cacheDir = await getTemporaryDirectory();
       final targetCloudId =
           widget.file.thumbnailCloudId ?? widget.file.cloudId;
-      if (targetCloudId == null) throw Exception("No ID");
+      // No blob joined yet. If the row carries op identity (content hash /
+      // known size), a peer's createFile op arrived but the blob is still
+      // propagating (normal on the receiving device) → calm "Syncing…",
+      // auto-retried next sync. Otherwise it's a true phantom → broken tile.
+      if (targetCloudId == null) {
+        final stillPropagating =
+            widget.file.contentHash != null || widget.file.sizeBytes > 0;
+        if (mounted) {
+          setState(() {
+            _syncing = stillPropagating;
+            _loading = false;
+          });
+        }
+        return;
+      }
 
       final isThumbnail = widget.file.thumbnailCloudId != null;
       final fileName = isThumbnail
@@ -609,17 +639,37 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
             await CloudService().downloadFile(targetCloudId);
         final decryptedBytes =
             await EncryptionService.decryptFile(encryptedBytes);
-        await cacheFile.writeAsBytes(decryptedBytes);
+        // Never cache an empty/implausible result — a momentarily-absent
+        // blob would otherwise stick as a permanent 0-byte tile. Leaving the
+        // cache unwritten means the next sync re-fetches.
+        if (decryptedBytes.isEmpty) {
+          if (mounted) {
+            setState(() {
+              _syncing = true;
+              _loading = false;
+            });
+          }
+          return;
+        }
+        await cacheFile.writeAsBytes(decryptedBytes, flush: true);
       }
 
       if (mounted) {
         setState(() {
           _diskThumbPath = cacheFile.path;
+          _syncing = false;
           _loading = false;
         });
       }
     } catch (e) {
-      if (mounted) setState(() => _loading = false);
+      // Download/decrypt failed (often eventual-consistency on a just-synced
+      // blob). Calm "Syncing…", retried next sync — nothing was cached.
+      if (mounted) {
+        setState(() {
+          _syncing = true;
+          _loading = false;
+        });
+      }
     }
   }
 
@@ -667,8 +717,10 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
       ]);
     }
 
-    // Rung 2 — local original, Flutter decodes at cacheWidth.
-    if (!_isVideo && widget.file.localPath != null) {
+    // Rung 2 — local original, Flutter decodes at cacheWidth. Only when the
+    // content guard verified it (set in _loadThumbnail); a bare localPath is
+    // not enough — it might point at stale/different bytes.
+    if (!_isVideo && _localVerified && widget.file.localPath != null) {
       final localFile = File(widget.file.localPath!);
       if (localFile.existsSync()) {
         return Stack(fit: StackFit.expand, children: [
@@ -703,6 +755,29 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
 
     // Still loading or no thumbnail available — solid placeholder.
     if (_loading) return Container(color: cs.surfaceContainerHighest);
+
+    // Just-synced file whose blob isn't downloadable yet — a CALM
+    // auto-resolving "Syncing…" tile, never a broken-image error. It fills in
+    // on the next sync once the blob is available; on the receiving device a
+    // briefly-absent blob is the normal case, not corruption.
+    if (_syncing) {
+      return Container(
+        color: cs.surfaceContainerHighest,
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ThemeIcon('arrowsClockwise',
+                  color: cs.onSurface.withAlpha(120), size: 26),
+              const SizedBox(height: 6),
+              Text('Syncing…',
+                  style: TextStyle(
+                      color: cs.onSurface.withAlpha(120), fontSize: 11)),
+            ],
+          ),
+        ),
+      );
+    }
 
     return Container(
       color: cs.surfaceContainerHighest,

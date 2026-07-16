@@ -78,6 +78,48 @@ class FileMetadataService {
   static final FileMetadataService _instance = FileMetadataService._();
   factory FileMetadataService() => _instance;
 
+  /// The capture moment baked into an image's EXIF, as epoch ms — the
+  /// device-independent key the gallery sorts by so every device agrees on
+  /// order regardless of clock skew. Reads `EXIF DateTimeOriginal` (when the
+  /// shutter fired), falling back to `Image DateTime` (last modified in-camera).
+  ///
+  /// EXIF timestamps carry no timezone; we interpret them in the ORIGIN
+  /// device's local zone. That is harmless for ordering because the value is
+  /// computed once here and then shipped verbatim in the createFile op — every
+  /// device stores the identical integer. Returns null when there is no EXIF
+  /// date (screenshots, downloads, PNGs, non-photos); the caller then falls
+  /// back to the op's HLC wall, which is also identical across devices.
+  static Future<int?> captureEpochFromImageBytes(Uint8List bytes) async {
+    try {
+      final tags = await readExifFromBytes(bytes);
+      final raw = tags['EXIF DateTimeOriginal']?.printable ??
+          tags['Image DateTime']?.printable;
+      return _parseExifDate(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Parses the EXIF datetime shape `YYYY:MM:DD HH:MM:SS` into epoch ms, or
+  /// null if absent/malformed/zeroed.
+  static int? _parseExifDate(String? raw) {
+    if (raw == null) return null;
+    final s = raw.trim();
+    // The date portion uses ':' separators EXIF-style; the time uses ':' too.
+    // Split on the space, then rebuild an ISO-ish string DateTime can parse.
+    final parts = s.split(' ');
+    if (parts.length != 2) return null;
+    final date = parts[0].split(':'); // [YYYY, MM, DD]
+    if (date.length != 3) return null;
+    // A common "no date" sentinel some cameras write.
+    if (date[0] == '0000') return null;
+    final iso = '${date[0]}-${date[1]}-${date[2]} ${parts[1]}';
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return null;
+    final ms = dt.millisecondsSinceEpoch;
+    return ms > 0 ? ms : null;
+  }
+
   /// Extracts as much of the info sheet's payload as we can. Two layered
   /// sources, most-informative-first:
   ///

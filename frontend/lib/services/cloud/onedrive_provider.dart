@@ -495,6 +495,16 @@ class OneDriveProvider implements CloudProvider {
       if (resp.statusCode != 200 && resp.statusCode != 302) {
         throw Exception('OneDrive download failed (${resp.statusCode})');
       }
+      // Parity with the Drive provider: an empty/short body is a
+      // still-propagating or transient read, NOT a valid blob (every real
+      // vault blob has an 81-byte header + 20-byte preamble at minimum).
+      // Throwing here (inside _withRetry) means the caller never caches a
+      // 0-byte file — it retries, and the display shows a calm "Syncing…".
+      final len = resp.contentLength ?? resp.bodyBytes.length;
+      if (resp.bodyBytes.isEmpty || resp.bodyBytes.length < len) {
+        throw Exception('OneDrive download incomplete '
+            '(${resp.bodyBytes.length}/$len bytes)');
+      }
       return resp.bodyBytes;
     });
   }

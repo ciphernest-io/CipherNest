@@ -19,6 +19,7 @@ import '../../config/theme_controller.dart';
 import '../../models/file_model.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
+import '../../../services/local_content_guard.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/auto_sync_service.dart';
@@ -2348,6 +2349,11 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
   // (e.g. interrupted auto-sync upload whose gallery copy was later
   // deleted). Renders a broken-image state instead of spinning forever.
   bool _loadFailed = false;
+  // The blob exists (op says so) but this device can't decrypt it yet — still
+  // propagating through the provider. Distinct from _loadFailed: this is the
+  // normal eventual-consistency case and self-heals on the next sync/open, so
+  // it shows a calm "Syncing…" state, never a broken-image.
+  bool _syncing = false;
   bool _isVideo = false;
 
   // Video Player State
@@ -2553,10 +2559,13 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     // of black-flashing into a spinner.
     await _loadPlaceholder();
 
-    // STEP 2 — full image. Local original wins; else cloud download.
+    // STEP 2 — full image. Local original wins ONLY when the content guard
+    // verifies it matches the vault entry (size gate always; hash for
+    // images) — a bare localPath might point at stale/different bytes.
     if (widget.file.localPath != null) {
       final localFile = File(widget.file.localPath!);
-      if (await localFile.exists()) {
+      if (await localFile.exists() &&
+          await LocalContentGuard.matches(widget.file, localFile: localFile)) {
         if (_isVideo) {
           if (mounted) {
             setState(() => _isLoadingFull = false);
@@ -2602,13 +2611,23 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     }
 
     if (widget.file.cloudId == null) {
-      // Phantom entry — no local copy (checked above), nothing cached, and
-      // the upload never completed. Nothing exists to show; ending the
-      // spinner here is what prevents the infinite loader.
+      // No cloud blob linked yet. Two very different cases:
+      //  * A peer's createFile op materialized this row but reconcile hasn't
+      //    joined the blob yet (it carries a content hash / known size) — the
+      //    normal cross-device case, still propagating → calm "Syncing…".
+      //  * A true phantom: no local copy (checked above), nothing cached, the
+      //    upload never completed and carries no op identity → broken state,
+      //    which ends the spinner instead of looping forever.
+      final stillPropagating =
+          widget.file.contentHash != null || widget.file.sizeBytes > 0;
       if (mounted) {
         setState(() {
           _isLoadingFull = false;
-          _loadFailed = true;
+          if (stillPropagating) {
+            _syncing = true;
+          } else {
+            _loadFailed = true;
+          }
         });
       }
       return;
@@ -2622,7 +2641,17 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
       final decryptedBytes = await EncryptionService.decryptFile(
         encryptedBytes,
       );
-      await fullFile.writeAsBytes(decryptedBytes);
+      // Never cache an empty result — treat as still-syncing and retry.
+      if (decryptedBytes.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _isLoadingFull = false;
+            _syncing = true;
+          });
+        }
+        return;
+      }
+      await fullFile.writeAsBytes(decryptedBytes, flush: true);
 
       if (mounted) {
         setState(() {
@@ -2632,10 +2661,12 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
         widget.onLoaded(widget.index);
       }
     } catch (e) {
+      // Download/decrypt failed — usually the blob is still propagating to
+      // this device. Calm "Syncing…", retried on the next sync/open.
       if (mounted) {
         setState(() {
           _isLoadingFull = false;
-          _loadFailed = true;
+          _syncing = true;
         });
       }
     }
@@ -2910,7 +2941,34 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
             ),
           ),
 
-        // E. Broken state — nothing local, nothing cached, nothing in the
+        // E. Syncing state — the blob exists but hasn't propagated to this
+        // device yet (provider eventual-consistency). Calm and auto-resolving:
+        // it re-fetches on the next sync/open, so it must never look broken.
+        // Shown over the low-res thumb when we have one, else on its own.
+        if (!_isVideo && _syncing && _fullImage == null)
+          Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ThemeIcon(
+                  'arrowsClockwise',
+                  color: Theme.of(context).colorScheme.onSurface.withAlpha(140),
+                  size: 40,
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'Syncing…',
+                  style: TextStyle(
+                    color:
+                        Theme.of(context).colorScheme.onSurface.withAlpha(140),
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+        // F. Broken state — nothing local, nothing cached, nothing in the
         // cloud (or the download failed). Matches the grid's broken tile.
         if (!_isVideo &&
             _loadFailed &&

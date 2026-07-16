@@ -25,6 +25,7 @@ import '../../../services/database_backup_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/cloud/account_registry.dart';
 import '../../../services/encryption_service.dart';
+import '../../../services/file_metadata_service.dart';
 import '../../../services/sync_service.dart';
 import '../../../services/sync/sync_coordinator.dart';
 import '../../widgets/friendly_error_sheet.dart';
@@ -249,6 +250,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             if (a.title == filename) {
               final f = await a.file;
               if (f != null) {
+                // Filename is not identity — require the byte length to match
+                // too, so a different image that happens to reuse the name is
+                // not bound as this file's local shortcut. (fileSize == 0 ⇒
+                // unknown; accept on name alone in that case.)
+                if (fileSize > 0 && await f.length() != fileSize) continue;
                 return _GalleryAssetMatch(
                   assetId: a.id,
                   localPath: f.path,
@@ -416,11 +422,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         matchedLocalPath = match?.localPath;
       }
 
+      // Capture time = the device-identical gallery sort key. Prefer the
+      // image's own EXIF (baked in, timezone-stable across devices); for a
+      // gallery-resolved video (no EXIF) use MediaStore's DATE_TAKEN. Null
+      // for everything else — the sync layer then falls back to the create
+      // op's HLC wall, which is also identical on every device.
+      int? capturedMs;
+      if (fileBytes != null && isMedia && !isVideo) {
+        capturedMs =
+            await FileMetadataService.captureEpochFromImageBytes(fileBytes);
+      }
+      if (capturedMs == null && matchedAssetId != null) {
+        try {
+          final a = await AssetEntity.fromId(matchedAssetId);
+          final dt = a?.createDateTime;
+          if (dt != null && dt.millisecondsSinceEpoch > 0) {
+            capturedMs = dt.millisecondsSinceEpoch;
+          }
+        } catch (_) {}
+      }
+
       final newFile = CnestFile(
         id: fileId,
         filename: filename,
         sizeBytes: fileSize,
-        createdAt: DateTime.now(),
+        createdAt: capturedMs != null
+            ? DateTime.fromMillisecondsSinceEpoch(capturedMs)
+            : DateTime.now(),
         isUploaded: false,
         localPath: matchedLocalPath ?? (isLocalFile ? pickedPath : null),
         assetId: matchedAssetId,
@@ -450,29 +478,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       // --- 5. ENCRYPT & UPLOAD ---
+      // Content hash (plaintext SHA-256) is computed in the SAME pass as
+      // encryption — a Future for the streamed video (resolves when the
+      // upload drains the source), an immediate value for whole-file bytes.
       String mainCloudFilename = '$fileId.cnest';
       Future<String?> mainUploadFuture;
-      
+      Future<String>? contentHashFuture;
+
       if (isVideo && fileStream != null) {
         final encryptedSize = EncryptionService.calculateEncryptedSize(fileSize);
-        final encryptedStream =
-            EncryptionService.encryptStream(fileStream, totalSize: fileSize);
+        final hashed = EncryptionService.encryptStreamWithHash(
+            fileStream, totalSize: fileSize);
+        contentHashFuture = hashed.hash;
 
         mainUploadFuture = CloudService().uploadEncryptedFile(
           filename: mainCloudFilename,
           type: type,
           originalName: filename,
-          stream: encryptedStream,
+          stream: hashed.stream,
           size: encryptedSize,
           bytes: null,
         );
       } else if (fileBytes != null) {
-        final encryptedMainBytes = await EncryptionService.encryptFile(fileBytes);
+        final hashed = await EncryptionService.encryptFileWithHash(fileBytes);
+        contentHashFuture = Future.value(hashed.hash);
         mainUploadFuture = CloudService().uploadEncryptedFile(
           filename: mainCloudFilename,
           type: type,
           originalName: filename,
-          bytes: encryptedMainBytes,
+          bytes: hashed.encrypted,
         );
       } else {
         throw Exception("Invalid state");
@@ -496,8 +530,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       if (mainCloudId == null) throw Exception('Main upload failed');
 
+      // The stream hash resolves once the upload has drained the source.
+      final contentHash = await contentHashFuture;
+
       await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId,
-          filename: filename);
+          filename: filename,
+          contentHash: contentHash,
+          sizeBytes: fileSize,
+          capturedAt: capturedMs);
       DatabaseBackupService().scheduleBackup();
 
       // --- 6. CACHE MANAGEMENT ---
@@ -523,14 +563,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     } catch (e, s) {
       debugPrint('Upload failed: $e\n$s');
       // The DB row for `fileId` may have been inserted BEFORE the upload
-      // started (step 4). If we don't roll it back here, the gallery
-      // keeps a phantom entry for a file that never made it to the cloud
-      // — the "cryptic red developer error" leaves a leftover row.
-      // Roll back cleanly, then surface a friendly error sheet.
+      // started (step 4). If we don't roll it back here, the gallery keeps a
+      // phantom entry for a file that never made it to the cloud. HARD-delete
+      // (not soft) — a failed upload must vanish entirely, not land in the
+      // Recycle Bin as a mysterious "where did this come from?" entry that
+      // undermines trust in the bin. Matches the auto-sync rollback.
       final rollbackId = fileId;
       if (rollbackId != null) {
         try {
-          await DatabaseService().deleteFile(rollbackId);
+          await DatabaseService().rollbackFailedUpload(rollbackId);
         } catch (rollbackErr) {
           debugPrint('Upload rollback failed: $rollbackErr');
         }

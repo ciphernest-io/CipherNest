@@ -73,6 +73,9 @@ class LocalSyncAction {
   final String? name;
   final String? folderId;
   final bool? favorite;
+  final String? hash;
+  final int? size;
+  final int? captured;
 
   const LocalSyncAction({
     required this.kind,
@@ -80,6 +83,9 @@ class LocalSyncAction {
     this.name,
     this.folderId,
     this.favorite,
+    this.hash,
+    this.size,
+    this.captured,
   });
 }
 
@@ -130,6 +136,9 @@ class SyncEngine {
         name: action.name,
         folderId: action.folderId,
         favorite: action.favorite,
+        hash: action.hash,
+        size: action.size,
+        captured: action.captured,
       );
       await txn.insert('sync_ops', _opToRow(op, pending: true),
           conflictAlgorithm: ConflictAlgorithm.ignore);
@@ -459,7 +468,15 @@ class SyncEngine {
     final state = replayOps(allOps);
 
     final fileRows = await db.query('files',
-        columns: ['id', 'filename', 'is_favorite', 'is_deleted'],
+        columns: [
+          'id',
+          'filename',
+          'is_favorite',
+          'is_deleted',
+          'size_bytes',
+          'content_hash',
+          'created_at',
+        ],
         where: 'account_id = ?',
         whereArgs: [accountId]);
     final existing = {for (final r in fileRows) r['id'] as String: r};
@@ -491,6 +508,7 @@ class SyncEngine {
       // by deleted_at age for DISPLAY — a pure function of the tombstone's
       // own timestamp, so display stays consistent too.
       if (row == null) {
+        final create = _createOp(allOps, id);
         batch.insert(
             'files',
             {
@@ -498,8 +516,17 @@ class SyncEngine {
               'cloud_id': null, // reconcile joins the blob by stem later
               'account_id': accountId,
               'filename': f.name,
-              'size_bytes': 0,
-              'created_at': _createWall(opRows, id) ?? nowMs,
+              // Size + hash travel in the createFile op, so a peer shows the
+              // right size immediately (fixes the "0 bytes" a synced file
+              // showed before reconcile joined the blob) and can dedup by
+              // content later.
+              'size_bytes': create?.size ?? 0,
+              'content_hash': create?.hash,
+              // Canonical, device-identical gallery sort key: capture time
+              // (shipped in the op) when known, else the create op's HLC wall
+              // (also identical on every device). Both S and V therefore
+              // materialize the SAME created_at and show the SAME order.
+              'created_at': create?.captured ?? _createWall(opRows, id) ?? nowMs,
               'is_uploaded': 1,
               'local_path': null,
               'is_favorite': f.favorite ? 1 : 0,
@@ -518,6 +545,26 @@ class SyncEngine {
           update['is_deleted'] = f.deleted ? 1 : 0;
           update['deleted_at'] =
               f.deleted ? _tombstoneWall(opRows, id) : null;
+        }
+        // Backfill accurate plaintext size / content hash from the create op
+        // for rows first seeded by reconcile from the blob listing (which
+        // only knows the ENCRYPTED size and no hash).
+        final create = _createOp(allOps, id);
+        if (create?.size != null && row['size_bytes'] != create!.size) {
+          update['size_bytes'] = create.size;
+        }
+        if (create?.hash != null && row['content_hash'] == null) {
+          update['content_hash'] = create!.hash;
+        }
+        // Converge created_at to the canonical, device-identical sort key
+        // (capture time, else the create op's HLC wall). This is how the
+        // ORIGIN's own row — inserted by addFile with a local wall clock —
+        // adopts the SAME value every peer derives, so the gallery order is
+        // identical on S and V. Left untouched for rows with no create op
+        // (legacy / reconcile-only) so their cloud created-time survives.
+        final canonicalWall = create?.captured ?? _createWall(opRows, id);
+        if (canonicalWall != null && row['created_at'] != canonicalWall) {
+          update['created_at'] = canonicalWall;
         }
         if (update.isNotEmpty) {
           batch.update('files', update, where: 'id = ?', whereArgs: [id]);
@@ -625,6 +672,9 @@ class SyncEngine {
         'name': op.name,
         'folder_id': op.folderId,
         'favorite': op.favorite == null ? null : (op.favorite! ? 1 : 0),
+        'content_hash': op.hash,
+        'size_bytes': op.size,
+        'captured_at': op.captured,
         'pending': pending ? 1 : 0,
       };
 
@@ -638,7 +688,18 @@ class SyncEngine {
         folderId: row['folder_id'] as String?,
         favorite:
             row['favorite'] == null ? null : (row['favorite'] as int) == 1,
+        hash: row['content_hash'] as String?,
+        size: row['size_bytes'] as int?,
+        captured: row['captured_at'] as int?,
       );
+
+  /// The createFile op for a file id (carries name/hash/size/captured), or null.
+  SyncOp? _createOp(List<SyncOp> ops, String id) {
+    for (final op in ops) {
+      if (op.kind == SyncOpKind.createFile && op.targetId == id) return op;
+    }
+    return null;
+  }
 
   int _tombstoneWall(List<Map<String, Object?>> opRows, String id) {
     var wall = 0;

@@ -259,30 +259,35 @@ class AutoSyncService {
     await DatabaseService().addFile(newFile);
 
     try {
-      // Encrypt and upload main file
+      // Encrypt and upload main file. Content hash (plaintext SHA-256) is
+      // computed in the same single pass as encryption.
       final mainCloudFilename = '$fileId.cnest';
       String? mainCloudId;
+      String? contentHash;
 
       if (isVideo) {
         final encryptedSize =
             EncryptionService.calculateEncryptedSize(fileSize);
-        final encryptedStream =
-            EncryptionService.encryptStream(file.openRead(), totalSize: fileSize);
+        final hashed = EncryptionService.encryptStreamWithHash(
+            file.openRead(), totalSize: fileSize);
         mainCloudId = await CloudService().uploadEncryptedFile(
           filename: mainCloudFilename,
           type: CnestFileType.image,
           originalName: filename,
-          stream: encryptedStream,
+          stream: hashed.stream,
           size: encryptedSize,
         );
+        contentHash = await hashed.hash;
       } else {
         final fileBytes = await file.readAsBytes();
-        final encrypted = await EncryptionService.encryptFile(fileBytes);
+        final hashed =
+            await EncryptionService.encryptFileWithHash(fileBytes);
+        contentHash = hashed.hash;
         mainCloudId = await CloudService().uploadEncryptedFile(
           filename: mainCloudFilename,
           type: isImage ? CnestFileType.image : CnestFileType.document,
           originalName: filename,
-          bytes: encrypted,
+          bytes: hashed.encrypted,
         );
       }
 
@@ -301,9 +306,15 @@ class AutoSyncService {
       }
 
       // Mark as uploaded — also records the createFile sync op (blob is
-      // durable at this point; op-after-blob crash ordering holds).
+      // durable at this point; op-after-blob crash ordering holds). The
+      // asset's MediaStore capture time travels as the gallery sort key so
+      // every device orders this photo identically.
+      final capturedMs = asset.createDateTime.millisecondsSinceEpoch;
       await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId,
-          filename: filename);
+          filename: filename,
+          contentHash: contentHash,
+          sizeBytes: fileSize,
+          capturedAt: capturedMs > 0 ? capturedMs : null);
 
       return true;
     } catch (e) {

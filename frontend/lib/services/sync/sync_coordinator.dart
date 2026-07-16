@@ -45,6 +45,9 @@ class SyncCoordinator {
     String? name,
     String? folderId,
     bool? favorite,
+    String? hash,
+    int? size,
+    int? captured,
   }) async {
     try {
       await engine?.recordLocalOp(LocalSyncAction(
@@ -53,6 +56,9 @@ class SyncCoordinator {
         name: name,
         folderId: folderId,
         favorite: favorite,
+        hash: hash,
+        size: size,
+        captured: captured,
       ));
     } catch (e) {
       debugPrint('SyncCoordinator.record($kind, $targetId) failed: $e');

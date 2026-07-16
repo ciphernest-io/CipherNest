@@ -301,29 +301,32 @@ class MigrationService {
     );
     await DatabaseService().addFile(newFile);
 
-    // Encrypt and upload
+    // Encrypt and upload (content hash computed in the same pass).
     final mainCloudFilename = '$fileId.cnest';
     String? mainCloudId;
+    String? contentHash;
 
     if (isVideo) {
       final encryptedSize = EncryptionService.calculateEncryptedSize(fileSize);
-      final encryptedStream =
-          EncryptionService.encryptStream(file.openRead(), totalSize: fileSize);
+      final hashed = EncryptionService.encryptStreamWithHash(
+          file.openRead(), totalSize: fileSize);
       mainCloudId = await CloudService().uploadEncryptedFile(
         filename: mainCloudFilename,
         type: CnestFileType.image,
         originalName: filename,
-        stream: encryptedStream,
+        stream: hashed.stream,
         size: encryptedSize,
       );
+      contentHash = await hashed.hash;
     } else {
       final fileBytes = await file.readAsBytes();
-      final encrypted = await EncryptionService.encryptFile(fileBytes);
+      final hashed = await EncryptionService.encryptFileWithHash(fileBytes);
+      contentHash = hashed.hash;
       mainCloudId = await CloudService().uploadEncryptedFile(
         filename: mainCloudFilename,
         type: isImage ? CnestFileType.image : CnestFileType.document,
         originalName: filename,
-        bytes: encrypted,
+        bytes: hashed.encrypted,
       );
     }
 
@@ -341,8 +344,12 @@ class MigrationService {
       );
     }
 
+    final capturedMs = asset.createDateTime.millisecondsSinceEpoch;
     await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId,
-        filename: filename);
+        filename: filename,
+        contentHash: contentHash,
+        sizeBytes: fileSize,
+        capturedAt: capturedMs > 0 ? capturedMs : null);
     return true;
   }
 }
