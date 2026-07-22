@@ -1,3 +1,4 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 import 'package:workmanager/workmanager.dart';
@@ -8,6 +9,7 @@ import 'package:workmanager/workmanager.dart';
 import 'package:material_symbols_icons/symbols_map.dart';
 
 import 'src/app.dart';
+import 'src/utils/byte_format.dart';
 import 'services/cache_manager_service.dart';
 import 'services/auto_sync_worker.dart';
 
@@ -20,7 +22,14 @@ Future<void> main() async {
     androidNotificationOngoing: true,
   );
   Workmanager().initialize(callbackDispatcher, isInDebugMode: false);
+  // Size-unit preference (1000 vs 1024) — cached before any UI formats.
+  await ByteFormat.init();
   CacheManagerService().enforceCacheLimit();
+  // Sweep file_picker's cache-copy directory on cold start. Per-attempt
+  // cleanup happens in the upload flows' finally blocks; this catches
+  // copies orphaned by process death mid-pick. Cold start only — calling
+  // it mid-session could delete another screen's in-flight pick.
+  FilePicker.platform.clearTemporaryFiles().catchError((_) => null);
   // Fire-and-forget: re-registers the auto-sync periodic task if the user
   // is on background mode. Idempotent — a no-op if the OS still has the
   // task scheduled, a re-register if it dropped it (force-stop, OEM

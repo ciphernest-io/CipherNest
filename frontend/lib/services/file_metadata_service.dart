@@ -153,6 +153,24 @@ class FileMetadataService {
     String? audioCodec;
     int? fps;
 
+    // TIER 0 — the vault row itself. Dimensions/duration (v12),
+    // codec/audio/fps (v13), and device model (v14, from the MP4's udta
+    // `@mod` vendor atom) are captured at upload time exactly because
+    // manually-uploaded files often have neither an AssetEntity nor a live
+    // localPath afterwards — without this tier their details sheet
+    // degraded to just a size.
+    if (file.width != null && file.width! > 0) width = file.width;
+    if (file.height != null && file.height! > 0) height = file.height;
+    if (isVideo && file.durationMs != null && file.durationMs! > 0) {
+      duration = Duration(milliseconds: file.durationMs!);
+    }
+    if (isVideo) {
+      videoCodec = file.videoCodec;
+      audioCodec = file.audioCodec;
+      if (file.fps != null && file.fps! > 0) fps = file.fps;
+      deviceModel = file.deviceModel;
+    }
+
     // TIER 1 — AssetEntity for dimensions + duration.
     if (file.assetId != null) {
       try {
@@ -180,12 +198,15 @@ class FileMetadataService {
           if (await f.exists()) {
             final mp4 = await Mp4MetadataParser.parse(f);
             if (mp4 != null) {
-              videoCodec = mp4.videoCodec;
-              audioCodec = mp4.audioCodec;
-              fps = mp4.fps;
+              // Backfill only — tier 0 (vault columns) already carries
+              // these for post-v13/v14 uploads.
+              videoCodec ??= mp4.videoCodec;
+              audioCodec ??= mp4.audioCodec;
+              fps ??= mp4.fps;
               width ??= mp4.width;
               height ??= mp4.height;
               duration ??= mp4.duration;
+              deviceModel ??= mp4.deviceModel;
             }
           }
         } catch (e) {
@@ -202,7 +223,14 @@ class FileMetadataService {
           final tags = await readExifFromBytes(bytes);
           deviceModel = tags['Image Model']?.printable.trim();
           iso = _intOf(tags['EXIF ISOSpeedRatings']);
-          focal = _ratioOf(tags['EXIF FocalLength']);
+          // 35mm-EQUIVALENT focal length when the camera wrote it — that's
+          // the number Samsung Gallery displays (e.g. 23 mm), and what
+          // photographers expect. The raw physical lens value (~6 mm on a
+          // phone sensor) is only the fallback.
+          final focal35 = _intOf(tags['EXIF FocalLengthIn35mmFilm']);
+          focal = focal35 != null && focal35 > 0
+              ? focal35.toDouble()
+              : _ratioOf(tags['EXIF FocalLength']);
           aperture = _ratioOf(tags['EXIF FNumber']);
           shutter = _formatShutter(tags['EXIF ExposureTime']);
           exposureBias = _ratioOf(tags['EXIF ExposureBiasValue']);

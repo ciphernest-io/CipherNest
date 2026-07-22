@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'cloud/cloud_service.dart';
@@ -40,17 +41,23 @@ class RecycleBinService {
       final cloudId = ids?['cloud_id'];
       final thumbId = ids?['thumbnail_cloud_id'];
 
+      // A failed cloud delete never blocks the purge: the purge tombstone
+      // condemns the blob and the sync cycle's condemned-blob sweep retries
+      // the deletion until it lands. Log it anyway — silent swallows here
+      // once hid the failure that resurrected deleted photos.
       if (cloudId != null) {
         try {
           await CloudService().deleteFile(cloudId);
-        } catch (_) {
-          // Silent — blob may already be gone, account may be signed out.
+        } catch (e) {
+          debugPrint('Bin sweep: blob delete failed ($cloudId): $e');
         }
       }
       if (thumbId != null) {
         try {
           await CloudService().deleteFile(thumbId);
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('Bin sweep: thumb delete failed ($thumbId): $e');
+        }
       }
 
       try {

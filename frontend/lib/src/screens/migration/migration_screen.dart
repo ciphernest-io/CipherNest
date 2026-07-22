@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import '../../utils/byte_format.dart';
 import 'package:flutter/material.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
@@ -175,14 +176,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
     MigrationService().cancel();
   }
 
-  String _formatBytes(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    if (bytes < 1024 * 1024 * 1024) {
-      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-    }
-    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
-  }
+  String _formatBytes(int bytes) => formatBytes(bytes);
 
   String _formatDuration(Duration d) {
     if (d.inHours > 0) return '${d.inHours}h ${d.inMinutes.remainder(60)}m';

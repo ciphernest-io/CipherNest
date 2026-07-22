@@ -19,7 +19,9 @@ import '../../config/theme_controller.dart';
 import '../../models/file_model.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
+import '../../../services/cache_manager_service.dart';
 import '../../../services/local_content_guard.dart';
+import '../../utils/byte_format.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/auto_sync_service.dart';
@@ -66,6 +68,30 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   double _dragDy = 0;
   bool _sheetTriggered = false;
 
+  // Swipe-down-to-close, driven by the same raw-pointer tracking as the
+  // details sheet — NOT by a Dismissible. Dismissible's vertical drag
+  // recognizer plus the PageView's horizontal one covered both axes of the
+  // gesture arena, so whichever finger of a pinch moved first handed the
+  // gesture to a drag before InteractiveViewer's scale recognizer could
+  // claim it — pinch-to-zoom effectively never fired. Listeners see raw
+  // events without entering the arena, so this path can't steal the pinch.
+  bool _dismissDragging = false;
+  double _dismissDy = 0;
+  bool _dismissPopped = false;
+
+  // True while ≥2 fingers are down. Freezes the pager so its horizontal
+  // drag can't fight (or keep dragging under) the raw-pointer pinch in
+  // _SinglePhotoView. Flipping it on pointer-down is safe: the pinch
+  // hasn't produced any movement yet, and the raw engine doesn't care
+  // about rebuilds.
+  bool _multiTouch = false;
+
+  // Set the moment a single-finger drag reads as VERTICAL (sheet or
+  // dismiss). Freezes the pager for the rest of the gesture — without it
+  // the pager's horizontal drag tracks the stray dx of a vertical swipe
+  // and the page wobbles left/right under the sheet/dismiss motion.
+  bool _verticalDragLock = false;
+
   // --- Active-video binding, reported by the focused page. The dock uses it
   // to render the Samsung-style pill (play/pause + time), the mute toggle,
   // and the in-strip scrubber.
@@ -77,6 +103,10 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   Duration? _videoDurationHint;
   // Samsung behavior: every video starts playing muted when you land on it.
   bool _videoMuted = true;
+  // True only when the USER pressed pause. A buffer underrun also drops
+  // isPlaying, so intent — not player state — is what decides whether a
+  // stall shows the loader and auto-resumes, or stays politely paused.
+  bool _videoPauseIntent = false;
   // Tapping the centered video thumb expands it into a per-second frame
   // strip; the bar then scrolls under a FIXED center playhead to scrub.
   // Collapses on tap, page change, or when the scrub exits the segment.
@@ -437,12 +467,17 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   }
 
   Future<void> _prewarmThumb(CnestFile file) async {
-    // Local videos: pre-extract a frame into the shared thumb cache while
-    // the user is still on a neighboring page — extraction takes a few
-    // hundred ms, which is exactly the filmstrip lag being hidden here.
+    // Local videos WITHOUT a MediaStore binding: pre-extract a frame into
+    // the shared thumb cache while the user is still on a neighboring page —
+    // extraction takes a few hundred ms, which is exactly the filmstrip lag
+    // being hidden here. MediaStore-bound videos are excluded (same
+    // assetId == null gate as _persistVideoFrame/_persistFrame): Android
+    // serves their frame, and this write was the last remaining reason a
+    // fully-local video still put bytes in the app cache.
     final ext = file.filename.split('.').last.toLowerCase();
     final isVideo = const {'mp4', 'mov', 'avi', 'mkv'}.contains(ext);
     if (isVideo &&
+        file.assetId == null &&
         file.cloudId != null &&
         file.localPath != null &&
         File(file.localPath!).existsSync()) {
@@ -1015,6 +1050,35 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     );
   }
 
+  /// A zoomed pan pulled past the photo's edge (Samsung edge handoff):
+  /// turn the page. The pager animates programmatically, so the
+  /// NeverScrollable physics that guard the zoom don't block it; the page
+  /// change resets the zoom state through the normal onPageChanged path.
+  void _handleEdgeOvershoot(int direction) {
+    final target = _currentIndex + direction;
+    if (target < 0 || target >= _currentFiles.length) return;
+    _pageController.animateToPage(
+      target,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  /// Finger lifted mid dismiss-drag: past the threshold → close the viewer;
+  /// short of it → snap the photo back (the AnimatedSlide/Scale pair
+  /// animates the return once _dismissDragging flips off).
+  void _endDismissDrag() {
+    if (_dismissDy > 120 && !_dismissPopped) {
+      _dismissPopped = true;
+      Navigator.pop(context, _hasDeleted);
+      return;
+    }
+    setState(() {
+      _dismissDragging = false;
+      _dismissDy = 0;
+    });
+  }
+
   void _showDetailsSheet() {
     final file = _currentFiles[_currentIndex];
     showModalBottomSheet(
@@ -1142,8 +1206,19 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                       _activePointers++;
                       _dragDx = 0;
                       _dragDy = 0;
-                      // Multi-touch means pinch — never the details sheet.
-                      if (_activePointers > 1) _sheetTriggered = true;
+                      // Multi-touch means pinch — never the details sheet,
+                      // any in-progress dismiss drag snaps back, and the
+                      // pager freezes for the rest of the gesture.
+                      if (_activePointers > 1) {
+                        _sheetTriggered = true;
+                        if (!_multiTouch || _dismissDragging) {
+                          setState(() {
+                            _multiTouch = true;
+                            _dismissDragging = false;
+                            _dismissDy = 0;
+                          });
+                        }
+                      }
                     },
                     onPointerMove: (event) {
                       if (_sheetTriggered || _isZoomed || _activePointers != 1) {
@@ -1151,20 +1226,65 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                       }
                       _dragDx += event.delta.dx;
                       _dragDy += event.delta.dy;
+                      if (_dismissDragging) {
+                        final dy = _dismissDy + event.delta.dy;
+                        setState(() => _dismissDy = dy < 0 ? 0 : dy);
+                        return;
+                      }
+                      // Commit to VERTICAL early: freeze the pager the
+                      // moment the drag reads more up/down than sideways,
+                      // so its horizontal recognizer stops tracking the
+                      // stray dx of a sheet/dismiss swipe.
+                      if (!_verticalDragLock &&
+                          _dragDy.abs() > 16 &&
+                          _dragDy.abs() > _dragDx.abs() * 1.2) {
+                        setState(() => _verticalDragLock = true);
+                      }
                       // Deliberate swipe-up: far enough, and clearly more
                       // vertical than horizontal.
                       if (_dragDy < -60 && _dragDy.abs() > _dragDx.abs() * 1.5) {
                         _sheetTriggered = true;
                         _showDetailsSheet();
+                        return;
+                      }
+                      // Deliberate swipe-down: start the drag-follow close.
+                      if (_dragDy > 24 && _dragDy > _dragDx.abs() * 1.5) {
+                        setState(() {
+                          _dismissDragging = true;
+                          _dismissDy = _dragDy;
+                        });
                       }
                     },
                     onPointerUp: (_) {
                       _activePointers = max(0, _activePointers - 1);
-                      if (_activePointers == 0) _sheetTriggered = false;
+                      if (_activePointers == 0) {
+                        _sheetTriggered = false;
+                        // Unfreeze only when ALL fingers lift — the finger
+                        // left over from a pinch must not fling the pager.
+                        if (_multiTouch || _verticalDragLock) {
+                          setState(() {
+                            _multiTouch = false;
+                            _verticalDragLock = false;
+                          });
+                        }
+                        if (_dismissDragging) _endDismissDrag();
+                      }
                     },
                     onPointerCancel: (_) {
                       _activePointers = max(0, _activePointers - 1);
-                      if (_activePointers == 0) _sheetTriggered = false;
+                      if (_activePointers == 0) {
+                        _sheetTriggered = false;
+                        if (_multiTouch ||
+                            _verticalDragLock ||
+                            _dismissDragging) {
+                          setState(() {
+                            _multiTouch = false;
+                            _verticalDragLock = false;
+                            _dismissDragging = false;
+                            _dismissDy = 0;
+                          });
+                        }
+                      }
                     },
                     child: GestureDetector(
                       onTap: () {
@@ -1173,20 +1293,35 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                         // otherwise reappear scrolled to the first item.
                         if (_showControls) _restoreStripPosition();
                       },
-                      child: Dismissible(
-                        key: const Key('viewer_dismiss'),
-                        // Swipe down to dismiss — unless zoomed in, when the
-                        // drag must pan the image instead.
-                        direction: _isZoomed
-                            ? DismissDirection.none
-                            : DismissDirection.down,
-                        onDismissed: (direction) =>
-                            Navigator.pop(context, _hasDeleted),
-                        child: PageView.builder(
+                      // Drag-follow + Samsung-style shrink. Instant
+                      // (zero-duration) while the finger is down; the same
+                      // widgets animate the snap-back on release.
+                      child: AnimatedSlide(
+                        offset: Offset(
+                            0,
+                            _dismissDy /
+                                MediaQuery.sizeOf(context).height),
+                        duration: _dismissDragging
+                            ? Duration.zero
+                            : const Duration(milliseconds: 200),
+                        curve: Curves.easeOutCubic,
+                        child: AnimatedScale(
+                          scale: (1 -
+                                  _dismissDy /
+                                      MediaQuery.sizeOf(context).height *
+                                      0.25)
+                              .clamp(0.8, 1.0),
+                          duration: _dismissDragging
+                              ? Duration.zero
+                              : const Duration(milliseconds: 200),
+                          curve: Curves.easeOutCubic,
+                          child: PageView.builder(
                           controller: _pageController,
-                          // While zoomed, horizontal drags pan the image, not
-                          // the pager.
-                          physics: _isZoomed
+                          // While zoomed, horizontal drags pan the image,
+                          // not the pager; while pinching or mid vertical
+                          // swipe, the pager must not drag underneath the
+                          // gesture.
+                          physics: _isZoomed || _multiTouch || _verticalDragLock
                               ? const NeverScrollableScrollPhysics()
                               : null,
                           itemCount: _currentFiles.length,
@@ -1197,9 +1332,11 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                               // its own transform on losing focus).
                               _isZoomed = false;
                               // Samsung: expansion never survives a page
-                              // change, and every video lands muted.
+                              // change, and every video lands muted and
+                              // playing (no inherited pause intent).
                               _videoExpanded = false;
                               _videoMuted = true;
+                              _videoPauseIntent = false;
                             });
                             _loadVideoDurationHint();
                             // FIX: Sync filmstrip when swiping main photo
@@ -1226,10 +1363,17 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                                     setState(() => _isZoomed = zoomed);
                                   });
                                 },
+                                onEdgeOvershoot: _handleEdgeOvershoot,
                                 onVideoBinding: _onVideoBinding,
+                                // Scrubbing (expanded strip) and a user
+                                // pause both suppress the stall loader +
+                                // auto-resume.
+                                videoUiHold:
+                                    _videoPauseIntent || _videoExpanded,
                               ),
                             );
                           },
+                          ),
                         ),
                       ),
                     ),
@@ -1456,14 +1600,17 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     final controller = _activeVideo;
     if (controller == null) {
       // Not initialized yet — ask the focused page to spin up playback.
+      setState(() => _videoPauseIntent = false);
       await _activeVideoInit?.call();
       await _activeVideo?.setVolume(_videoMuted ? 0 : 1);
       return;
     }
     final value = controller.value;
     if (value.isPlaying) {
+      setState(() => _videoPauseIntent = true);
       controller.pause();
     } else {
+      setState(() => _videoPauseIntent = false);
       if (value.duration > Duration.zero && value.position >= value.duration) {
         await controller.seekTo(Duration.zero);
       }
@@ -1953,14 +2100,7 @@ class _InfoSheetBodyState extends State<_InfoSheetBody> {
     return '$wd, ${dt.day} $month ${dt.year} · $hour12:$mm $ampm';
   }
 
-  String _fmtSize(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    if (bytes < 1024 * 1024 * 1024) {
-      return '${(bytes / 1024 / 1024).toStringAsFixed(2)} MB';
-    }
-    return '${(bytes / 1024 / 1024 / 1024).toStringAsFixed(2)} GB';
-  }
+  String _fmtSize(int bytes) => formatBytes(bytes);
 
   String _fmtDuration(Duration d) {
     final m = d.inMinutes;
@@ -2315,6 +2455,15 @@ class _SinglePhotoView extends StatefulWidget {
   final bool isFocused;
   final ValueChanged<bool> onZoomChanged;
 
+  /// Zoomed pan dragged past the photo's horizontal edge by a deliberate
+  /// margin — Samsung turns the page. direction: +1 next, −1 previous.
+  final ValueChanged<int> onEdgeOvershoot;
+
+  /// True while the user is deliberately holding playback (dock pause or
+  /// scrub in progress). Suppresses the buffering loader and auto-resume —
+  /// a stall during a USER pause must stay a pause.
+  final bool videoUiHold;
+
   /// Reports this page's video controller + init handler to the screen so
   /// the dock (pill / mute / scrubber) can drive playback. (index, null,
   /// null) = this page's video is gone.
@@ -2331,7 +2480,9 @@ class _SinglePhotoView extends StatefulWidget {
     required this.onLoaded,
     required this.isFocused,
     required this.onZoomChanged,
+    required this.onEdgeOvershoot,
     required this.onVideoBinding,
+    this.videoUiHold = false,
   });
 
   @override
@@ -2369,6 +2520,126 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
   final TransformationController _zoomCtrl = TransformationController();
   bool _lastReportedZoom = false;
 
+  // ---- Raw-pointer pinch/pan engine ----
+  // No InteractiveViewer: its ScaleGestureRecognizer had to WIN the gesture
+  // arena against the PageView's horizontal drag, and the drag claims the
+  // gesture as soon as the first finger crosses touch slop — usually before
+  // the second finger lands — leaving the pinch dead until all fingers
+  // lift. Raw Listeners never enter the arena, so every pinch registers.
+  // The parent freezes the pager while two fingers are down, so nothing
+  // fights the gesture.
+  final Map<int, Offset> _touches = {};
+  Matrix4 _gestureBase = Matrix4.identity();
+  double? _pinchBaseSpan;
+  Offset? _pinchBaseFocal;
+  Offset? _panBasePoint;
+  Size? _viewportSize;
+  // One page turn per gesture: a zoomed pan that keeps pulling past the
+  // photo's edge flips the page once, then goes quiet until fingers lift.
+  bool _edgeTurnFired = false;
+
+  bool get _isZoomedNow => _zoomCtrl.value.getMaxScaleOnAxis() > 1.01;
+
+  void _onZoomPointerDown(PointerDownEvent event) {
+    _touches[event.pointer] = event.localPosition;
+    if (_touches.length == 1) _edgeTurnFired = false;
+    if (_touches.length == 2) {
+      _zoomAnim.stop();
+      final pts = _touches.values.toList();
+      _gestureBase = _zoomCtrl.value.clone();
+      _pinchBaseSpan = (pts[0] - pts[1]).distance;
+      _pinchBaseFocal = (pts[0] + pts[1]) / 2;
+      _panBasePoint = null;
+      return;
+    }
+    if (_touches.length == 1 && _isZoomedNow) {
+      _zoomAnim.stop();
+      _gestureBase = _zoomCtrl.value.clone();
+      _panBasePoint = event.localPosition;
+    }
+  }
+
+  void _onZoomPointerMove(PointerMoveEvent event) {
+    if (!_touches.containsKey(event.pointer)) return;
+    _touches[event.pointer] = event.localPosition;
+
+    if (_touches.length >= 2) {
+      final baseSpan = _pinchBaseSpan;
+      final baseFocal = _pinchBaseFocal;
+      if (baseSpan == null || baseFocal == null || baseSpan <= 0) return;
+      final pts = _touches.values.toList();
+      final span = (pts[0] - pts[1]).distance;
+      final focal = (pts[0] + pts[1]) / 2;
+      // Clamp TOTAL scale to [1, 4], then apply the allowed factor around
+      // the focal point — the pinched spot stays under the fingers, and
+      // two-finger drags pan because the focal midpoint moves.
+      final baseScale = _gestureBase.getMaxScaleOnAxis();
+      final factor =
+          ((span / baseSpan) * baseScale).clamp(1.0, 4.0) / baseScale;
+      final around = Matrix4.identity()
+        ..translateByDouble(focal.dx, focal.dy, 0, 1)
+        ..scaleByDouble(factor, factor, 1, 1)
+        ..translateByDouble(-baseFocal.dx, -baseFocal.dy, 0, 1);
+      _zoomCtrl.value = _clampToBounds(around * _gestureBase);
+      return;
+    }
+
+    final panBase = _panBasePoint;
+    if (panBase == null) return;
+    final delta = event.localPosition - panBase;
+    final desired =
+        Matrix4.translationValues(delta.dx, delta.dy, 0) * _gestureBase
+            as Matrix4;
+    final clamped = _clampToBounds(desired);
+    _zoomCtrl.value = clamped;
+
+    // Samsung edge handoff: the horizontal drag the clamp swallowed. Once
+    // it exceeds a deliberate margin the user is pulling PAST the edge —
+    // turn the page. Negative overshoot = photo at its right edge, finger
+    // swiping left → next; positive = at left edge, swiping right → prev.
+    final overshoot = desired.storage[12] - clamped.storage[12];
+    if (!_edgeTurnFired && overshoot.abs() > 80) {
+      _edgeTurnFired = true;
+      widget.onEdgeOvershoot(overshoot < 0 ? 1 : -1);
+    }
+  }
+
+  void _onZoomPointerEnd(PointerEvent event) {
+    if (_touches.remove(event.pointer) == null) return;
+    if (_touches.length == 1) {
+      // Pinch → one finger: hand off to pan without a jump.
+      _gestureBase = _zoomCtrl.value.clone();
+      _panBasePoint = _touches.values.first;
+      _pinchBaseSpan = null;
+      _pinchBaseFocal = null;
+      return;
+    }
+    if (_touches.isNotEmpty) return;
+    _panBasePoint = null;
+    _pinchBaseSpan = null;
+    _pinchBaseFocal = null;
+    // Nearly-rest zoom settles to identity so the pager unlocks cleanly;
+    // _animateZoomTo reports the level when the animation completes.
+    if (_zoomCtrl.value.getMaxScaleOnAxis() < 1.05) {
+      _animateZoomTo(Matrix4.identity());
+      return;
+    }
+    _reportZoom();
+  }
+
+  /// Keeps the (viewport-sized, BoxFit.contain) content covering the
+  /// viewport: at scale s the child spans s× the viewport, so a translation
+  /// may not exceed 0 nor fall below extent·(1−s).
+  Matrix4 _clampToBounds(Matrix4 m) {
+    final size = _viewportSize;
+    if (size == null) return m;
+    final s = m.getMaxScaleOnAxis();
+    final out = m.clone();
+    out.storage[12] = out.storage[12].clamp(size.width * (1 - s), 0.0);
+    out.storage[13] = out.storage[13].clamp(size.height * (1 - s), 0.0);
+    return out;
+  }
+
   // Double-tap zoom animation (Samsung: 2.5x centered on the tap point).
   late final AnimationController _zoomAnim = AnimationController(
     vsync: this,
@@ -2396,9 +2667,10 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     _loadImages();
   }
 
-  /// Reported only when a gesture/animation ENDS — reporting live from a
-  /// TransformationController listener rebuilt PageView/Dismissible
-  /// mid-pinch, which cancelled the scale gesture (the "zoom is dead" bug).
+  /// Reported only when a gesture/animation ENDS. Live transform updates
+  /// repaint just the zoom surface (AnimatedBuilder); this flips the
+  /// parent's page/dismiss gating, which rebuilds the pager — harmless
+  /// between gestures, noisy during one.
   void _reportZoom() {
     final zoomed = _zoomCtrl.value.getMaxScaleOnAxis() > 1.01;
     if (zoomed == _lastReportedZoom) return;
@@ -2453,7 +2725,10 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
 
   /// Fire-and-forget: shares an obtained video frame with the filmstrip,
   /// grid, and future viewer opens via the standard thumb-cache path.
+  /// Asset-bound files skip the write — MediaStore IS their cache, and
+  /// persisting a copy just inflates the app cache for nothing.
   void _persistVideoFrame(Uint8List bytes) {
+    if (widget.file.assetId != null) return;
     final cloudId = widget.file.cloudId;
     if (cloudId == null) return;
     getTemporaryDirectory().then((dir) async {
@@ -2501,12 +2776,30 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
   void _onVideoControllerValue() {
     final value = _videoController?.value;
     if (value == null) return;
-    // Only surface rebuffering during actual playback. Scrubbing pauses the
-    // video and seeks repeatedly — flashing a spinner per seek reads as
-    // "loading", not "scrubbing".
-    final stalled = value.isBuffering && value.isPlaying;
+    // Stall = buffering while the user WANTS playback. The old condition
+    // required isPlaying too — but ExoPlayer drops isPlaying on a buffer
+    // underrun, so the loader never showed and the frozen frame read as a
+    // silent pause. Intent (videoUiHold) is what distinguishes "user
+    // paused/scrubbing" from "network starved the buffer".
+    final wasStalled = _isVideoStalled;
+    final stalled =
+        value.isBuffering && widget.isFocused && !widget.videoUiHold;
     if (stalled != _isVideoStalled && mounted) {
       setState(() => _isVideoStalled = stalled);
+    }
+    // Coming OUT of an underrun ExoPlayer can land on isPlaying=false —
+    // before this the user had to press play manually after every stall.
+    // Resume only on that edge, never at end-of-video, never against a
+    // user hold.
+    if (wasStalled &&
+        !stalled &&
+        !value.isBuffering &&
+        !value.isPlaying &&
+        widget.isFocused &&
+        !widget.videoUiHold &&
+        value.duration > Duration.zero &&
+        value.position < value.duration) {
+      _videoController?.play();
     }
   }
 
@@ -2676,11 +2969,11 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
   /// rest are skipped. Rung 2 (local original) doesn't set state — build()
   /// renders it directly via Image.file when localPath exists.
   Future<void> _loadPlaceholder() async {
-    // RUNG 0 (videos only) — the shared disk thumb cache. MediaStore
-    // regenerates video thumbs lazily (slow) and frame extraction is slower
-    // still; whichever produced a frame before persisted it here, making
-    // every later open instant.
-    if (_isVideo) {
+    // RUNG 0 (videos only) — the shared disk thumb cache. MediaStore-bound
+    // files skip it: Android serves their frame (rung 1), and a disk thumb
+    // here can only be a stale leftover from a window when the local
+    // original was missing — serving it first kept the leftover alive.
+    if (_isVideo && widget.file.assetId == null) {
       final cached = await _cachedVideoFrame();
       if (cached != null) {
         if (mounted) setState(() => _assetThumbBytes = cached);
@@ -2752,12 +3045,21 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
 
     try {
       // LOCAL-FIRST: if the original is on device, play it directly.
-      // Zero network, zero decryption.
+      // Zero network, zero decryption. Content-guard gated — a same-path
+      // different-bytes file must never masquerade as the vault entry.
       VideoPlayerController? controller;
       if (widget.file.localPath != null) {
         final localFile = File(widget.file.localPath!);
-        if (await localFile.exists()) {
+        if (await localFile.exists() &&
+            await LocalContentGuard.matches(widget.file,
+                localFile: localFile)) {
           controller = VideoPlayerController.file(localFile);
+          // Local original is authoritative again (restore-to-gallery):
+          // the streamed chunk cache is dead weight — reclaim it.
+          unawaited(CacheManagerService().invalidateLargePlaintext(
+            fileId: widget.file.id,
+            cloudId: widget.file.cloudId,
+          ));
         }
       }
 
@@ -2855,24 +3157,36 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     return Stack(
       fit: StackFit.expand,
       children: [
-        // A+B. One zoom surface for placeholder AND full image — separate
-        // InteractiveViewers would each carry their own transform, so the
-        // zoom level could jump when the cross-fade swaps layers. Disabled
-        // for videos: their placeholder isn't zoomable.
-        // Zoom is reported on interaction END (not live): a mid-pinch parent
-        // rebuild cancels the scale gesture. Double-tap = Samsung 2.5x.
+        // A+B. One zoom surface for placeholder AND full image — a single
+        // shared transform, so the zoom level can't jump when the
+        // cross-fade swaps layers. Zoom/pan are driven by the raw-pointer
+        // engine above (see its comment for why there's no
+        // InteractiveViewer); the AnimatedBuilder repaints ONLY this
+        // subtree per frame, so a pinch never rebuilds the pager.
+        // Disabled for videos: their placeholder isn't zoomable.
+        // Double-tap = Samsung 2.5x.
         GestureDetector(
           onDoubleTapDown:
               _isVideo ? null : (details) => _doubleTapDetails = details,
           onDoubleTap: _isVideo ? null : _handleDoubleTap,
-          child: InteractiveViewer(
-            transformationController: _zoomCtrl,
-            panEnabled: !_isVideo,
-            scaleEnabled: !_isVideo,
-            minScale: 1.0,
-            maxScale: 4.0,
-            onInteractionEnd: (_) => _reportZoom(),
-            child: Stack(
+          child: Listener(
+            onPointerDown: _isVideo ? null : _onZoomPointerDown,
+            onPointerMove: _isVideo ? null : _onZoomPointerMove,
+            onPointerUp: _isVideo ? null : _onZoomPointerEnd,
+            onPointerCancel: _isVideo ? null : _onZoomPointerEnd,
+            behavior: HitTestBehavior.opaque,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                _viewportSize =
+                    Size(constraints.maxWidth, constraints.maxHeight);
+                return ClipRect(
+                  child: AnimatedBuilder(
+                    animation: _zoomCtrl,
+                    builder: (context, child) => Transform(
+                      transform: _zoomCtrl.value,
+                      child: child,
+                    ),
+                    child: Stack(
             fit: StackFit.expand,
             children: [
               // Placeholder — first rung that's ready wins. Local originals
@@ -2925,6 +3239,10 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
                   },
                 ),
             ],
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         ),
@@ -3019,8 +3337,11 @@ class _FilmstripItemState extends State<_FilmstripItem> {
     // Rung 0 (videos only) — the shared disk thumb cache, where the viewer,
     // prewarm pass, or an earlier strip build persisted a frame. MediaStore
     // video thumbs materialize lazily, which is why video cells used to lag
-    // behind photo cells here.
-    if (_isVideo && widget.file.cloudId != null) {
+    // behind photo cells here. MediaStore-bound files skip it — for them a
+    // disk thumb is only a stale leftover (see _loadPlaceholder rung 0).
+    if (_isVideo &&
+        widget.file.assetId == null &&
+        widget.file.cloudId != null) {
       final cacheDir = await getTemporaryDirectory();
       final cached = File('${cacheDir.path}/thumb_${widget.file.cloudId}.jpg');
       if (await cached.exists()) {
@@ -3085,8 +3406,10 @@ class _FilmstripItemState extends State<_FilmstripItem> {
 
   /// Fire-and-forget: extraction is expensive, so share the frame with the
   /// viewer/grid via the standard thumb-cache path. 300px so the cache entry
-  /// is also good enough as the viewer's placeholder.
+  /// is also good enough as the viewer's placeholder. Skipped for
+  /// asset-bound files — MediaStore already serves them.
   void _persistFrame(Uint8List bytes) {
+    if (widget.file.assetId != null) return;
     final cloudId = widget.file.cloudId;
     if (cloudId == null) return;
     getTemporaryDirectory().then((dir) async {

@@ -17,6 +17,24 @@ import 'sync/sync_op.dart';
 /// mutating write ends with [notifyListeners]; every list-rendering screen
 /// subscribes with [addListener] in initState and unsubscribes in dispose.
 /// This kills the pull-to-refresh requirement after a delete.
+/// See [DatabaseService.getAutoSyncDedupIndex].
+class AutoSyncDedupIndex {
+  final Set<String> uploadedKeys;
+  final Set<String> knownAssetIds;
+  final Set<String> inFlightKeys;
+
+  const AutoSyncDedupIndex({
+    required this.uploadedKeys,
+    required this.knownAssetIds,
+    required this.inFlightKeys,
+  });
+
+  const AutoSyncDedupIndex.empty()
+      : uploadedKeys = const {},
+        knownAssetIds = const {},
+        inFlightKeys = const {};
+}
+
 class DatabaseService extends ChangeNotifier {
   static final DatabaseService _instance = DatabaseService._internal();
   factory DatabaseService() => _instance;
@@ -58,14 +76,38 @@ class DatabaseService extends ChangeNotifier {
 
     final db = await openDatabase(
       path,
-      version: 11,
+      version: 14,
       onCreate: (db, version) async {
         await _createSchema(db);
         await _createSyncSchema(db);
         await _seedSmartAlbums(db);
         await _seedSmartPlaylists(db);
       },
-      onUpgrade: (db, oldVersion, newVersion) async {
+      onUpgrade: (db, oldVersion, newVersion) => _migrate(db, oldVersion),
+    );
+    await db.execute('PRAGMA foreign_keys = ON');
+    return db;
+  }
+
+  /// Injects an already-open database (tests only) so instance methods like
+  /// [reconcile] run against a real in-memory SQLite instead of the device
+  /// file.
+  @visibleForTesting
+  void debugSetDatabase(Database db) {
+    _database = db;
+  }
+
+  /// Runs the REAL migration chain on [db] — exposed so tests can verify
+  /// upgrade == fresh-create column-for-column.
+  @visibleForTesting
+  static Future<void> migrateForTest(Database db, int oldVersion) =>
+      _migrate(db, oldVersion);
+
+  /// Runs the REAL current-version schema DDL on [db] (files/albums/shares).
+  @visibleForTesting
+  static Future<void> createSchemaForTest(Database db) => _createSchema(db);
+
+  static Future<void> _migrate(Database db, int oldVersion) async {
         // v2 added albums tables; v3 changes account_id semantics from
         // bare email to composite ${provider}_${email}. The data model
         // shift is incompatible with old rows, so we wipe everything and
@@ -156,10 +198,32 @@ class DatabaseService extends ChangeNotifier {
                 'ALTER TABLE sync_ops ADD COLUMN captured_at INTEGER');
           }
         }
-      },
-    );
-    await db.execute('PRAGMA foreign_keys = ON');
-    return db;
+        // v12: upload_started_at — wall-clock of the last upload ATTEMPT
+        // (created_at is CAPTURE time, so heal-grace math needs its own
+        // stamp) — plus media dimensions/duration captured at upload time
+        // so the details sheet works for files with no gallery counterpart.
+        if (oldVersion < 12) {
+          await db.execute(
+              'ALTER TABLE files ADD COLUMN upload_started_at INTEGER');
+          await db.execute('ALTER TABLE files ADD COLUMN width INTEGER');
+          await db.execute('ALTER TABLE files ADD COLUMN height INTEGER');
+          await db.execute('ALTER TABLE files ADD COLUMN duration_ms INTEGER');
+        }
+        // v13: video codec / audio codec / fps — the rest of the details
+        // sheet's video row, captured at upload time like the v12 fields.
+        // Local-only; the createFile op is unchanged.
+        if (oldVersion < 13) {
+          await db.execute('ALTER TABLE files ADD COLUMN video_codec TEXT');
+          await db.execute('ALTER TABLE files ADD COLUMN audio_codec TEXT');
+          await db.execute('ALTER TABLE files ADD COLUMN fps INTEGER');
+        }
+        // v14: device_model — the recording device, read from the video's
+        // moov/udta vendor atoms (Samsung's "Galaxy A55 5G") at upload
+        // time. Completes the Samsung-parity details row for videos whose
+        // gallery original is gone.
+        if (oldVersion < 14) {
+          await db.execute('ALTER TABLE files ADD COLUMN device_model TEXT');
+        }
   }
 
   static const String _createSharesTableSql = '''
@@ -251,7 +315,15 @@ class DatabaseService extends ChangeNotifier {
         is_deleted INTEGER DEFAULT 0,
         deleted_at INTEGER,
         type INTEGER,
-        content_hash TEXT
+        content_hash TEXT,
+        upload_started_at INTEGER,
+        width INTEGER,
+        height INTEGER,
+        duration_ms INTEGER,
+        video_codec TEXT,
+        audio_codec TEXT,
+        fps INTEGER,
+        device_model TEXT
       )
     ''');
     await db.execute('''
@@ -335,11 +407,23 @@ class DatabaseService extends ChangeNotifier {
       createdAt: file.createdAt,
       type: file.type,
       localPath: file.localPath,
+      assetId: file.assetId,
       isUploaded: file.isUploaded,
       cloudId: file.cloudId,
       thumbnailCloudId: file.thumbnailCloudId,
       provider: AccountRegistry().activeAccount?.providerType ?? 0,
       accountId: _currentAccountId,
+      contentHash: file.contentHash,
+      width: file.width,
+      height: file.height,
+      durationMs: file.durationMs,
+      videoCodec: file.videoCodec,
+      audioCodec: file.audioCodec,
+      fps: file.fps,
+      deviceModel: file.deviceModel,
+      // Every addFile caller is starting an upload attempt right now —
+      // stamp it so heal grace measures from THIS moment, not capture time.
+      uploadStartedAt: DateTime.now().millisecondsSinceEpoch,
     );
 
     await db.insert(
@@ -348,6 +432,18 @@ class DatabaseService extends ChangeNotifier {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     notifyListeners();
+  }
+
+  /// Re-stamps the upload-attempt clock on an existing pending row — used
+  /// when heal retries a row in place instead of delete-and-recreate.
+  Future<void> touchUploadAttempt(String id) async {
+    final db = await database;
+    await db.update(
+      'files',
+      {'upload_started_at': DateTime.now().millisecondsSinceEpoch},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   /// Marks the blob durably uploaded — and ONLY here does the file's
@@ -365,7 +461,7 @@ class DatabaseService extends ChangeNotifier {
     int? capturedAt,
   }) async {
     final db = await database;
-    await db.update(
+    final updated = await db.update(
       'files',
       {
         'is_uploaded': 1,
@@ -376,6 +472,14 @@ class DatabaseService extends ChangeNotifier {
       where: 'id = ?',
       whereArgs: [id],
     );
+    // Row vanished mid-upload (heal or a concurrent delete beat us). A
+    // createFile op for a row that no longer exists would ship a dangling
+    // reference to every peer — never record one.
+    if (updated == 0) {
+      debugPrint('markAsUploaded: row $id gone — createFile op NOT recorded');
+      notifyListeners();
+      return;
+    }
     if (filename != null) {
       // The createFile op carries the content hash (identity / dedup), the
       // plaintext size (so a peer shows the right size immediately), and the
@@ -548,11 +652,65 @@ class DatabaseService extends ChangeNotifier {
     return rows.map((r) => r['id'] as String).toList();
   }
 
+  /// Filenames of the current account's rows — live AND recycle-bin — that
+  /// start with [stemPrefix]: the collision-candidate set for
+  /// duplicate-rename. Binned rows count because they're restorable;
+  /// excluding them let "upload same file again → restore the binned one"
+  /// end with two identically-named files. Only a purge frees a name.
+  /// LIKE-escaped so stems containing % or _ don't over-match.
+  Future<Set<String>> getActiveFilenames({required String stemPrefix}) async {
+    final db = await database;
+    if (_currentAccountId == null) return {};
+    final escaped = stemPrefix
+        .replaceAll(r'\', r'\\')
+        .replaceAll('%', r'\%')
+        .replaceAll('_', r'\_');
+    final rows = await db.query(
+      'files',
+      columns: ['filename'],
+      // Deliberately NO is_deleted filter: a recycle-bin row is restorable,
+      // so its name is still taken — excluding it let a re-upload claim the
+      // same name and a later restore produce two identically-named files.
+      // Only a purge (hard delete) frees a name.
+      where: "account_id = ? AND filename LIKE ? ESCAPE '\\'",
+      whereArgs: [_currentAccountId, '$escaped%'],
+    );
+    return rows.map((r) => r['filename'] as String).toSet();
+  }
+
   Future<CnestFile?> getFileById(String id) async {
     final db = await database;
     final rows =
         await db.query('files', where: 'id = ?', whereArgs: [id], limit: 1);
     return rows.isEmpty ? null : CnestFile.fromMap(rows.first);
+  }
+
+  /// Current-account rows owning the given cache artifacts that are
+  /// MediaStore-bound (asset_id set) — the candidate set for the
+  /// leftover-reclaim sweep (see
+  /// CacheManagerService.reclaimMediaStoreServedLeftovers).
+  Future<List<CnestFile>> getMediaStoreBoundFiles({
+    required Set<String> cloudIds,
+    required Set<String> fileIds,
+  }) async {
+    if (_currentAccountId == null) return [];
+    if (cloudIds.isEmpty && fileIds.isEmpty) return [];
+    final db = await database;
+    final clauses = <String>[];
+    if (cloudIds.isNotEmpty) {
+      clauses.add(
+          'cloud_id IN (${List.filled(cloudIds.length, '?').join(',')})');
+    }
+    if (fileIds.isNotEmpty) {
+      clauses.add('id IN (${List.filled(fileIds.length, '?').join(',')})');
+    }
+    final rows = await db.query(
+      'files',
+      where:
+          'account_id = ? AND asset_id IS NOT NULL AND (${clauses.join(' OR ')})',
+      whereArgs: [_currentAccountId, ...cloudIds, ...fileIds],
+    );
+    return rows.map(CnestFile.fromMap).toList();
   }
 
   Future<void> setFavorite(String id, bool favorite) async {
@@ -626,6 +784,67 @@ class DatabaseService extends ChangeNotifier {
     return maps.map((m) => CnestFile.fromMap(m)).toList();
   }
 
+  /// Index the auto-sync scan uses to decide "is this gallery asset already
+  /// in the vault?". Three sets with distinct semantics:
+  ///
+  ///  * [uploadedKeys] — `filename|size` of rows whose upload COMPLETED.
+  ///    Only these hide an asset permanently: a pending phantom row must
+  ///    never block its own asset from being retried (the ghost-photo bug).
+  ///  * [knownAssetIds] — MediaStore asset ids of ALL non-deleted rows,
+  ///    uploaded or pending. Asset id is stable identity, so it still
+  ///    matches after a duplicate-rename gave the row a "(1)" filename.
+  ///  * [inFlightKeys] — `filename|size` of pending rows whose last upload
+  ///    attempt is fresher than [inFlightWindow]: an upload racing right
+  ///    now must still dedup, or the scan would double-upload it.
+  Future<AutoSyncDedupIndex> getAutoSyncDedupIndex({
+    Duration inFlightWindow = const Duration(minutes: 15),
+  }) async {
+    final db = await database;
+    if (_currentAccountId == null) return const AutoSyncDedupIndex.empty();
+    final rows = await db.query(
+      'files',
+      columns: [
+        'filename',
+        'size_bytes',
+        'is_uploaded',
+        'asset_id',
+        'upload_started_at',
+      ],
+      // Recycle-bin rows are included on purpose: a binned file is still
+      // THIS gallery asset's vault copy — treating it as unknown would make
+      // auto-sync re-upload the original as a full duplicate blob while the
+      // binned twin waits to be restored.
+      where: 'account_id = ? AND type IN (?, ?)',
+      whereArgs: [
+        _currentAccountId,
+        CnestFileType.image.index,
+        CnestFileType.document.index,
+      ],
+    );
+    final uploadedKeys = <String>{};
+    final knownAssetIds = <String>{};
+    final inFlightKeys = <String>{};
+    final freshFloor = DateTime.now()
+        .subtract(inFlightWindow)
+        .millisecondsSinceEpoch;
+    for (final r in rows) {
+      final key = '${r['filename']}|${r['size_bytes'] ?? 0}';
+      final assetId = r['asset_id'] as String?;
+      if (assetId != null) knownAssetIds.add(assetId);
+      if (r['is_uploaded'] == 1) {
+        uploadedKeys.add(key);
+        continue;
+      }
+      final attempt = r['upload_started_at'] as int?;
+      if (attempt != null && attempt >= freshFloor) inFlightKeys.add(key);
+    }
+    return AutoSyncDedupIndex(
+      uploadedKeys: uploadedKeys,
+      knownAssetIds: knownAssetIds,
+      inFlightKeys: inFlightKeys,
+    );
+  }
+
   Future<List<CnestFile>> getFilesByType(CnestFileType type) async {
     final db = await database;
     if (_currentAccountId == null) return [];
@@ -641,18 +860,71 @@ class DatabaseService extends ChangeNotifier {
 
   // --- SYNC LOGIC (MAP ADAPTED) ---
 
-  Future<void> reconcile(List<Map<String, dynamic>> cloudFiles) async {
-    if (_currentAccountId == null) return; 
+  /// The provider type of a REGISTERED account by id — never the active
+  /// account's, which can differ when a sync cycle pinned to [accountId]
+  /// finishes after the user switched accounts.
+  int _providerTypeFor(String accountId) {
+    for (final a in AccountRegistry().accounts) {
+      if (a.id == accountId) return a.providerType;
+    }
+    return AccountRegistry().activeAccount?.providerType ?? 0;
+  }
+
+  /// Reconciles [cloudFiles] against the rows of ONE account. [accountId]
+  /// pins which one; callers running a long sync cycle MUST pass the id
+  /// captured at cycle start — reading the current account here would prune
+  /// the newly active account's rows against another account's listing when
+  /// the user switches mid-cycle. Defaults to the current account for
+  /// short, synchronous-ish flows (connect screen).
+  /// File ids with a `purgeFile` tombstone in the op log — permanently
+  /// deleted, forever. Purge is terminal by design (see op_replay.dart), so
+  /// this set only ever grows, and anything in it must NEVER be re-adopted
+  /// from a cloud listing: a blob that outlives its purge (the "Delete
+  /// forever" cloud call failed, silently) is condemned, not new.
+  Future<Set<String>> getPurgedFileIds({String? accountId}) async {
+    final acct = accountId ?? _currentAccountId;
+    if (acct == null) return {};
+    final db = await database;
+    final rows = await db.query(
+      'sync_ops',
+      columns: ['target_id'],
+      where: "kind = 'purgeFile' AND account_id = ?",
+      whereArgs: [acct],
+    );
+    return rows.map((r) => r['target_id'] as String).toSet();
+  }
+
+  /// The local file id that owns a vault blob: `<uuid>.cnest` and
+  /// `<uuid>_thumb.cnest` both belong to `<uuid>`; legacy names (no .cnest
+  /// suffix) are owned by their own cloud id.
+  static String blobOwnerId(String name, String cloudId) {
+    if (name.endsWith('_thumb.cnest')) {
+      return name.substring(0, name.length - '_thumb.cnest'.length);
+    }
+    if (name.endsWith('.cnest')) {
+      return name.substring(0, name.length - '.cnest'.length);
+    }
+    return cloudId;
+  }
+
+  Future<void> reconcile(
+    List<Map<String, dynamic>> cloudFiles, {
+    String? accountId,
+  }) async {
+    final acct = accountId ?? _currentAccountId;
+    if (acct == null) return;
+    final providerType = _providerTypeFor(acct);
+    final purged = await getPurgedFileIds(accountId: acct);
 
     final db = await database;
     final batch = db.batch();
 
     final cloudIds = cloudFiles.map((f) => f['id'] as String).toSet();
     final localRows = await db.query(
-      'files', 
-      columns: ['id', 'cloud_id'], 
+      'files',
+      columns: ['id', 'cloud_id'],
       where: 'is_uploaded = 1 AND account_id = ?',
-      whereArgs: [_currentAccountId]
+      whereArgs: [acct]
     );
     
     for (var row in localRows) {
@@ -666,10 +938,10 @@ class DatabaseService extends ChangeNotifier {
     final insertBatch = db.batch(); 
 
     final knownCloudIdsRows = await db.query(
-      'files', 
-      columns: ['cloud_id'], 
+      'files',
+      columns: ['cloud_id'],
       where: 'cloud_id IS NOT NULL AND account_id = ?',
-      whereArgs: [_currentAccountId]
+      whereArgs: [acct]
     );
     final knownCloudIds = knownCloudIdsRows.map((r) => r['cloud_id']).toSet();
 
@@ -682,6 +954,16 @@ class DatabaseService extends ChangeNotifier {
     for (var file in cloudFiles) {
       final id = file['id'];
       final name = file['name'] as String? ?? '';
+
+      // A blob owned by a purged file id is condemned — the user hit
+      // "Delete forever" but the cloud delete didn't land. Adopting it here
+      // is exactly how permanently deleted photos used to resurrect every
+      // sync cycle (the op-log purge removed the row, this pass re-created
+      // it). Skip both the main blob and its thumb; the sync cycle's
+      // condemned-blob sweep retries the actual cloud deletion.
+      if (id != null && purged.contains(blobOwnerId(name, id as String))) {
+        continue;
+      }
 
       if (name.endsWith('_thumb.cnest')) {
         thumbnailFiles.add(file);
@@ -721,15 +1003,17 @@ class DatabaseService extends ChangeNotifier {
       int size = 0;
       if (file['size'] is int) {
         size = file['size'];
-      } else if (file['size'] is String) size = int.tryParse(file['size']) ?? 0;
+      } else if (file['size'] is String) {
+        size = int.tryParse(file['size']) ?? 0;
+      }
 
       insertBatch.insert(
         'files',
         {
           'id': localId,
           'cloud_id': file['id'],
-          'provider': AccountRegistry().activeAccount?.providerType ?? 0,
-          'account_id': _currentAccountId,
+          'provider': providerType,
+          'account_id': acct,
           'filename': realFilename,
           'size_bytes': size,
           'created_at': file['created'] != null
@@ -757,7 +1041,7 @@ class DatabaseService extends ChangeNotifier {
         'files',
         {
           'cloud_id': file['id'],
-          'provider': AccountRegistry().activeAccount?.providerType ?? 0,
+          'provider': providerType,
         },
         where: 'id = ? AND cloud_id IS NULL',
         whereArgs: [name.replaceAll('.cnest', '')],
@@ -872,14 +1156,17 @@ class DatabaseService extends ChangeNotifier {
     };
   }
 
-  Future<Map<String, String>> getCloudToLocalIdMap() async {
+  /// Cloud-id → local-id map for one account. [accountId] pins the account
+  /// for long sync cycles (see [reconcile]); defaults to the current one.
+  Future<Map<String, String>> getCloudToLocalIdMap({String? accountId}) async {
     final db = await database;
-    if (_currentAccountId == null) return {};
+    final acct = accountId ?? _currentAccountId;
+    if (acct == null) return {};
     final rows = await db.query(
       'files',
       columns: ['id', 'cloud_id', 'thumbnail_cloud_id'],
       where: 'is_uploaded = 1 AND account_id = ? AND is_deleted = 0',
-      whereArgs: [_currentAccountId],
+      whereArgs: [acct],
     );
     final map = <String, String>{};
     for (final row in rows) {

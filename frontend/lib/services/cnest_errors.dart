@@ -167,6 +167,50 @@ final class StorageFullError extends CnestError {
   @override String get iconName => 'cloudSlash';
 }
 
+/// A transfer that was underway died mid-stream (wifi dropped, socket
+/// reset). Distinct from [OfflineError]: the connection existed and then
+/// went away, so the copy reassures that nothing partial was saved.
+final class UploadInterruptedError extends CnestError {
+  const UploadInterruptedError();
+  @override String get title => 'Upload interrupted.';
+  @override String get message =>
+      "The connection dropped mid-transfer. Nothing was saved — try again "
+      "once you're on a stable connection.";
+  @override String? get primaryActionLabel => 'Try again';
+  @override String get iconName => 'wifiSlash';
+}
+
+/// Maps a raw exception to a network-class [CnestError], or null when the
+/// error isn't network-shaped. Classification is by ERROR SHAPE, never by
+/// probing live connectivity — a wifi-drop socket error often surfaces only
+/// after the user reconnects, so a point-in-time connectivity check lies.
+CnestError? classifyNetworkError(Object e) {
+  final msg = e.toString().toLowerCase();
+  // Never-connected class: DNS resolution failed outright.
+  if (msg.contains('failed host lookup') ||
+      msg.contains('no address associated') ||
+      msg.contains('network is unreachable')) {
+    return const OfflineError();
+  }
+  // Died-mid-transfer class: the socket existed and then broke.
+  const interrupted = [
+    'socketexception',
+    'clientexception',
+    'connection closed',
+    'connection reset',
+    'connection abort',
+    'software caused connection',
+    'broken pipe',
+    'timed out',
+    'timeoutexception',
+    'handshake',
+  ];
+  for (final needle in interrupted) {
+    if (msg.contains(needle)) return const UploadInterruptedError();
+  }
+  return null;
+}
+
 /// Fallback. Carries a short code (surfaced to the user, used in bug
 /// reports) and an optional debug detail (log-only, never shown).
 final class UnexpectedError extends CnestError {

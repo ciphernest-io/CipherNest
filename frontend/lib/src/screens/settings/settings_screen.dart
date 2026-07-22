@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import '../../utils/byte_format.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart'; // ENABLED
@@ -8,6 +9,7 @@ import '../../../services/cloud/cloud_service.dart';
 import '../../../services/cloud/account_registry.dart';
 import '../../../services/cloud/cloud_account.dart';
 import '../../../services/database_service.dart';
+import '../../../services/upload_foreground_guard.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/cache_manager_service.dart';
 import '../../../services/app_lock_service.dart';
@@ -35,6 +37,10 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   String _cacheSize = "Calculating...";
+
+  /// Bytes in the temp dir that CipherNest did NOT write (OS thumbnail /
+  /// engine caches). Null when zero — the subtitle stays clean.
+  String? _systemCacheSize;
   double _cacheLimitGB = 0.5;    // The value the slider shows NOW
   double _originalLimitGB = 0.5; // The value saved on DISK
   
@@ -47,6 +53,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   AutoSyncMode _autoSyncMode = AutoSyncMode.off;
   bool get _autoSyncEnabled => _autoSyncMode != AutoSyncMode.off;
   String _lastSyncDisplay = 'Never';
+  int _autoSyncIntervalMinutes = kAutoSyncIntervalDefaultMinutes;
+  String _lastBgSyncDisplay = "hasn't run yet";
+  // Null = unknown / not Android.
+  bool? _batteryExempt;
 
   // Gallery
   bool _showFeatured = true;
@@ -82,13 +92,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadPreferences() async {
     final prefs = await SharedPreferences.getInstance();
     final mode = await AutoSyncScheduler.readMode();
+    final interval = await AutoSyncScheduler.readInterval();
+    final batteryExempt = await BatteryOptimization.isExempt();
     if (mounted) {
       final lastRunMs = prefs.getInt('auto_sync_last_run') ?? 0;
+      final lastBgMs = prefs.getInt('auto_sync_last_bg_run') ?? 0;
       setState(() {
         final val = prefs.getDouble('cache_limit') ?? 0.5;
         _cacheLimitGB = val;
         _originalLimitGB = val;
         _autoSyncMode = mode;
+        _autoSyncIntervalMinutes = interval.inMinutes;
         _showFeatured = prefs.getBool('gallery_show_featured') ?? true;
         _showYearAgo = prefs.getBool('gallery_show_year_ago') ?? true;
         _autoLockMinutes = prefs.getInt(AppLockService.prefsKeyMinutes) ??
@@ -97,6 +111,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           final dt = DateTime.fromMillisecondsSinceEpoch(lastRunMs);
           _lastSyncDisplay = '${dt.month}/${dt.day} ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}';
         }
+        if (lastBgMs > 0) {
+          final dt = DateTime.fromMillisecondsSinceEpoch(lastBgMs);
+          _lastBgSyncDisplay = '${dt.month}/${dt.day} ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}';
+        }
+        _batteryExempt = batteryExempt;
       });
     }
   }
@@ -284,13 +303,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _loadStats() async {
+    // Two honest figures instead of one misleading one. CipherNest writes
+    // its cache artifacts flat into the temp-dir root (thumb_*, *_decrypted,
+    // video_*.plain*, picker copies under file_picker/). Everything else in
+    // there — subdirectories like Glide's image_manager_disk_cache/ or
+    // Flutter's shader cache — is written by Android/engine plumbing that
+    // every app carries and that we don't control. Counting it as "our"
+    // cache made the figure creep for no user-visible reason.
     final tempDir = await getTemporaryDirectory();
-    int cacheBytes = 0;
+    int appBytes = 0;
+    int systemBytes = 0;
     try {
       if (await tempDir.exists()) {
-        await for (var file in tempDir.list(recursive: true, followLinks: false)) {
-          if (file is File) {
-            cacheBytes += await file.length();
+        final rootPath = tempDir.path;
+        final pickerPrefix = '$rootPath${Platform.pathSeparator}file_picker';
+        await for (var file
+            in tempDir.list(recursive: true, followLinks: false)) {
+          if (file is! File) continue;
+          final inRoot = file.parent.path == rootPath;
+          final isPickerCopy = file.path.startsWith(pickerPrefix);
+          if (inRoot || isPickerCopy) {
+            appBytes += await file.length();
+          } else {
+            systemBytes += await file.length();
           }
         }
       }
@@ -300,7 +335,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     if (mounted) {
       setState(() {
-        _cacheSize = _formatBytes(cacheBytes);
+        _cacheSize = _formatBytes(appBytes);
+        _systemCacheSize = systemBytes > 0 ? _formatBytes(systemBytes) : null;
         _isLoading = false;
       });
     }
@@ -339,10 +375,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() => _autoLockMinutes = picked);
   }
 
-  String _formatBytes(int bytes) {
-    if (bytes < 1024) return "$bytes B";
-    if (bytes < 1024 * 1024) return "${(bytes / 1024).toStringAsFixed(1)} KB";
-    return "${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB";
+  String _formatBytes(int bytes) => formatBytes(bytes);
+
+  /// Size-unit convention picker. 1000 matches Samsung Gallery / Android's
+  /// own UI; 1024 keeps binary semantics for people who want them.
+  Future<void> _pickSizeUnits() async {
+    final cs = Theme.of(context).colorScheme;
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final (base, label) in const [
+              (1000, 'Match system — 1,000 bytes per KB'),
+              (1024, 'Binary — 1,024 bytes per KB'),
+            ])
+              ListTile(
+                title: Text(label),
+                trailing: base == ByteFormat.base
+                    ? ThemeIcon('check', color: cs.primary)
+                    : null,
+                onTap: () => Navigator.pop(ctx, base),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked == null || picked == ByteFormat.base) return;
+    await ByteFormat.setBase(picked);
+    if (!mounted) return;
+    setState(() {});
+    // Reformat the cached size string with the new base.
+    _loadStats();
   }
 
   Future<void> _clearCache() async {
@@ -355,6 +420,66 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cache cleared')));
       _loadStats();
     }
+  }
+
+  /// Long-press diagnostic on the cache tile: itemizes exactly which files
+  /// make up the CipherNest figure (temp root + picker copies), largest
+  /// first. Turns "the cache grew" into "this file appeared".
+  Future<void> _showCacheContents() async {
+    final tempDir = await getTemporaryDirectory();
+    final entries = <(String, int)>[];
+    try {
+      if (await tempDir.exists()) {
+        final rootPath = tempDir.path;
+        final pickerPrefix = '$rootPath${Platform.pathSeparator}file_picker';
+        await for (var f
+            in tempDir.list(recursive: true, followLinks: false)) {
+          if (f is! File) continue;
+          if (f.parent.path != rootPath && !f.path.startsWith(pickerPrefix)) {
+            continue;
+          }
+          entries.add((
+            f.path.substring(rootPath.length + 1),
+            await f.length(),
+          ));
+        }
+      }
+    } catch (e) {
+      debugPrint('Cache listing error: $e');
+    }
+    entries.sort((a, b) => b.$2.compareTo(a.$2));
+    if (!mounted) return;
+    final cs = Theme.of(context).colorScheme;
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: entries.isEmpty
+            ? Padding(
+                padding: const EdgeInsets.all(32),
+                child: Text(
+                  'CipherNest cache is empty.',
+                  style: TextStyle(color: cs.onSurface.withAlpha(170)),
+                ),
+              )
+            : ListView.builder(
+                shrinkWrap: true,
+                itemCount: entries.length,
+                itemBuilder: (ctx, i) => ListTile(
+                  dense: true,
+                  title: Text(
+                    entries[i].$1,
+                    style: TextStyle(color: cs.onSurface, fontSize: 13),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: Text(
+                    formatBytes(entries[i].$2),
+                    style: TextStyle(
+                        color: cs.onSurface.withAlpha(170), fontSize: 13),
+                  ),
+                ),
+              ),
+      ),
+    );
   }
 
   Future<void> _handleBackup() async {
@@ -379,6 +504,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
     } finally {
+      await UploadForegroundGuard().end();
       if (mounted) setState(() => _isLoading = false);
     }
   }
@@ -398,6 +524,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }
         return;
       }
+      // Notifications: non-fatal if denied — the upload foreground service
+      // and the background worker still run, their notifications just stay
+      // hidden (Android 13+ suppresses them without this grant).
+      await Permission.notification.request();
     }
 
     // Default to `background` when the user first enables the feature — it
@@ -426,14 +556,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() => _autoSyncMode = mode);
   }
 
+  static String _autoSyncIntervalLabel(int minutes) {
+    if (minutes < 60) return 'Every $minutes minutes';
+    if (minutes == 60) return 'Every hour';
+    if (minutes < 1440) return 'Every ${minutes ~/ 60} hours';
+    return 'Once a day';
+  }
+
+  Future<void> _pickAutoSyncInterval() async {
+    final cs = Theme.of(context).colorScheme;
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final m in kAutoSyncIntervalChoices)
+              ListTile(
+                title: Text(_autoSyncIntervalLabel(m)),
+                trailing: m == _autoSyncIntervalMinutes
+                    ? ThemeIcon('check', color: cs.primary)
+                    : null,
+                onTap: () => Navigator.pop(ctx, m),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked == null) return;
+    await AutoSyncScheduler.writeInterval(Duration(minutes: picked));
+    if (mounted) setState(() => _autoSyncIntervalMinutes = picked);
+  }
+
   Future<void> _handleSyncNow() async {
     setState(() => _isLoading = true);
+    // Pin foreground priority — a user who taps Sync Now and switches
+    // apps expects the batch to finish.
+    await UploadForegroundGuard().begin();
     try {
       final result = await AutoSyncService().runFullSync();
       if (mounted) {
-        final msg = result.synced > 0
-            ? '${result.synced} photo${result.synced == 1 ? '' : 's'} secured'
-            : 'No new photos found';
+        // Honest tally — a failed batch must never read as a clean one.
+        final String msg;
+        if (result.failed > 0) {
+          final base =
+              '${result.synced} backed up · ${result.failed} failed';
+          msg = result.allFailuresOffline
+              ? "$base — you appear to be offline"
+              : base;
+        } else if (result.synced > 0) {
+          msg =
+              '${result.synced} photo${result.synced == 1 ? '' : 's'} secured';
+        } else {
+          msg = 'No new photos found';
+        }
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
         _loadPreferences();
       }
@@ -622,8 +798,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ListTile(
             leading: ThemeIcon('broom', color: cs.primary),
             title: Text('Clear Local Cache', style: TextStyle(color: cs.onSurface)),
-            subtitle: Text('Free up $_cacheSize on device', style: TextStyle(color: cs.onSurface.withAlpha(140))),
+            subtitle: Text(
+              _systemCacheSize == null
+                  ? 'Free up $_cacheSize on device'
+                  : 'CipherNest: $_cacheSize · Android system caches: '
+                      '$_systemCacheSize',
+              style: TextStyle(color: cs.onSurface.withAlpha(140)),
+            ),
             onTap: _clearCache,
+            onLongPress: _showCacheContents,
+          ),
+          ListTile(
+            leading: ThemeIcon('ruler', color: cs.primary),
+            title: Text('File size units',
+                style: TextStyle(color: cs.onSurface)),
+            subtitle: Text(
+              ByteFormat.base == 1000
+                  ? 'Match system (1,000 bytes per KB)'
+                  : 'Binary (1,024 bytes per KB)',
+              style: TextStyle(color: cs.onSurface.withAlpha(140)),
+            ),
+            onTap: _pickSizeUnits,
           ),
           ListTile(
             leading: ThemeIcon('cloudArrowUp', color: cs.primary),
@@ -685,6 +880,50 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
             ),
+            if (_autoSyncMode == AutoSyncMode.background) ...[
+              ListTile(
+                leading: const SizedBox(width: 24),
+                title: Text('How often',
+                    style: TextStyle(color: cs.onSurface)),
+                subtitle: Text(
+                  _autoSyncIntervalLabel(_autoSyncIntervalMinutes),
+                  style: TextStyle(
+                      color: cs.onSurface.withAlpha(140), fontSize: 12),
+                ),
+                trailing:
+                    ThemeIcon('caretRight', size: 16, color: cs.onSurface),
+                onTap: _pickAutoSyncInterval,
+              ),
+              ListTile(
+                leading: const SizedBox(width: 24),
+                title: Text('Last background sync',
+                    style: TextStyle(color: cs.onSurface)),
+                subtitle: Text(
+                  _lastBgSyncDisplay,
+                  style: TextStyle(
+                      color: cs.onSurface.withAlpha(140), fontSize: 12),
+                ),
+              ),
+              if (_batteryExempt == false)
+                ListTile(
+                  leading: const SizedBox(width: 24),
+                  title: Text('Background sync being killed?',
+                      style: TextStyle(color: ThemeController().tokens.warning)),
+                  subtitle: Text(
+                    'Battery optimization can stop scheduled syncs. Tap to '
+                    'exempt CipherNest.',
+                    style: TextStyle(
+                        color: cs.onSurface.withAlpha(140), fontSize: 12),
+                  ),
+                  trailing:
+                      ThemeIcon('caretRight', size: 16, color: cs.onSurface),
+                  onTap: () async {
+                    await BatteryOptimization.openSettings();
+                    // Re-check when the user comes back to this screen.
+                    _loadPreferences();
+                  },
+                ),
+            ],
             ListTile(
               leading: const SizedBox(width: 24),
               title: Text('Sync Now', style: TextStyle(color: cs.primary)),

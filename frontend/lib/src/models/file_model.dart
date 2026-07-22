@@ -73,6 +73,33 @@ class CnestFile {
   /// falls back to size-only in that case.
   final String? contentHash;
 
+  /// Pixel dimensions and playback length, captured at upload time while the
+  /// plaintext is still in hand (v12). Null for legacy rows and for files
+  /// whose source couldn't be parsed — the details sheet then falls back to
+  /// the AssetEntity / local-file tiers exactly as before.
+  final int? width;
+  final int? height;
+  final int? durationMs;
+
+  /// Video codec / audio codec / frame rate (v13) — same capture-at-upload
+  /// contract as the v12 fields. Device model for videos is deliberately
+  /// absent: the MP4 parser reads no udta atoms and MediaStore stores none,
+  /// so Samsung-style "Galaxy A55 5G" rows are unobtainable for videos.
+  final String? videoCodec;
+  final String? audioCodec;
+  final int? fps;
+
+  /// Recording device (v14) — from the video's udta vendor atoms; null for
+  /// photos (their EXIF Model is read at display time) and for videos
+  /// whose producer wrote none.
+  final String? deviceModel;
+
+  /// Wall-clock ms of the most recent upload ATTEMPT (v12). This — not
+  /// [createdAt], which holds the media's capture time — is what the
+  /// pending-upload heal grace compares, so an old photo picked today still
+  /// gets its in-flight protection window.
+  final int? uploadStartedAt;
+
   CnestFile({
     required this.id,
     this.cloudId,
@@ -88,6 +115,14 @@ class CnestFile {
     this.isFavorite = false,
     required this.type,
     this.contentHash,
+    this.width,
+    this.height,
+    this.durationMs,
+    this.videoCodec,
+    this.audioCodec,
+    this.fps,
+    this.deviceModel,
+    this.uploadStartedAt,
   });
 
   Map<String, dynamic> toMap() {
@@ -106,6 +141,14 @@ class CnestFile {
       'is_favorite': isFavorite ? 1 : 0,
       'type': type.index,
       'content_hash': contentHash,
+      'width': width,
+      'height': height,
+      'duration_ms': durationMs,
+      'video_codec': videoCodec,
+      'audio_codec': audioCodec,
+      'fps': fps,
+      'device_model': deviceModel,
+      'upload_started_at': uploadStartedAt,
     };
   }
 
@@ -125,6 +168,14 @@ class CnestFile {
       isFavorite: (map['is_favorite'] as int? ?? 0) == 1,
       type: CnestFileType.values[map['type'] ?? 0],
       contentHash: map['content_hash'] as String?,
+      width: map['width'] as int?,
+      height: map['height'] as int?,
+      durationMs: map['duration_ms'] as int?,
+      videoCodec: map['video_codec'] as String?,
+      audioCodec: map['audio_codec'] as String?,
+      fps: map['fps'] as int?,
+      deviceModel: map['device_model'] as String?,
+      uploadStartedAt: map['upload_started_at'] as int?,
     );
   }
 }

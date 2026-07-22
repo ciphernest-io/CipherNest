@@ -1,4 +1,5 @@
 import 'dart:io';
+import '../../utils/byte_format.dart';
 import 'package:flutter/material.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
@@ -251,7 +252,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                                     ),
                                     const SizedBox(width: 8),
                                     Text(
-                                      '${(file.sizeBytes / 1024).toStringAsFixed(0)} KB',
+                                      formatBytes(file.sizeBytes),
                                       style: TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 12),
                                     ),
                                     const SizedBox(width: 8),

@@ -7,6 +7,7 @@ import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:printing/printing.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -19,8 +20,14 @@ import '../../widgets/account_switcher.dart';
 import '../../widgets/ciphernest_logo.dart';
 
 import '../../models/file_model.dart';
+import '../../utils/byte_format.dart';
+import '../../utils/filename_dedup.dart';
+import '../../utils/media_store_uri.dart';
+import '../../../services/auto_sync_service.dart';
 import '../../../services/cnest_errors.dart';
 import '../../../services/database_service.dart';
+import '../../../services/mp4_metadata_parser.dart';
+import '../../../services/upload_foreground_guard.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/cloud/account_registry.dart';
@@ -185,18 +192,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// AssetEntity so the vault entry ties back to the phone's gallery.
   /// Three tiers, tried in order:
   ///
-  ///   1. `pickedIdentifier` — on Android, file_picker exposes the
-  ///      `content://media/external/images/media/<id>` URI it opened. The
-  ///      trailing integer IS the MediaStore id photo_manager keys on, so
-  ///      `AssetEntity.fromId(id.toString())` returns the entity directly.
-  ///      Zero enumeration; ~10 ms.
+  ///   1. `pickedIdentifier` — the content URI file_picker opened. Both
+  ///      direct `content://media/...` URIs AND the SAF media-documents
+  ///      URIs (what custom-extension picks actually return — the id is
+  ///      URL-encoded as `video:123`) resolve via [extractMediaStoreId] to
+  ///      the MediaStore id photo_manager keys on. Zero enumeration.
   ///
-  ///   2. Global filename scan — pull the "all photos" album (the first
-  ///      hit from `getAssetPathList` with no time filter) and walk it
-  ///      until an entry's `title` matches the picked filename. Skips the
-  ///      per-asset `await file.length()` — matching by name across the
-  ///      whole gallery is enough in practice; collisions are effectively
-  ///      zero because Android generates unique camera filenames.
+  ///   2. Global filename scan — the aggregate "all" album (onlyAll), up
+  ///      to 2000 recent entries, matched by title + byte size.
   ///
   ///   3. Fallback — if the picker returned a direct `/storage/…` path
   ///      we can at least store that as `localPath`, even without an
@@ -209,7 +212,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }) async {
     // TIER 1 — content URI → MediaStore id.
     if (pickedIdentifier != null) {
-      final id = _extractMediaStoreId(pickedIdentifier);
+      final id = extractMediaStoreId(pickedIdentifier);
       if (id != null) {
         try {
           final asset = await AssetEntity.fromId(id);
@@ -228,24 +231,26 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
     }
 
-    // TIER 2 — filename scan across the whole gallery.
+    // TIER 2 — filename scan across the whole gallery. onlyAll asks
+    // MediaStore for THE aggregate album directly — the old "first
+    // non-empty album" guess could land on an image bucket and miss
+    // videos entirely.
     try {
       final perm = await PhotoManager.requestPermissionExtend();
       if (perm.isAuth) {
         final albums = await PhotoManager.getAssetPathList(
           type: RequestType.common,
+          onlyAll: true,
         );
-        // `getAssetPathList` returns the "all photos" super-album first on
-        // Android; walking it saves the per-album iteration the old code did.
-        for (final album in albums) {
+        if (albums.isNotEmpty) {
+          final album = albums.first;
           final count = await album.assetCountAsync;
-          if (count == 0) continue;
-          // Bump the scan width — 200 was too tight for anything not
-          // taken in the last week or so.
-          final assets = await album.getAssetListRange(
-            start: 0,
-            end: count.clamp(0, 2000),
-          );
+          final assets = count == 0
+              ? const <AssetEntity>[]
+              : await album.getAssetListRange(
+                  start: 0,
+                  end: count.clamp(0, 2000),
+                );
           for (final a in assets) {
             if (a.title == filename) {
               final f = await a.file;
@@ -262,9 +267,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               }
             }
           }
-          // First (usually largest) album is enough — it's the aggregate
-          // "Recent" / "All" album on both Samsung and stock Android.
-          break;
         }
       }
     } catch (e) {
@@ -279,16 +281,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return null;
   }
 
-  /// Pulls the trailing numeric id out of a `content://media/...` URI.
-  /// Returns null if the URI doesn't look MediaStore-shaped.
-  String? _extractMediaStoreId(String uri) {
-    if (!uri.startsWith('content://media/')) return null;
-    final trailing = uri.split('/').last;
-    // Guard against query strings / fragments picked up by trailing.
-    final digits = RegExp(r'^\d+').firstMatch(trailing)?.group(0);
-    return digits;
-  }
-
   Future<void> _handleUpload({required _UploadCategory category}) async {
     final isMedia = category == _UploadCategory.media;
     final isAudio = category == _UploadCategory.audio;
@@ -301,9 +293,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     Uint8List? thumbnailBytes;
     bool isVideo = false;
     String? pickedPath;
+    // True when the pick is a real on-device file (kept for local-first
+    // loading); false when it's file_picker's throwaway cache copy, which
+    // MUST be deleted whether the upload succeeds or fails — hence hoisted
+    // for the finally block.
+    bool isLocalFile = false;
     // Hoisted above the try so the catch block can roll back the DB
     // row that gets inserted in step 4 when a later step (upload) fails.
     String? fileId;
+    // Whether THIS call took a foreground-service ref (a picker cancel
+    // bails before begin(); its finally must not release someone else's).
+    bool fgPinned = false;
 
     try {
       // --- 1. UNIFIED PICKER (FilePicker Only) ---
@@ -358,6 +358,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         fileBytes = await File(pickedPath).readAsBytes();
       }
 
+      // Pin the process at foreground priority for the rest of the flow —
+      // backgrounding the app must not freeze the encrypt+upload. Ask for
+      // notification permission first (Android 13+): without it the pin
+      // still works, but the "Securing your file…" notification is
+      // invisible and a backgrounded upload looks like nothing is running.
+      if (await Permission.notification.isDenied) {
+        await Permission.notification.request();
+      }
+      await UploadForegroundGuard().begin();
+      fgPinned = true;
+
       setState(() => _isUploading = true);
 
       // --- 3. GENERATE IMAGE/DOC THUMBNAILS ---
@@ -396,8 +407,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       if (currentEmail == null) throw Exception('No active account.');
 
+      // Duplicate-name rename: a second upload of "photo.jpg" lands as
+      // "photo (1).jpg" instead of a same-named twin. Auto-sync dedup is
+      // unaffected — it matches renamed rows by MediaStore asset id. The
+      // pre-rename name is kept for the gallery-asset resolve below, which
+      // matches against MediaStore titles.
+      final originalPickName = filename;
+      final taken = await DatabaseService()
+          .getActiveFilenames(stemPrefix: dedupQueryPrefix(filename));
+      filename = nextAvailableFilename(filename, taken);
+
       // Detect if picked from local storage vs a cloud content provider
-      final isLocalFile = pickedPath.startsWith('/storage/') || pickedPath.startsWith('/sdcard/');
+      isLocalFile = pickedPath.startsWith('/storage/') || pickedPath.startsWith('/sdcard/');
 
       // Try to resolve to a photo_manager AssetEntity so the vault entry
       // ties back to the phone's gallery. Two wins: (1) smart albums like
@@ -409,7 +430,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       String? matchedLocalPath;
       if (isMedia) {
         final match = await _resolveGalleryAsset(
-          filename: filename,
+          filename: originalPickName,
           fileSize: fileSize,
           fallbackPath: pickedPath,
           // FilePicker fills `identifier` with the source content:// URI
@@ -442,6 +463,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         } catch (_) {}
       }
 
+      // Media dimensions/duration, captured while the plaintext is still in
+      // hand — the ONLY moment they're free. Without them the details sheet
+      // of a file whose gallery counterpart disappears shows just a size.
+      int? mediaWidth;
+      int? mediaHeight;
+      int? mediaDurationMs;
+      String? mediaVideoCodec;
+      String? mediaAudioCodec;
+      int? mediaFps;
+      String? mediaDeviceModel;
+      if (isVideo) {
+        try {
+          final meta = await Mp4MetadataParser.parse(File(pickedPath));
+          mediaWidth = meta?.width;
+          mediaHeight = meta?.height;
+          mediaDurationMs = meta?.duration?.inMilliseconds;
+          mediaVideoCodec = meta?.videoCodec;
+          mediaAudioCodec = meta?.audioCodec;
+          mediaFps = meta?.fps;
+          mediaDeviceModel = meta?.deviceModel;
+        } catch (e) {
+          debugPrint('Video metadata parse failed: $e');
+        }
+      } else if (isMedia && fileBytes != null) {
+        final dims = await _imageDimensions(fileBytes);
+        mediaWidth = dims?.$1;
+        mediaHeight = dims?.$2;
+      }
+
       final newFile = CnestFile(
         id: fileId,
         filename: filename,
@@ -455,9 +505,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         type: type,
         provider: 0,
         accountId: currentEmail,
+        width: mediaWidth,
+        height: mediaHeight,
+        durationMs: mediaDurationMs,
+        videoCodec: mediaVideoCodec,
+        audioCodec: mediaAudioCodec,
+        fps: mediaFps,
+        deviceModel: mediaDeviceModel,
       );
 
       await DatabaseService().addFile(newFile);
+      // The heal pass must never touch this row while its upload runs.
+      AutoSyncService.inFlightUploadIds.add(fileId);
+
+      // Video WITHOUT a MediaStore binding: cache the just-generated
+      // thumbnail locally, keyed by the row id, so the grid shows a frame
+      // DURING the upload. Asset-bound videos skip this entirely —
+      // MediaStore serves their tile, so writing a copy would just burn
+      // cache for nothing.
+      if (isVideo && thumbnailBytes != null && matchedAssetId == null) {
+        try {
+          final dir = await getTemporaryDirectory();
+          await File('${dir.path}/thumb_local_$fileId.jpg')
+              .writeAsBytes(thumbnailBytes);
+        } catch (_) {
+          // Best-effort — the tile just stays blank during upload.
+        }
+      }
 
       // Audio: the picker usually hands us a throwaway cache copy, so no
       // durable localPath survives. Keep a plaintext copy in the private
@@ -540,18 +614,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           capturedAt: capturedMs);
       DatabaseBackupService().scheduleBackup();
 
-      // --- 6. CACHE MANAGEMENT ---
-      try {
-        // Only delete the source if it's a temp file from a cloud content provider.
-        // Local gallery files are kept for local-first thumbnail loading.
-        if (!isLocalFile) {
-          final pickerFile = File(pickedPath);
-          if (await pickerFile.exists()) {
-            await pickerFile.delete();
-          }
-        }
-      } catch (e) {
-        debugPrint("Cleanup warning: $e");
+      // Prime the grid's thumb cache from the bytes already in memory —
+      // without this the grid re-downloads and re-decrypts the thumbnail
+      // we JUST uploaded. Keyed by the MAIN cloud id (the grid's rung-3
+      // cache name). ONLY for videos with no MediaStore binding — an
+      // asset-bound video renders from MediaStore, so a cached copy would
+      // be pure dead weight until the gallery original disappears (at
+      // which point rung 3 re-downloads on demand).
+      if (isVideo && thumbnailBytes != null && matchedAssetId == null) {
+        try {
+          final dir = await getTemporaryDirectory();
+          await File('${dir.path}/thumb_$mainCloudId.jpg')
+              .writeAsBytes(thumbnailBytes);
+          final localThumb = File('${dir.path}/thumb_local_$fileId.jpg');
+          if (await localThumb.exists()) await localThumb.delete();
+        } catch (_) {}
       }
 
       if (mounted) {
@@ -575,11 +652,52 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         } catch (rollbackErr) {
           debugPrint('Upload rollback failed: $rollbackErr');
         }
+        // Failure-path artifacts written before/for the upload: the
+        // plaintext audio cache copy and the pre-upload video thumb.
+        try {
+          final dir = await getTemporaryDirectory();
+          for (final f in [
+            File('${dir.path}/${rollbackId}_audio.bin'),
+            File('${dir.path}/thumb_local_$rollbackId.jpg'),
+          ]) {
+            if (await f.exists()) await f.delete();
+          }
+        } catch (_) {}
       }
       if (!mounted) return;
       await showCnestError(context, _mapUploadError(e));
     } finally {
+      if (fgPinned) await UploadForegroundGuard().end();
+      if (fileId != null) AutoSyncService.inFlightUploadIds.remove(fileId);
+      // The file_picker cache copy must die on BOTH outcomes — leaving it
+      // after a failed upload leaked the full file size into the app cache
+      // (invisible to the LRU sweep, visible in the Settings size figure).
+      // Real on-device files (isLocalFile) are kept for local-first loading.
+      if (pickedPath != null && !isLocalFile) {
+        try {
+          final pickerFile = File(pickedPath);
+          if (await pickerFile.exists()) await pickerFile.delete();
+        } catch (e) {
+          debugPrint('Picker-copy cleanup warning: $e');
+        }
+      }
       if (mounted) setState(() => _isUploading = false);
+    }
+  }
+
+  /// Header-only decode: dimensions without rasterizing the image.
+  Future<(int, int)?> _imageDimensions(Uint8List bytes) async {
+    try {
+      final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+      final descriptor = await ui.ImageDescriptor.encoded(buffer);
+      final dims = descriptor.width > 0 && descriptor.height > 0
+          ? (descriptor.width, descriptor.height)
+          : null;
+      descriptor.dispose();
+      buffer.dispose();
+      return dims;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -587,17 +705,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final msg = e.toString().toLowerCase();
     // Drive: 403 with "storageQuotaExceeded" in the JSON body.
     // Graph:  403/507 with "quotaLimitReached".
+    // Quota first — its exceptions can carry connection-ish wording that
+    // the network classifier would misread.
     if (msg.contains('storagequotaexceeded') ||
         msg.contains('quotalimitreached') ||
         msg.contains('quota exceeded')) {
       return const StorageFullError();
     }
-    if (msg.contains('failed host lookup') ||
-        msg.contains('network is unreachable') ||
-        msg.contains('no address associated with hostname')) {
-      return const OfflineError();
-    }
-    return UnexpectedError(code: 'UPLOAD', debugDetail: e.toString());
+    return classifyNetworkError(e) ??
+        UnexpectedError(code: 'UPLOAD', debugDetail: e.toString());
   }
 
   @override
@@ -866,14 +982,7 @@ class _VaultUsageCard extends StatelessWidget {
   final Map<String, int>? stats;
   const _VaultUsageCard({required this.stats});
 
-  String _fmt(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    if (bytes < 1024 * 1024 * 1024) {
-      return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
-    }
-    return '${(bytes / 1024 / 1024 / 1024).toStringAsFixed(2)} GB';
-  }
+  String _fmt(int bytes) => formatBytes(bytes);
 
   @override
   Widget build(BuildContext context) {

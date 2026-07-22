@@ -132,15 +132,23 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
     // Cloud + DB purge, then route cache wipe through
     // CacheManagerService.invalidateFile so its ChangeNotifier fires and
     // the Settings cache-size tile updates immediately after this action.
+    // A failed cloud delete must not block the purge: the purge tombstone
+    // condemns the blob, and the sync cycle's condemned-blob sweep retries
+    // the deletion until it lands.
     for (final f in picked) {
       try {
         if (f.cloudId != null) await CloudService().deleteFile(f.cloudId!);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Delete forever: blob delete failed (${f.cloudId}): $e');
+      }
       try {
         if (f.thumbnailCloudId != null) {
           await CloudService().deleteFile(f.thumbnailCloudId!);
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint(
+            'Delete forever: thumb delete failed (${f.thumbnailCloudId}): $e');
+      }
       try {
         await DatabaseService().permanentlyDeleteFile(f.id);
       } catch (_) {}

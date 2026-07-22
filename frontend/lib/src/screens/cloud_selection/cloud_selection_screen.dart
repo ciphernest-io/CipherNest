@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../utils/byte_format.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../services/cloud/account_registry.dart';
@@ -384,8 +385,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
           ? 'unknown date'
           : '${when.toLocal().year}-${when.toLocal().month.toString().padLeft(2, '0')}-${when.toLocal().day.toString().padLeft(2, '0')} '
               '${when.toLocal().hour.toString().padLeft(2, '0')}:${when.toLocal().minute.toString().padLeft(2, '0')}';
-      final kb = (s.sizeBytes / 1024).round();
-      return '$date · $kb KB';
+      return '$date · ${formatBytes(s.sizeBytes)}';
     }
 
     return showDialog<BackupSnapshot>(

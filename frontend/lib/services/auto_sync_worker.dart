@@ -27,13 +27,23 @@ const String _kAutoSyncModePref = 'auto_sync_mode';
 /// (sync_service.dart, older widgets) doesn't break.
 const String _kLegacyEnabledPref = 'auto_sync_enabled';
 
-/// How often the periodic task fires when the user is on
-/// [AutoSyncMode.background]. Six hours is the sweet spot between
-/// responsiveness (new photos vaulted within a workday) and battery cost
-/// (four wakeups/day × maybe 30 s of Wi-Fi + AES-GCM). Android's absolute
-/// minimum for `registerPeriodicTask` is 15 minutes; we deliberately pick a
-/// value well above it.
-const Duration _kPeriodicFrequency = Duration(hours: 6);
+/// SharedPreferences key for the user-chosen background interval, in
+/// minutes. Default 360 (six hours) — the sweet spot between responsiveness
+/// and battery cost. Android's absolute minimum for `registerPeriodicTask`
+/// is 15 minutes; the picker's choices respect it.
+const String _kIntervalPref = 'auto_sync_interval_minutes';
+
+/// The interval most recently REGISTERED with Workmanager. Registration
+/// must use `update` only when the desired interval actually changed —
+/// unconditionally re-registering on every cold start would reset the
+/// periodic timer each launch, so a 6-hour task would never fire for a
+/// user who opens the app every few hours.
+const String _kIntervalAppliedPref = 'auto_sync_interval_applied';
+
+const int kAutoSyncIntervalDefaultMinutes = 360;
+
+/// Picker choices, minutes. 15 is Workmanager's floor.
+const List<int> kAutoSyncIntervalChoices = [15, 60, 360, 1440];
 
 /// One-shot backoff for a failed periodic run. 15 minutes lines up with
 /// Workmanager's shortest interval so we don't burn a slot on rapid retries.
@@ -104,17 +114,40 @@ class AutoSyncScheduler {
     }
   }
 
+  /// Reads the user-chosen background interval.
+  static Future<Duration> readInterval() async {
+    final prefs = await SharedPreferences.getInstance();
+    final minutes =
+        prefs.getInt(_kIntervalPref) ?? kAutoSyncIntervalDefaultMinutes;
+    return Duration(minutes: minutes < 15 ? 15 : minutes);
+  }
+
+  /// Persists a new background interval and re-applies the current mode so
+  /// the Workmanager task picks it up.
+  static Future<void> writeInterval(Duration interval) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_kIntervalPref, interval.inMinutes);
+    await _applyMode(await readMode());
+  }
+
   static Future<void> _applyMode(AutoSyncMode mode) async {
     if (mode == AutoSyncMode.background) {
-      // registerPeriodicTask with existingWorkPolicy.keep is safe to call
-      // every launch — it's a no-op when the task is already scheduled and
-      // registers it if the OS dropped it.
       try {
+        final prefs = await SharedPreferences.getInstance();
+        final desired = await readInterval();
+        final applied = prefs.getInt(_kIntervalAppliedPref);
+        // `keep` when the registered task already runs at the desired
+        // interval (re-registers only if the OS dropped it); `update` when
+        // the user picked a new interval. Never unconditionally replace —
+        // that resets the periodic timer on every cold start.
+        final policy = applied == desired.inMinutes
+            ? ExistingPeriodicWorkPolicy.keep
+            : ExistingPeriodicWorkPolicy.update;
         await Workmanager().registerPeriodicTask(
           _kPeriodicTaskUniqueName,
           autoSyncTaskName,
-          frequency: _kPeriodicFrequency,
-          existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
+          frequency: desired,
+          existingWorkPolicy: policy,
           constraints: Constraints(
             networkType: NetworkType.connected,
             requiresBatteryNotLow: true,
@@ -122,8 +155,9 @@ class AutoSyncScheduler {
           backoffPolicy: BackoffPolicy.exponential,
           backoffPolicyDelay: _kBackoffDelay,
         );
+        await prefs.setInt(_kIntervalAppliedPref, desired.inMinutes);
         await _log('background mode enabled: periodic task scheduled '
-            'every ${_kPeriodicFrequency.inHours}h');
+            'every ${desired.inMinutes}m (policy ${policy.name})');
       } catch (e) {
         debugPrint('AutoSyncScheduler: registerPeriodicTask failed: $e');
       }
@@ -182,6 +216,16 @@ void callbackDispatcher() {
       );
 
       final result = await AutoSyncService().runFullSync();
+
+      // Proof-of-life stamp: distinct from auto_sync_last_run (which every
+      // caller writes) — this one only ever moves when the BACKGROUND
+      // worker actually fired, which is what Settings surfaces so Samsung's
+      // battery killer can't silently disable background sync.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(
+        'auto_sync_last_bg_run',
+        DateTime.now().millisecondsSinceEpoch,
+      );
 
       // Show result notification
       if (result.synced > 0 || result.failed > 0) {

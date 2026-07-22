@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -9,6 +10,7 @@ import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/file_model.dart';
+import '../../../services/cache_manager_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
@@ -270,7 +272,14 @@ class _ThumbnailLoaderState extends State<_ThumbnailLoader> {
 
   /// Fire-and-forget: share the obtained frame through the standard
   /// thumb-cache path so the grid, filmstrip, and viewer reuse it.
+  /// MediaStore-bound files are excluded (same assetId == null gate as the
+  /// viewer/filmstrip persist helpers): Android re-serves their frame on
+  /// demand, and this ungated write — running for every video story card
+  /// the moment the gallery's IndexedStack builds this tab — was why the
+  /// app-cache figure jumped on entering the gallery even though the grid
+  /// itself writes nothing.
   void _persistFrame(Uint8List bytes) {
+    if (widget.file.assetId != null) return;
     final cloudId = widget.file.cloudId;
     if (cloudId == null) return;
     getTemporaryDirectory().then((dir) async {
@@ -286,8 +295,12 @@ class _ThumbnailLoaderState extends State<_ThumbnailLoader> {
     // Videos first: their raw bytes are not decodable as an image, so they
     // need a real frame — same rungs as the gallery grid and filmstrip.
     if (_isVideo) {
-      // Rung 0 — the shared disk thumb cache.
-      if (widget.file.cloudId != null) {
+      // Rung 0 — the shared disk thumb cache. MediaStore-bound files skip
+      // it: Android serves their frame, and a disk thumb here can only be a
+      // stale leftover from a window when the local original was missing
+      // (gallery delete → restore). Serving it first kept the leftover
+      // alive forever.
+      if (widget.file.assetId == null && widget.file.cloudId != null) {
         final dir = await getTemporaryDirectory();
         final cached = File('${dir.path}/thumb_${widget.file.cloudId}.jpg');
         if (await cached.exists()) {
@@ -305,6 +318,14 @@ class _ThumbnailLoaderState extends State<_ThumbnailLoader> {
           );
           if (bytes != null) {
             _persistFrame(bytes);
+            // MediaStore verified as the source — reclaim any leftover
+            // decrypted copies. Stories re-runs _load on every rebuild
+            // (no memo), so this converges even when the grid tile's
+            // session memo skips its own ladder.
+            unawaited(CacheManagerService().reclaimForMediaStoreOriginal(
+              fileId: widget.file.id,
+              cloudId: widget.file.cloudId,
+            ));
             if (mounted) setState(() => _bytes = bytes);
             return;
           }

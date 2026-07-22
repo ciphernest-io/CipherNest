@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../utils/byte_format.dart';
 import 'package:intl/intl.dart';
 
 import '../../../services/audio_player_service.dart';
@@ -41,11 +42,7 @@ class _AudioDetailsScreenState extends State<AudioDetailsScreen> {
     }
   }
 
-  String get _size {
-    final bytes = _file.sizeBytes;
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)} KB';
-    return '${(bytes / 1024 / 1024).toStringAsFixed(2)} MB';
-  }
+  String get _size => formatBytes(_file.sizeBytes);
 
   /// Track length is only known when this track is loaded in the player —
   /// duration lives inside the encrypted blob, and we don't decrypt just to

@@ -14,6 +14,12 @@ class Mp4Metadata {
   final int? height;
   final Duration? duration;
 
+  /// The recording device, from `moov/udta` vendor atoms. Samsung Camera
+  /// writes the model into `@mod` (newer One UI: the marketing name, e.g.
+  /// "Galaxy A55 5G" — the same string Samsung Gallery shows). Null when
+  /// the producer wrote no such atom (most non-camera videos).
+  final String? deviceModel;
+
   const Mp4Metadata({
     this.videoCodec,
     this.audioCodec,
@@ -21,6 +27,7 @@ class Mp4Metadata {
     this.width,
     this.height,
     this.duration,
+    this.deviceModel,
   });
 }
 
@@ -30,12 +37,13 @@ class Mp4Metadata {
 /// `stsd`, frame count in `stts`, timescale in `mdhd`, dimensions in
 /// `tkhd`, handler kind in `hdlr`. Everything else is skipped by size.
 ///
-/// The parser buffers the file lazily: it reads up to ~2 MB from the start,
-/// which covers the moov atom in most modern-camera output (Samsung
-/// included). Files where moov lives at the tail (fastStart=false) also
-/// work — we look for a `moov` fourcc in a small tail chunk if the head
-/// scan came up empty. Files larger than a couple of GB stream through
-/// `RandomAccessFile` seek/read rather than being fully loaded.
+/// moov is located by walking TOP-LEVEL atoms with RandomAccessFile seeks:
+/// read each 8/16-byte atom header, skip the atom by its declared size,
+/// stop at `moov` and read just its payload. This is layout-agnostic —
+/// camera output (Samsung included) writes `ftyp, mdat, moov` with moov at
+/// the TAIL, and a fixed-size head/tail buffer scan cannot find it (a tail
+/// window is not atom-aligned, so scanning it walks mdat garbage). Total IO
+/// is a handful of header reads plus the moov payload itself.
 ///
 /// Non-mp4 containers (`.mkv`, `.webm`, `.avi`) are detected by the
 /// missing `ftyp` header and simply return null; the caller renders a
@@ -50,18 +58,11 @@ class Mp4MetadataParser {
       final size = await raf.length();
       if (size < 16) return null;
 
-      // ftyp atom must appear near the start of any ISOBMFF file.
-      final headBuf = await raf.read(_headScanBytes.clamp(0, size));
-      if (!_looksLikeIsobmff(headBuf)) return null;
+      // ftyp atom must open any ISOBMFF file.
+      final head = await raf.read(16);
+      if (!_looksLikeIsobmff(head)) return null;
 
-      Uint8List? moovBytes = _findAtomInBuffer(headBuf, 'moov');
-      if (moovBytes == null && size > _headScanBytes) {
-        // Faststart=false layout — moov lives after mdat. Read the tail.
-        final tailStart = (size - _tailScanBytes).clamp(0, size);
-        await raf.setPosition(tailStart);
-        final tailBuf = await raf.read(size - tailStart);
-        moovBytes = _findAtomInBuffer(tailBuf, 'moov');
-      }
+      final moovBytes = await _readMoov(raf, size);
       if (moovBytes == null) return null;
 
       String? videoCodec;
@@ -125,6 +126,7 @@ class Mp4MetadataParser {
         width: width,
         height: height,
         duration: duration,
+        deviceModel: _udtaDeviceModel(moovBytes),
       );
     } catch (e) {
       debugPrint('Mp4MetadataParser: $e');
@@ -138,13 +140,10 @@ class Mp4MetadataParser {
   // Atom navigation
   // ---------------------------------------------------------------------------
 
-  /// How much of the file to load up front looking for moov. 2 MB is enough
-  /// for a faststart-optimized moov even on a 4K 60 fps clip.
-  static const int _headScanBytes = 2 * 1024 * 1024;
-
-  /// Tail scan window when moov is at the end of the file. Same 2 MB gets
-  /// us covered for videos up to a few hours long.
-  static const int _tailScanBytes = 2 * 1024 * 1024;
+  /// Upper bound on how much moov we load. Real moov atoms are tens of KB
+  /// to a few MB (sample tables grow with clip length); 32 MB is far past
+  /// any camera output and just guards against a corrupt size field.
+  static const int _maxMoovBytes = 32 * 1024 * 1024;
 
   static bool _looksLikeIsobmff(Uint8List buf) {
     if (buf.length < 8) return false;
@@ -152,29 +151,32 @@ class Mp4MetadataParser {
     return String.fromCharCodes(buf.sublist(4, 8)) == 'ftyp';
   }
 
-  /// Scans a buffer for the first occurrence of a top-level atom with the
-  /// given fourcc and returns its payload (excluding the 8-byte header).
-  static Uint8List? _findAtomInBuffer(Uint8List buf, String fourcc) {
+  /// Walks top-level atoms by seeking (never reading atom bodies) and
+  /// returns the moov payload, wherever in the file it lives. Null when
+  /// absent or the structure is corrupt.
+  static Future<Uint8List?> _readMoov(RandomAccessFile raf, int size) async {
     int offset = 0;
-    while (offset + 8 <= buf.length) {
-      final size = _readUint32(buf, offset);
-      final type = String.fromCharCodes(buf.sublist(offset + 4, offset + 8));
-      int atomSize = size;
+    while (offset + 8 <= size) {
+      await raf.setPosition(offset);
+      final hdr = await raf.read(16);
+      if (hdr.length < 8) return null;
+      int atomSize = _readUint32(hdr, 0);
       int headerSize = 8;
-      if (size == 1) {
-        // 64-bit extended size
-        if (offset + 16 > buf.length) return null;
-        atomSize = _readUint64(buf, offset + 8);
+      final type = String.fromCharCodes(hdr.sublist(4, 8));
+      if (atomSize == 1) {
+        // 64-bit extended size (large mdat).
+        if (hdr.length < 16) return null;
+        atomSize = _readUint64(hdr, 8);
         headerSize = 16;
-      } else if (size == 0) {
-        atomSize = buf.length - offset; // extends to EOF
+      } else if (atomSize == 0) {
+        atomSize = size - offset; // extends to EOF
       }
       if (atomSize < headerSize) return null;
-      if (type == fourcc) {
-        final payloadStart = offset + headerSize;
-        final payloadEnd =
-            (offset + atomSize).clamp(payloadStart, buf.length);
-        return Uint8List.sublistView(buf, payloadStart, payloadEnd);
+      if (type == 'moov') {
+        final payloadLen =
+            (atomSize - headerSize).clamp(0, _maxMoovBytes).toInt();
+        await raf.setPosition(offset + headerSize);
+        return raf.read(payloadLen);
       }
       offset += atomSize;
     }
@@ -222,6 +224,77 @@ class Mp4MetadataParser {
   // ---------------------------------------------------------------------------
   // Field extractors for the specific atoms we care about
   // ---------------------------------------------------------------------------
+
+  /// Device model from `moov/udta`. Vendor-specific: Samsung writes `@mod`
+  /// (and `@man` for the make), some producers use QuickTime's `©mod` or
+  /// 3GPP's `auth`/`modl`. Payloads may carry version/lang prefix bytes, so
+  /// extraction is tolerant: skip leading control bytes, take the printable
+  /// run.
+  static String? _udtaDeviceModel(Uint8List moov) {
+    final udta = _childOf(moov, 'udta');
+    if (udta == null) return null;
+    for (final name in const ['@mod', '©mod', 'modl', 'auth']) {
+      final payload = _childOf(udta, name);
+      if (payload == null) continue;
+      final s = _printableString(payload);
+      if (s != null) return s;
+    }
+    return null;
+  }
+
+  /// Extracts the model string from a vendor atom payload.
+  ///
+  /// Samsung writes its model atom in the 3GPP FullBox layout: 4 bytes
+  /// version/flags, then a 2-byte PACKED ISO-639 language code, then the
+  /// string. The language's second byte is usually a printable high byte
+  /// ("eng" packs to 0x15C7), so skipping only control bytes leaked it
+  /// into the name — "ÇGalaxy A55 5G" on a real Galaxy A55. Bytes 4-5 are
+  /// only treated as a language when they actually decode as one, so raw
+  /// string payloads are unaffected.
+  static String? _printableString(Uint8List payload) {
+    if (payload.length > 6 &&
+        payload[0] == 0 &&
+        _isPackedIsoLanguage(payload[4], payload[5])) {
+      final s = _printableRun(payload, 6);
+      if (s != null) return s;
+    }
+    return _printableRun(payload, 0);
+  }
+
+  /// ISO-639-2/T packed language: three 5-bit letters, each 1..26.
+  static bool _isPackedIsoLanguage(int hi, int lo) {
+    final packed = (hi << 8) | lo;
+    for (final c in [
+      (packed >> 10) & 0x1F,
+      (packed >> 5) & 0x1F,
+      packed & 0x1F,
+    ]) {
+      if (c < 1 || c > 26) return false;
+    }
+    return true;
+  }
+
+  /// Skips leading non-ASCII-printable bytes from [from], returns the first
+  /// ASCII-printable run when it looks like a real model string (2..64
+  /// chars, contains a letter). ASCII-only on purpose: device model
+  /// strings are ASCII, and high bytes here are always layout leakage.
+  static String? _printableRun(Uint8List payload, int from) {
+    var start = from;
+    while (start < payload.length &&
+        (payload[start] < 0x20 || payload[start] >= 0x7F)) {
+      start++;
+    }
+    var end = start;
+    while (end < payload.length &&
+        payload[end] >= 0x20 &&
+        payload[end] < 0x7F) {
+      end++;
+    }
+    if (end - start < 2 || end - start > 64) return null;
+    final s = String.fromCharCodes(payload.sublist(start, end)).trim();
+    if (s.length < 2 || !RegExp(r'[A-Za-z]').hasMatch(s)) return null;
+    return s;
+  }
 
   /// hdlr atom layout: 4 flags + 4 pre_defined + 4 handler_type + rest.
   /// The handler_type is a 4-char fourcc like `vide`, `soun`, `hint`.
@@ -282,6 +355,11 @@ class Mp4MetadataParser {
   /// version. v0: header ends at offset 74 (post-transform 4-byte width,
   /// 4-byte height at 76 and 80). v1: 12 bytes longer for the extended
   /// times, so those fields shift.
+  ///
+  /// Phone cameras record sensor-native LANDSCAPE (e.g. 1920x1080) and mark
+  /// portrait clips with a ±90° matrix in the same atom — the size the user
+  /// sees (and Samsung Gallery shows) is the rotated one, so a quarter-turn
+  /// matrix swaps the reported dimensions (1920x1080 → 1080x1920).
   static (int, int)? _tkhdDimensions(Uint8List tkhd) {
     if (tkhd.length < 4) return null;
     final version = tkhd[0];
@@ -293,6 +371,17 @@ class Mp4MetadataParser {
     final w = _readUint32(tkhd, wOff) >> 16;
     final h = _readUint32(tkhd, hOff) >> 16;
     if (w == 0 || h == 0) return null;
+
+    // The 3x3 transform matrix (nine 32-bit fields) sits immediately before
+    // width. A quarter turn has zero scale terms and nonzero rotation terms:
+    // matrix rows are [a b u][c d v][x y w]; 90°/270° ⇒ a=d=0, b,c≠0.
+    final mOff = wOff - 36;
+    final a = _readUint32(tkhd, mOff);
+    final b = _readUint32(tkhd, mOff + 4);
+    final c = _readUint32(tkhd, mOff + 12);
+    final d = _readUint32(tkhd, mOff + 16);
+    if (a == 0 && d == 0 && b != 0 && c != 0) return (h, w);
+
     return (w, h);
   }
 

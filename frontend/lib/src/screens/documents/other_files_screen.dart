@@ -1,4 +1,5 @@
 import 'dart:io';
+import '../../utils/byte_format.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
@@ -146,14 +147,7 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
     }
   }
 
-  String _humanSize(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)} KB';
-    if (bytes < 1024 * 1024 * 1024) {
-      return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
-    }
-    return '${(bytes / 1024 / 1024 / 1024).toStringAsFixed(2)} GB';
-  }
+  String _humanSize(int bytes) => formatBytes(bytes);
 
   @override
   Widget build(BuildContext context) {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -37,6 +38,12 @@ class _StreamingSession {
   /// NEXT session for this video play entirely from disk, zero network.
   final File completeMarker;
 
+  /// Sidecar chunk index (`.idx`): which chunks the cache file actually
+  /// holds, persisted as the cache grows. This is what lets a PARTIAL cache
+  /// survive across sessions — before it existed, anything short of a
+  /// fully-watched video was truncated and re-downloaded on every open.
+  final File idxFile;
+
   RandomAccessFile? writeHandle;
   final Set<int> cachedChunks = {};
   bool complete;
@@ -55,6 +62,7 @@ class _StreamingSession {
     required this.lastChunkEncryptedSize,
     required this.cacheFile,
     required this.completeMarker,
+    required this.idxFile,
     required this.complete,
   });
 
@@ -215,6 +223,7 @@ class VideoStreamingServer {
     final tempDir = await getTemporaryDirectory();
     final cacheFile = File('${tempDir.path}/video_${file.cloudId}.plain');
     final completeMarker = File('${cacheFile.path}.done');
+    final idxFile = File('${cacheFile.path}.idx');
     bool complete = false;
     if (await completeMarker.exists()) {
       if (await cacheFile.exists() &&
@@ -224,6 +233,32 @@ class VideoStreamingServer {
         try {
           await completeMarker.delete();
         } catch (_) {}
+      }
+    }
+
+    // Partial-cache resume: the `.idx` sidecar says which chunks the cache
+    // file already holds. Validated hard (version, size, chunk bounds vs
+    // the actual file length) — anything off means the pair is untrusted
+    // and we start fresh, exactly like the pre-idx behavior.
+    var seededChunks = const <int>{};
+    if (!complete && await idxFile.exists() && await cacheFile.exists()) {
+      try {
+        final decoded = decodeChunkIndex(
+          await idxFile.readAsString(),
+          expectedSize: plaintextSize,
+          totalChunks: totalChunks,
+        );
+        if (decoded != null && decoded.isNotEmpty) {
+          final cacheLen = await cacheFile.length();
+          final maxChunk = decoded.reduce(math.max);
+          final maxEnd = math.min(
+            (maxChunk + 1) * EncryptionService.plaintextChunkSize,
+            plaintextSize,
+          );
+          if (maxEnd <= cacheLen) seededChunks = decoded;
+        }
+      } catch (_) {
+        // Unreadable idx → fresh start below.
       }
     }
 
@@ -237,12 +272,27 @@ class VideoStreamingServer {
       lastChunkEncryptedSize: lastChunkEncryptedSize,
       cacheFile: cacheFile,
       completeMarker: completeMarker,
+      idxFile: idxFile,
       complete: complete,
     );
     if (!complete) {
-      // FileMode.write truncates. Partial caches from older sessions carry
-      // no chunk map, so they can't be trusted anyway — start fresh.
-      session.writeHandle = await cacheFile.open(mode: FileMode.write);
+      if (seededChunks.isEmpty) {
+        // FileMode.write truncates — correct for an untrusted/absent cache.
+        session.writeHandle = await cacheFile.open(mode: FileMode.write);
+        try {
+          if (await idxFile.exists()) await idxFile.delete();
+        } catch (_) {}
+      } else {
+        // Trusted partial cache: open WITHOUT truncating. Dart's append
+        // mode is fully seekable — _ensureChunks setPositions every write —
+        // it just doesn't wipe the bytes already there.
+        session.writeHandle = await cacheFile.open(mode: FileMode.append);
+        session.cachedChunks.addAll(seededChunks);
+        debugPrint(
+          'VideoStreamingServer: resumed ${seededChunks.length}/'
+          '$totalChunks cached chunks for ${file.id}',
+        );
+      }
     }
 
     await _sessions[file.id]?.dispose();
@@ -528,6 +578,8 @@ class VideoStreamingServer {
         session.complete = true;
         try {
           await session.completeMarker.writeAsBytes(const []);
+          // The idx is subsumed by the `.done` marker.
+          if (await session.idxFile.exists()) await session.idxFile.delete();
           debugPrint(
             'VideoStreamingServer: ${session.file.id} fully cached on disk',
           );
@@ -535,7 +587,75 @@ class VideoStreamingServer {
           // Marker is an optimization; failing to write it just means the
           // next session re-downloads.
         }
+        return;
       }
+
+      // Persist the chunk index after each fetch batch so the NEXT session
+      // resumes this partial cache instead of truncating it. Atomic
+      // tmp+rename: a torn idx must never validate.
+      if (!session.complete) await _writeChunkIndex(session);
     });
+  }
+
+  /// Best-effort atomic write of the session's chunk index sidecar.
+  Future<void> _writeChunkIndex(_StreamingSession session) async {
+    try {
+      final tmp = File('${session.idxFile.path}.tmp');
+      await tmp.writeAsString(
+        encodeChunkIndex(session.cachedChunks, session.plaintextSize),
+        flush: true,
+      );
+      await tmp.rename(session.idxFile.path);
+    } catch (e) {
+      debugPrint('VideoStreamingServer: idx write failed: $e');
+    }
+  }
+
+  /// Serializes a cached-chunk set as `{"v":1,"size":N,"chunks":[[a,b],…]}`
+  /// (run-length ranges, sorted). Pure — unit-tested.
+  @visibleForTesting
+  static String encodeChunkIndex(Set<int> chunks, int plaintextSize) {
+    final sorted = chunks.toList()..sort();
+    final ranges = <List<int>>[];
+    for (final c in sorted) {
+      if (ranges.isNotEmpty && ranges.last[1] == c - 1) {
+        ranges.last[1] = c;
+      } else {
+        ranges.add([c, c]);
+      }
+    }
+    return jsonEncode({'v': 1, 'size': plaintextSize, 'chunks': ranges});
+  }
+
+  /// Parses an idx payload back to a chunk set. Null on ANY mismatch —
+  /// wrong version, wrong plaintext size (file changed), malformed ranges,
+  /// chunk numbers out of bounds. Null means "do not trust the cache".
+  @visibleForTesting
+  static Set<int>? decodeChunkIndex(
+    String raw, {
+    required int expectedSize,
+    required int totalChunks,
+  }) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return null;
+      if (decoded['v'] != 1 || decoded['size'] != expectedSize) return null;
+      final rawRanges = decoded['chunks'];
+      if (rawRanges is! List) return null;
+      final out = <int>{};
+      for (final r in rawRanges) {
+        if (r is! List || r.length != 2) return null;
+        final a = r[0];
+        final b = r[1];
+        if (a is! int || b is! int) return null;
+        if (a < 0 || b < a || b >= totalChunks) return null;
+        for (int i = a; i <= b; i++) {
+          out.add(i);
+        }
+      }
+      return out;
+    } catch (_) {
+      return null;
+    }
   }
 }

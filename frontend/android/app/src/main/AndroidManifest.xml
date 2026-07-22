@@ -10,6 +10,12 @@
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+    <!-- Upload foreground service (UploadForegroundService): keeps an
+         in-flight encrypt+upload alive when the user backgrounds the app.
+         POST_NOTIFICATIONS also un-hides the auto-sync worker's progress
+         notifications on Android 13+. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- allowBackup MUST stay false: Auto Backup would copy the wrapped seed
          (seed_blob_v1), the biometric blob, and the shares DB (which holds
          magic links with raw key fragments) to the user's Google Drive.
@@ -98,6 +104,13 @@
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
         </receiver>
+
+        <!-- Holds process priority while an encrypt+upload is in flight so
+             backgrounding the app doesn't kill the transfer. The upload
+             itself stays in Dart; this service only pins the process. -->
+        <service android:name=".UploadForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"/>
 
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

@@ -53,8 +53,15 @@ class LocalContentGuard {
 
       // Legacy row (pre-hash) or an oversized/video file: size gate is all we
       // can safely do without risking an on-thread hash of a huge file.
+      // The video check must be by EXTENSION — vault rows for videos carry
+      // type == image (they live in the pictures tab), so the type check
+      // alone would full-file-hash a ≤50 MB video on the display path.
+      final ext = file.filename.split('.').last.toLowerCase();
+      final isVideo =
+          const {'mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v'}.contains(ext);
       if (file.contentHash == null ||
           file.type != CnestFileType.image ||
+          isVideo ||
           len > _hashCeilingBytes) {
         return true;
       }

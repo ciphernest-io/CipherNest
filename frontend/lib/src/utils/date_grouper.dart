@@ -61,3 +61,41 @@ List<DateSection> groupByDate(List<CnestFile> files) {
 
   return sections;
 }
+
+/// "Month Year" sections (July 2026) — the gallery's mid zoom levels.
+List<DateSection> groupByMonth(List<CnestFile> files) {
+  final fmt = DateFormat.yMMMM();
+  return _groupByLabel(files, (f) => fmt.format(f.createdAt));
+}
+
+/// Year sections — the gallery's most zoomed-out level.
+List<DateSection> groupByYear(List<CnestFile> files) =>
+    _groupByLabel(files, (f) => '${f.createdAt.year}');
+
+/// Folds an already-sorted list into contiguous sections that share a label.
+List<DateSection> _groupByLabel(
+  List<CnestFile> files,
+  String Function(CnestFile) labelOf,
+) {
+  final sections = <DateSection>[];
+  String? currentLabel;
+  var currentFiles = <CnestFile>[];
+
+  for (final file in files) {
+    final label = labelOf(file);
+    if (label != currentLabel) {
+      if (currentFiles.isNotEmpty) {
+        sections.add(DateSection(label: currentLabel!, files: currentFiles));
+      }
+      currentLabel = label;
+      currentFiles = [file];
+    } else {
+      currentFiles.add(file);
+    }
+  }
+
+  if (currentFiles.isNotEmpty && currentLabel != null) {
+    sections.add(DateSection(label: currentLabel, files: currentFiles));
+  }
+  return sections;
+}

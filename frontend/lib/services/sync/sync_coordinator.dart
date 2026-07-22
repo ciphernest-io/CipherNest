@@ -30,7 +30,7 @@ class SyncCoordinator {
     if (account == null) return null;
     if (_engine == null || _engineAccountId != account.id) {
       _engine = SyncEngine(
-        transport: CloudSyncTransport(),
+        transport: CloudSyncTransport(accountId: account.id),
         accountId: account.id,
       );
       _engineAccountId = account.id;
