@@ -100,6 +100,10 @@ class SingleWriterReference implements SimSyncEngine {
           for (final e in pendingView.folders.entries) {
             _local.folders.putIfAbsent(e.key, () => e.value);
           }
+          for (final e in pendingView.binnedFolders.entries) {
+            _local.folders.remove(e.key);
+            _local.binnedFolders.putIfAbsent(e.key, () => e.value);
+          }
         }
         _writerRestored = true;
       }

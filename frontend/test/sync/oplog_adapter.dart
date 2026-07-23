@@ -33,7 +33,11 @@ SyncOp opFromAction(
     ActionKind.moveFile => SyncOpKind.moveFile,
     ActionKind.setFavorite => SyncOpKind.setFavorite,
     ActionKind.createFolder => SyncOpKind.createFolder,
+    ActionKind.moveFolder => SyncOpKind.moveFolder,
+    ActionKind.renameFolder => SyncOpKind.renameFolder,
     ActionKind.deleteFolder => SyncOpKind.deleteFolder,
+    ActionKind.restoreFolder => SyncOpKind.restoreFolder,
+    ActionKind.purgeFolder => SyncOpKind.purgeFolder,
   };
   return SyncOp(
     kind: kind,
@@ -218,23 +222,65 @@ class OpLogSimEngine implements SimSyncEngine {
       List<SyncOp>.unmodifiable(ops);
 
   @override
-  MaterializedState materialize() {
-    final state = replayOps(_log.values);
-    final live = <String, FileMeta>{};
-    final binned = <String, FileMeta>{};
-    for (final e in state.files.entries) {
-      final meta = FileMeta(
-        name: e.value.name,
-        folderId: e.value.folderId,
-        favorite: e.value.favorite,
+  MaterializedState materialize() => materializeState(replayOps(_log.values));
+}
+
+/// The ONE mapping from replay's [VaultState] to a user-visible
+/// [MaterializedState], shared by the adapter and the sequential-equivalence
+/// test so normalization can never drift between them.
+///
+/// Normalization (the op_replay header's promise, enforced by invariant 4):
+/// LIVE entries' folder pointers resolve to live-or-root; BINNED entries
+/// keep raw pointers + cascade cause (the bin shows original context, and a
+/// raw pointer is what lets a child rejoin a later-restored parent).
+MaterializedState materializeState(VaultState state) {
+  String? liveOrRoot(String? id) =>
+      id != null && state.folders.containsKey(id) && !state.folders[id]!.deleted
+          ? id
+          : null;
+
+  final live = <String, FileMeta>{};
+  final binned = <String, FileMeta>{};
+  for (final e in state.files.entries) {
+    final f = e.value;
+    if (f.deleted) {
+      binned[e.key] = FileMeta(
+        name: f.name,
+        folderId: f.folderId,
+        favorite: f.favorite,
+        deletedByFolder: f.deletedByFolderId,
       );
-      (e.value.deleted ? binned : live)[e.key] = meta;
+    } else {
+      live[e.key] = FileMeta(
+        name: f.name,
+        folderId: liveOrRoot(f.folderId),
+        favorite: f.favorite,
+        deletedByFolder: f.deletedByFolderId,
+      );
     }
-    final folders = <String, FolderMeta>{
-      for (final e in state.folders.entries)
-        if (!e.value.deleted)
-          e.key: FolderMeta(name: e.value.name, parentId: e.value.parentId),
-    };
-    return MaterializedState(live: live, binned: binned, folders: folders);
   }
+  final folders = <String, FolderMeta>{};
+  final binnedFolders = <String, FolderMeta>{};
+  for (final e in state.folders.entries) {
+    final f = e.value;
+    if (f.deleted) {
+      binnedFolders[e.key] = FolderMeta(
+        name: f.name,
+        parentId: f.parentId,
+        deletedByFolder: f.deletedByFolderId,
+      );
+    } else {
+      folders[e.key] = FolderMeta(
+        name: f.name,
+        parentId: liveOrRoot(f.parentId),
+        deletedByFolder: f.deletedByFolderId,
+      );
+    }
+  }
+  return MaterializedState(
+    live: live,
+    binned: binned,
+    folders: folders,
+    binnedFolders: binnedFolders,
+  );
 }

@@ -26,7 +26,21 @@ enum SyncOpKind {
   setFavorite,
   createFolder,
   moveFolder,
+  renameFolder,
   deleteFolder,
+
+  /// Un-deletes a folder from the Recycle Bin as a UNIT (Model A): restores
+  /// the folder and exactly the items its own delete cascade binned — files
+  /// individually deleted before the folder delete stay deleted.
+  restoreFolder,
+
+  /// PERMANENT deletion of the folder ENTITY. Terminal like [purgeFile].
+  /// The bin's "Delete forever" on a folder records one purgeFile per
+  /// cascade-binned file PLUS purgeFolder for each folder in the dead
+  /// subtree — contents are purged by their own explicit ops, so the
+  /// condemned-blob sweep / reconcile tombstone guard / Vault Health never
+  /// need to understand tree semantics.
+  purgeFolder,
   registerDevice,
 }
 

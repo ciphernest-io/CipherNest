@@ -112,7 +112,7 @@ Scenario generateScenario(
     now += rnd.nextInt(60 * 60 * 1000); // up to an hour between events
     final roll = rnd.nextDouble();
 
-    if (roll < 0.30) {
+    if (roll < 0.25) {
       final id = 'file${nextFile++}';
       fileIds.add(id);
       events.add(ActionEvent(LocalAction(
@@ -125,14 +125,14 @@ Scenario generateScenario(
             ? folderIds[rnd.nextInt(folderIds.length)]
             : null,
       )));
-    } else if (roll < 0.40 && fileIds.isNotEmpty) {
+    } else if (roll < 0.335 && fileIds.isNotEmpty) {
       events.add(ActionEvent(LocalAction(
         kind: ActionKind.deleteFile,
         deviceIndex: actionDevice(),
         at: now,
         targetId: fileIds[rnd.nextInt(fileIds.length)],
       )));
-    } else if (roll < 0.50 && fileIds.isNotEmpty) {
+    } else if (roll < 0.42 && fileIds.isNotEmpty) {
       events.add(ActionEvent(LocalAction(
         kind: ActionKind.renameFile,
         deviceIndex: actionDevice(),
@@ -140,7 +140,7 @@ Scenario generateScenario(
         targetId: fileIds[rnd.nextInt(fileIds.length)],
         name: 'renamed_${rnd.nextInt(1000)}.jpg',
       )));
-    } else if (roll < 0.60 && fileIds.isNotEmpty) {
+    } else if (roll < 0.505 && fileIds.isNotEmpty) {
       events.add(ActionEvent(LocalAction(
         kind: ActionKind.moveFile,
         deviceIndex: actionDevice(),
@@ -150,7 +150,7 @@ Scenario generateScenario(
             ? folderIds[rnd.nextInt(folderIds.length)]
             : null,
       )));
-    } else if (roll < 0.63 && fileIds.isNotEmpty) {
+    } else if (roll < 0.535 && fileIds.isNotEmpty) {
       events.add(ActionEvent(LocalAction(
         kind: ActionKind.setFavorite,
         deviceIndex: actionDevice(),
@@ -158,7 +158,7 @@ Scenario generateScenario(
         targetId: fileIds[rnd.nextInt(fileIds.length)],
         favorite: rnd.nextBool(),
       )));
-    } else if (roll < 0.645 && fileIds.isNotEmpty) {
+    } else if (roll < 0.55 && fileIds.isNotEmpty) {
       // Restore-from-bin: exercises delete/restore conflict resolution.
       events.add(ActionEvent(LocalAction(
         kind: ActionKind.restoreFile,
@@ -166,7 +166,7 @@ Scenario generateScenario(
         at: now,
         targetId: fileIds[rnd.nextInt(fileIds.length)],
       )));
-    } else if (roll < 0.66 && includePurge && fileIds.isNotEmpty) {
+    } else if (roll < 0.565 && includePurge && fileIds.isNotEmpty) {
       // Permanent purge (30-day bin sweep) — terminal, must converge.
       events.add(ActionEvent(LocalAction(
         kind: ActionKind.purgeFile,
@@ -174,7 +174,7 @@ Scenario generateScenario(
         at: now,
         targetId: fileIds[rnd.nextInt(fileIds.length)],
       )));
-    } else if (roll < 0.72) {
+    } else if (roll < 0.625) {
       final id = 'folder${nextFolder++}';
       folderIds.add(id);
       events.add(ActionEvent(LocalAction(
@@ -187,9 +187,48 @@ Scenario generateScenario(
             ? folderIds[rnd.nextInt(folderIds.length - 1)]
             : null,
       )));
-    } else if (roll < 0.76 && folderIds.isNotEmpty) {
+    } else if (roll < 0.665 && folderIds.isNotEmpty) {
       events.add(ActionEvent(LocalAction(
         kind: ActionKind.deleteFolder,
+        deviceIndex: actionDevice(),
+        at: now,
+        targetId: folderIds[rnd.nextInt(folderIds.length)],
+      )));
+    } else if (roll < 0.705 && folderIds.isNotEmpty) {
+      // Reparent — destination drawn from ALL folders (ancestors and
+      // descendants included) so concurrent cycle-forming moves are
+      // genuinely attempted; the engine's skip rule is what's under test.
+      events.add(ActionEvent(LocalAction(
+        kind: ActionKind.moveFolder,
+        deviceIndex: actionDevice(),
+        at: now,
+        targetId: folderIds[rnd.nextInt(folderIds.length)],
+        folderId: rnd.nextDouble() < 0.8
+            ? folderIds[rnd.nextInt(folderIds.length)]
+            : null,
+      )));
+    } else if (roll < 0.735 && folderIds.isNotEmpty) {
+      events.add(ActionEvent(LocalAction(
+        kind: ActionKind.renameFolder,
+        deviceIndex: actionDevice(),
+        at: now,
+        targetId: folderIds[rnd.nextInt(folderIds.length)],
+        name: 'Renamed ${rnd.nextInt(1000)}',
+      )));
+    } else if (roll < 0.75 && folderIds.isNotEmpty) {
+      // Model A: restore a deleted folder as a unit (no-op on live ones —
+      // the no-op path is deliberately exercised too).
+      events.add(ActionEvent(LocalAction(
+        kind: ActionKind.restoreFolder,
+        deviceIndex: actionDevice(),
+        at: now,
+        targetId: folderIds[rnd.nextInt(folderIds.length)],
+      )));
+    } else if (roll < 0.76 && includePurge && folderIds.isNotEmpty) {
+      // Terminal folder-entity purge (bin "Delete forever"). Gated with
+      // purgeFile: reference engines don't model purge terminality.
+      events.add(ActionEvent(LocalAction(
+        kind: ActionKind.purgeFolder,
         deviceIndex: actionDevice(),
         at: now,
         targetId: folderIds[rnd.nextInt(folderIds.length)],

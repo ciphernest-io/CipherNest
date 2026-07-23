@@ -180,6 +180,255 @@ void main() {
     });
   });
 
+  group('Model A folder lifecycle', () {
+    test(
+        'an individually-deleted file is never absorbed by a later folder '
+        'delete, and stays deleted through the folder\'s restore', () {
+      final state = replayOps([
+        op(SyncOpKind.createFolder, 'A', name: 'A', wall: 1),
+        op(SyncOpKind.createFile, 'f1', name: 'one.jpg', folder: 'A',
+            wall: 2, seq: 1),
+        op(SyncOpKind.createFile, 'f2', name: 'two.jpg', folder: 'A',
+            wall: 3, seq: 2),
+        op(SyncOpKind.deleteFile, 'f1', wall: 4, seq: 3),
+        op(SyncOpKind.deleteFolder, 'A', wall: 5, seq: 4),
+        op(SyncOpKind.restoreFolder, 'A', wall: 6, seq: 5),
+      ]);
+      final f1 = state.files['f1']!;
+      expect(f1.deleted, isTrue,
+          reason: 'individually-deleted file stays deleted');
+      expect(f1.deletedByFolderId, isNull,
+          reason: 'its bin entry is individual, never absorbed');
+      final f2 = state.files['f2']!;
+      expect(f2.deleted, isFalse, reason: 'cascade file restored');
+      expect(f2.folderId, 'A');
+      expect(state.folders['A']!.deleted, isFalse);
+    });
+
+    test('restoreFolder restores exactly the cascade set, nested and with '
+        'metadata intact', () {
+      final state = replayOps([
+        op(SyncOpKind.createFolder, 'A', name: 'A', wall: 1),
+        op(SyncOpKind.createFolder, 'B', name: 'B', folder: 'A', wall: 2,
+            seq: 1),
+        op(SyncOpKind.createFile, 'f1', name: 'deep.jpg', folder: 'B',
+            wall: 3, seq: 2),
+        op(SyncOpKind.setFavorite, 'f1', favorite: true, wall: 4, seq: 3),
+        op(SyncOpKind.deleteFolder, 'A', wall: 5, seq: 4),
+        op(SyncOpKind.restoreFolder, 'A', wall: 6, seq: 5),
+      ]);
+      expect(state.folders['A']!.deleted, isFalse);
+      final b = state.folders['B']!;
+      expect(b.deleted, isFalse, reason: 'cascade subfolder restored');
+      expect(b.parentId, 'A');
+      expect(b.deletedByFolderId, isNull, reason: 'cause cleared');
+      final f1 = state.files['f1']!;
+      expect(f1.deleted, isFalse);
+      expect(f1.folderId, 'B');
+      expect(f1.favorite, isTrue, reason: 'metadata survives the round trip');
+    });
+
+    test('concurrent restoreFolder vs foreign delete: later op wins, both '
+        'directions', () {
+      final base = [
+        op(SyncOpKind.createFolder, 'A', name: 'A', wall: 1),
+        op(SyncOpKind.createFile, 'f1', name: 'x.jpg', folder: 'A', wall: 2,
+            seq: 1),
+        op(SyncOpKind.deleteFolder, 'A', wall: 3, seq: 2),
+      ];
+      // Foreign re-delete orders AFTER my restore -> delete wins.
+      final deleteWins = replayOps([
+        ...base,
+        op(SyncOpKind.restoreFolder, 'A', wall: 4, seq: 3),
+        op(SyncOpKind.deleteFolder, 'A', device: 'devB', wall: 5),
+      ]);
+      expect(deleteWins.folders['A']!.deleted, isTrue);
+      expect(deleteWins.files['f1']!.deleted, isTrue);
+      expect(deleteWins.files['f1']!.deletedByFolderId, 'A',
+          reason: 're-cascade re-stamps the cause');
+      // My restore orders AFTER the foreign re-delete -> restore wins.
+      final restoreWins = replayOps([
+        ...base,
+        op(SyncOpKind.deleteFolder, 'A', device: 'devB', wall: 4),
+        op(SyncOpKind.restoreFolder, 'A', wall: 5, seq: 3),
+      ]);
+      expect(restoreWins.folders['A']!.deleted, isFalse);
+      expect(restoreWins.files['f1']!.deleted, isFalse);
+    });
+
+    test('restore under a dead parent materializes at root, then rejoins '
+        'the parent when IT is restored (structure remembered)', () {
+      final ops = [
+        op(SyncOpKind.createFolder, 'P', name: 'P', wall: 1),
+        op(SyncOpKind.createFolder, 'C', name: 'C', folder: 'P', wall: 2,
+            seq: 1),
+        // C deleted directly (own bin entry), THEN P deleted.
+        op(SyncOpKind.deleteFolder, 'C', wall: 3, seq: 2),
+        op(SyncOpKind.deleteFolder, 'P', wall: 4, seq: 3),
+        op(SyncOpKind.restoreFolder, 'C', wall: 5, seq: 4),
+      ];
+      final atRoot = materializeState(replayOps(ops));
+      expect(atRoot.folders['C'], isNotNull, reason: 'C is live again');
+      expect(atRoot.folders['C']!.parentId, isNull,
+          reason: 'parent still deleted -> shows at root');
+      final rejoined = materializeState(replayOps([
+        ...ops,
+        op(SyncOpKind.restoreFolder, 'P', wall: 6, seq: 5),
+      ]));
+      expect(rejoined.folders['C']!.parentId, 'P',
+          reason: 'raw pointer preserved -> child rejoins restored parent');
+    });
+
+    test('moveFile into a folder restored before the move lands inside it',
+        () {
+      final state = replayOps([
+        op(SyncOpKind.createFolder, 'A', name: 'A', wall: 1),
+        op(SyncOpKind.createFile, 'f1', name: 'x.jpg', wall: 2, seq: 1),
+        op(SyncOpKind.deleteFolder, 'A', wall: 3, seq: 2),
+        op(SyncOpKind.restoreFolder, 'A', wall: 4, seq: 3),
+        op(SyncOpKind.moveFile, 'f1', folder: 'A', wall: 5, seq: 4),
+      ]);
+      expect(state.files['f1']!.folderId, 'A');
+      expect(state.files['f1']!.deleted, isFalse);
+    });
+
+    test('purgeFolder is terminal: no restore, no re-create; leftover '
+        'cascade files stay individually recoverable', () {
+      final state = replayOps([
+        op(SyncOpKind.createFolder, 'A', name: 'A', wall: 1),
+        op(SyncOpKind.createFile, 'f1', name: 'x.jpg', folder: 'A', wall: 2,
+            seq: 1),
+        op(SyncOpKind.deleteFolder, 'A', wall: 3, seq: 2),
+        // Interrupted purge batch: the folder entity purged, the file's
+        // purgeFile never recorded.
+        op(SyncOpKind.purgeFolder, 'A', wall: 4, seq: 3),
+        op(SyncOpKind.restoreFolder, 'A', wall: 5, seq: 4), // must no-op
+        op(SyncOpKind.createFolder, 'A', name: 'imposter', wall: 6, seq: 5),
+        op(SyncOpKind.restoreFile, 'f1', wall: 7, seq: 6),
+      ]);
+      expect(state.folders.containsKey('A'), isFalse,
+          reason: 'purge is terminal — restore and re-create are dead');
+      final f1 = state.files['f1']!;
+      expect(f1.deleted, isFalse, reason: 'file individually restorable');
+      expect(materializeState(state).live['f1']!.folderId, isNull,
+          reason: 'its folder is gone -> root');
+    });
+
+    test('tombstone walls are explicit: individual wall vs cascade wall, '
+        'cleared on restore', () {
+      final state = replayOps([
+        op(SyncOpKind.createFolder, 'A', name: 'A', wall: 1),
+        op(SyncOpKind.createFile, 'f1', name: 'one.jpg', folder: 'A',
+            wall: 2, seq: 1),
+        op(SyncOpKind.createFile, 'f2', name: 'two.jpg', folder: 'A',
+            wall: 3, seq: 2),
+        op(SyncOpKind.deleteFile, 'f1', wall: 40, seq: 3),
+        op(SyncOpKind.deleteFolder, 'A', wall: 50, seq: 4),
+      ]);
+      expect(state.files['f1']!.tombstoneWall, 40,
+          reason: 'individual delete carries its own wall');
+      expect(state.files['f2']!.tombstoneWall, 50,
+          reason: 'cascade carries the deleteFolder\'s wall — the '
+              'deleted_at=0 bug class, pinned at the replay layer');
+      expect(state.folders['A']!.tombstoneWall, 50);
+      final restored = replayOps([
+        op(SyncOpKind.createFolder, 'A', name: 'A', wall: 1),
+        op(SyncOpKind.createFile, 'f2', name: 'two.jpg', folder: 'A',
+            wall: 3, seq: 2),
+        op(SyncOpKind.deleteFolder, 'A', wall: 50, seq: 4),
+        op(SyncOpKind.restoreFolder, 'A', wall: 60, seq: 5),
+      ]);
+      expect(restored.files['f2']!.tombstoneWall, isNull);
+      expect(restored.files['f2']!.deletedByFolderId, isNull);
+    });
+
+    test(
+        'SEED-178 REGRESSION: an explicit deleteFile issued while the file '
+        'was cascade-binned survives the folder\'s restore (delete wins)',
+        () {
+      // The exact seed-178 interleaving: dev0 deletes the folder, dev1 —
+      // concurrently, later in HLC order — individually deletes the file,
+      // dev0 then restores the folder. Before the re-stamp rule the
+      // restore resurrected the file over dev1's explicit delete.
+      final state = replayOps([
+        op(SyncOpKind.createFolder, 'F', name: 'F', device: 'devB', wall: 1),
+        op(SyncOpKind.createFile, 'f4', name: 'photo.jpg', folder: 'F',
+            device: 'devB', wall: 2, seq: 1),
+        op(SyncOpKind.deleteFolder, 'F', wall: 3), // devA
+        op(SyncOpKind.deleteFile, 'f4', device: 'devB', wall: 4, seq: 2),
+        op(SyncOpKind.restoreFolder, 'F', wall: 5, seq: 1), // devA
+      ]);
+      final f4 = state.files['f4']!;
+      expect(f4.deleted, isTrue,
+          reason: 'the explicit individual delete must win');
+      expect(f4.deletedByFolderId, isNull,
+          reason: 're-stamped as an individual bin entry');
+      expect(f4.tombstoneWall, 4,
+          reason: 'wall follows the explicit deleteFile');
+      expect(state.folders['F']!.deleted, isFalse,
+          reason: 'the folder itself still restores');
+    });
+
+    test('deleteFile + deleteFolder commute: both orderings converge to '
+        '(binned, cause null, deleteFile wall)', () {
+      final shared = [
+        op(SyncOpKind.createFolder, 'F', name: 'F', wall: 1),
+        op(SyncOpKind.createFile, 'x', name: 'x.jpg', folder: 'F', wall: 2,
+            seq: 1),
+      ];
+      final fileFirst = replayOps([
+        ...shared,
+        op(SyncOpKind.deleteFile, 'x', device: 'devB', wall: 3),
+        op(SyncOpKind.deleteFolder, 'F', wall: 4, seq: 2),
+      ]);
+      final folderFirst = replayOps([
+        ...shared,
+        op(SyncOpKind.deleteFolder, 'F', wall: 3, seq: 2),
+        op(SyncOpKind.deleteFile, 'x', device: 'devB', wall: 4),
+      ]);
+      for (final s in [fileFirst, folderFirst]) {
+        final x = s.files['x']!;
+        expect(x.deleted, isTrue);
+        expect(x.deletedByFolderId, isNull);
+      }
+      expect(fileFirst.files['x']!.tombstoneWall, 3,
+          reason: 'deleteFile wall (folder cascade skipped the binned file)');
+      expect(folderFirst.files['x']!.tombstoneWall, 4,
+          reason: 'deleteFile wall (re-stamp)');
+    });
+
+    test('folder twin: explicit deleteFolder on a cascade-binned folder '
+        'survives the outer folder\'s restore', () {
+      final state = replayOps([
+        op(SyncOpKind.createFolder, 'P', name: 'P', wall: 1),
+        op(SyncOpKind.createFolder, 'G', name: 'G', folder: 'P', wall: 2,
+            seq: 1),
+        op(SyncOpKind.deleteFolder, 'P', wall: 3, seq: 2), // G cause=P
+        op(SyncOpKind.deleteFolder, 'G', device: 'devB', wall: 4),
+        op(SyncOpKind.restoreFolder, 'P', wall: 5, seq: 3),
+      ]);
+      expect(state.folders['P']!.deleted, isFalse);
+      final g = state.folders['G']!;
+      expect(g.deleted, isTrue,
+          reason: 'the explicit folder delete must win over P\'s restore');
+      expect(g.deletedByFolderId, isNull,
+          reason: 're-stamped as an independent bin entry');
+    });
+
+    test('renameFolder: LWW by order, dropped on a binned folder', () {
+      final state = replayOps([
+        op(SyncOpKind.createFolder, 'A', name: 'A', wall: 1),
+        op(SyncOpKind.renameFolder, 'A', name: 'Mine', wall: 2, seq: 1),
+        op(SyncOpKind.renameFolder, 'A', name: 'Theirs', device: 'devB',
+            wall: 3),
+        op(SyncOpKind.deleteFolder, 'A', wall: 4, seq: 2),
+        op(SyncOpKind.renameFolder, 'A', name: 'Zombie', wall: 5, seq: 3),
+      ]);
+      expect(state.folders['A']!.name, 'Theirs',
+          reason: 'later rename wins; rename after delete is dropped');
+    });
+  });
+
   group('sequential equivalence with the reference state machine', () {
     test('random single-device histories: replay == StateMachine', () {
       for (var seed = 0; seed < 40; seed++) {
@@ -234,14 +483,20 @@ void main() {
                 folderId: folderIds.isNotEmpty && rnd.nextBool()
                     ? folderIds[rnd.nextInt(folderIds.length)]
                     : null);
-          } else if (roll < 0.84) {
+          } else if (roll < 0.78) {
             action = LocalAction(
                 kind: ActionKind.setFavorite,
                 deviceIndex: 0,
                 at: i,
                 targetId: fileIds[rnd.nextInt(fileIds.length)],
                 favorite: rnd.nextBool());
-          } else if (roll < 0.93) {
+          } else if (roll < 0.8) {
+            action = LocalAction(
+                kind: ActionKind.purgeFile,
+                deviceIndex: 0,
+                at: i,
+                targetId: fileIds[rnd.nextInt(fileIds.length)]);
+          } else if (roll < 0.86) {
             final id = 'd${folderIds.length}';
             folderIds.add(id);
             action = LocalAction(
@@ -253,9 +508,37 @@ void main() {
                 folderId: folderIds.length > 1 && rnd.nextBool()
                     ? folderIds[rnd.nextInt(folderIds.length - 1)]
                     : null);
-          } else if (folderIds.isNotEmpty) {
+          } else if (roll < 0.89 && folderIds.isNotEmpty) {
+            action = LocalAction(
+                kind: ActionKind.moveFolder,
+                deviceIndex: 0,
+                at: i,
+                targetId: folderIds[rnd.nextInt(folderIds.length)],
+                folderId: rnd.nextDouble() < 0.8
+                    ? folderIds[rnd.nextInt(folderIds.length)]
+                    : null);
+          } else if (roll < 0.91 && folderIds.isNotEmpty) {
+            action = LocalAction(
+                kind: ActionKind.renameFolder,
+                deviceIndex: 0,
+                at: i,
+                targetId: folderIds[rnd.nextInt(folderIds.length)],
+                name: 'Renamed $i');
+          } else if (roll < 0.95 && folderIds.isNotEmpty) {
             action = LocalAction(
                 kind: ActionKind.deleteFolder,
+                deviceIndex: 0,
+                at: i,
+                targetId: folderIds[rnd.nextInt(folderIds.length)]);
+          } else if (roll < 0.98 && folderIds.isNotEmpty) {
+            action = LocalAction(
+                kind: ActionKind.restoreFolder,
+                deviceIndex: 0,
+                at: i,
+                targetId: folderIds[rnd.nextInt(folderIds.length)]);
+          } else if (folderIds.isNotEmpty) {
+            action = LocalAction(
+                kind: ActionKind.purgeFolder,
                 deviceIndex: 0,
                 at: i,
                 targetId: folderIds[rnd.nextInt(folderIds.length)]);
@@ -268,28 +551,13 @@ void main() {
               deviceId: 'dev0', seq: seq++, hlc: hlc));
         }
 
-        final replayed = replayOps(ops);
+        // Full-state equality through the ONE shared materialization
+        // mapping — live sets, bin sets, cascade causes, both folder maps,
+        // and the normalization rule all pinned at once.
+        final replayed = materializeState(replayOps(ops));
         final refState = reference.snapshot();
-
-        final live = {
-          for (final e in replayed.files.entries)
-            if (!e.value.deleted)
-              e.key: FileMeta(
-                  name: e.value.name,
-                  folderId: e.value.folderId,
-                  favorite: e.value.favorite)
-        };
-        final binned = {
-          for (final e in replayed.files.entries)
-            if (e.value.deleted)
-              e.key: FileMeta(
-                  name: e.value.name,
-                  folderId: e.value.folderId,
-                  favorite: e.value.favorite)
-        };
-        expect(live, refState.live, reason: 'seed $seed live set diverged');
-        expect(binned.keys.toSet(), refState.binned.keys.toSet(),
-            reason: 'seed $seed binned set diverged');
+        expect(replayed == refState, isTrue,
+            reason: 'seed $seed diverged:\n${replayed.diff(refState)}');
       }
     });
   });

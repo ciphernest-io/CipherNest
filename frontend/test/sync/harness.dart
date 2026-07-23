@@ -81,6 +81,15 @@ Future<HarnessResult> runScenario(
               .materialize()
               .live
               .containsKey(action.targetId);
+        } else if (action.kind == ActionKind.deleteFolder) {
+          // Same rule for folders: a blind deleteFolder on a
+          // freshly-reinstalled device is not user intent the system must
+          // honor over the folder's continued existence.
+          record.effective = devices[action.deviceIndex]
+              .engine
+              .materialize()
+              .folders
+              .containsKey(action.targetId);
         }
         history.add(record);
         pending[action.deviceIndex].add(record);

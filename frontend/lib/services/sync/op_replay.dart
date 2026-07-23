@@ -13,7 +13,19 @@
 ///  * TREE SAFETY: folder moves that would create a cycle at their point in
 ///    the fold are skipped (deterministically — same order everywhere, so
 ///    the same op is skipped everywhere). Files pointing into deleted or
-///    unknown folders materialize at root.
+///    unknown folders materialize at root — a MATERIALIZATION rule, applied
+///    by every consumer of this state (the SQLite writer and the harness
+///    adapters), never by mutating the fold state itself: the raw pointer
+///    is what lets a child rejoin a later-restored parent.
+///  * FOLDER DELETE IS RESTORABLE AS A UNIT (Model A): the cascade stamps
+///    every binned item with the TARGETED folder's id
+///    ([FileState.deletedByFolderId]); restoreFolder un-deletes the folder
+///    plus exactly the cause-matching items. Individually-deleted items
+///    (null cause) are never absorbed and never restored by the folder.
+///  * TOMBSTONE WALLS ARE EXPLICIT: [FileState.tombstoneWall] records the
+///    HLC wall of whichever op flipped deleted — deleteFile or a cascade —
+///    so the materializer's deleted_at is never inferred (the deleted_at=0
+///    instant-purge lesson).
 ///
 /// Semantics deliberately mirror test/sync/state_machine.dart (the
 /// sequential reference): with no concurrency, replay must equal the
@@ -28,11 +40,25 @@ class FileState {
   final bool favorite;
   final bool deleted;
 
+  /// Cascade cause: the TARGETED root of the deleteFolder whose cascade
+  /// binned this file; null = deleted individually (or live). One user
+  /// action = one bin entry, however deep the subtree — descendants carry
+  /// the root's id, not their immediate parent's. Explicit state, never
+  /// inferred from a missing timestamp (the deleted_at=0 lesson).
+  final String? deletedByFolderId;
+
+  /// HLC wall of whichever op flipped [deleted] to true — deleteFile OR a
+  /// deleteFolder cascade. The materializer's deleted_at source; null while
+  /// live.
+  final int? tombstoneWall;
+
   const FileState({
     required this.name,
     required this.folderId,
     required this.favorite,
     required this.deleted,
+    this.deletedByFolderId,
+    this.tombstoneWall,
   });
 
   FileState copyWith({
@@ -40,12 +66,19 @@ class FileState {
     String? Function()? folderId,
     bool? favorite,
     bool? deleted,
+    String? Function()? deletedByFolderId,
+    int? Function()? tombstoneWall,
   }) =>
       FileState(
         name: name ?? this.name,
         folderId: folderId != null ? folderId() : this.folderId,
         favorite: favorite ?? this.favorite,
         deleted: deleted ?? this.deleted,
+        deletedByFolderId: deletedByFolderId != null
+            ? deletedByFolderId()
+            : this.deletedByFolderId,
+        tombstoneWall:
+            tombstoneWall != null ? tombstoneWall() : this.tombstoneWall,
       );
 }
 
@@ -54,21 +87,38 @@ class FolderState {
   final String? parentId;
   final bool deleted;
 
+  /// Cascade cause, mirroring [FileState.deletedByFolderId]: null on the
+  /// TARGETED folder (it is the bin entry), the targeted root's id on
+  /// cascade-deleted descendants.
+  final String? deletedByFolderId;
+
+  /// HLC wall of the deleteFolder that binned this folder; null while live.
+  final int? tombstoneWall;
+
   const FolderState({
     required this.name,
     required this.parentId,
     required this.deleted,
+    this.deletedByFolderId,
+    this.tombstoneWall,
   });
 
   FolderState copyWith({
     String? name,
     String? Function()? parentId,
     bool? deleted,
+    String? Function()? deletedByFolderId,
+    int? Function()? tombstoneWall,
   }) =>
       FolderState(
         name: name ?? this.name,
         parentId: parentId != null ? parentId() : this.parentId,
         deleted: deleted ?? this.deleted,
+        deletedByFolderId: deletedByFolderId != null
+            ? deletedByFolderId()
+            : this.deletedByFolderId,
+        tombstoneWall:
+            tombstoneWall != null ? tombstoneWall() : this.tombstoneWall,
       );
 }
 
@@ -103,8 +153,18 @@ VaultState replayOps(Iterable<SyncOp> ops) {
   // Permanently purged file ids. Purge is TERMINAL and order-independent:
   // once a file is purged (its blob physically deleted by the bin sweep) no
   // op — not even a later-ordering restore — can bring it back. Collected
-  // across the whole fold, then applied at the end.
+  // across the whole fold, then applied at the end (end-of-fold so a
+  // straggler create or a defensive pre-tombstone can't rebuild a row).
   final purged = <String>{};
+
+  // Permanently purged FOLDER ids. Folders are purged INLINE (removed from
+  // the map immediately) — unlike files there is no pre-tombstone or
+  // straggler-create path that could rebuild one mid-fold, and inline
+  // removal is what keeps replay equal to the sequential reference (a
+  // later deleteFolder/moveFolder/moveFile targeting a purged folder must
+  // see it already gone). The set only guards createFolder so a straggler
+  // create with the same UUID stays dead — terminality, same as files.
+  final purgedFolders = <String>{};
 
   String? liveFolderOrRoot(String? id) =>
       id != null && folders.containsKey(id) && !folders[id]!.deleted
@@ -164,9 +224,24 @@ VaultState replayOps(Iterable<SyncOp> ops) {
             folderId: null,
             favorite: false,
             deleted: true,
+            tombstoneWall: op.hlc.wallMs,
           );
         } else if (!f.deleted) {
-          files[op.targetId] = f.copyWith(deleted: true);
+          files[op.targetId] = f.copyWith(
+            deleted: true,
+            tombstoneWall: () => op.hlc.wallMs,
+          );
+        } else {
+          // Already binned (a concurrent cascade got there first): re-stamp
+          // as an INDIVIDUAL bin entry. "I deleted this file myself" must
+          // survive a restore of the folder whose cascade absorbed it —
+          // delete wins over a concurrent restoreFolder (seed-178 lesson).
+          // This also makes the pair commute: deleteFile+deleteFolder in
+          // either order converge to (binned, cause null, deleteFile wall).
+          files[op.targetId] = f.copyWith(
+            deletedByFolderId: () => null,
+            tombstoneWall: () => op.hlc.wallMs,
+          );
         }
       case SyncOpKind.restoreFile:
         // Un-delete from the Recycle Bin. In the total order a restore the
@@ -176,7 +251,11 @@ VaultState replayOps(Iterable<SyncOp> ops) {
         // way, and the loser is always recoverable from the bin.
         final f = files[op.targetId];
         if (f != null && f.deleted) {
-          files[op.targetId] = f.copyWith(deleted: false);
+          files[op.targetId] = f.copyWith(
+            deleted: false,
+            deletedByFolderId: () => null,
+            tombstoneWall: () => null,
+          );
         }
       case SyncOpKind.purgeFile:
         purged.add(op.targetId);
@@ -197,6 +276,9 @@ VaultState replayOps(Iterable<SyncOp> ops) {
           files[op.targetId] = f.copyWith(favorite: op.favorite);
         }
       case SyncOpKind.createFolder:
+        // Terminality guard: a straggler create for a purged folder id is
+        // dead on arrival, same rule as purged files.
+        if (purgedFolders.contains(op.targetId)) break;
         if (folders.containsKey(op.targetId)) break;
         folders[op.targetId] = FolderState(
           name: op.name ?? op.targetId,
@@ -212,20 +294,97 @@ VaultState replayOps(Iterable<SyncOp> ops) {
         // the same op — deterministic, no reconciliation needed.
         if (wouldCycle(op.targetId, newParent)) break;
         folders[op.targetId] = folder.copyWith(parentId: () => newParent);
+      case SyncOpKind.renameFolder:
+        // LWW by fold order; delete wins (a rename of a binned folder is
+        // dropped) — mirrors renameFile.
+        final folder = folders[op.targetId];
+        if (folder != null && !folder.deleted && op.name != null) {
+          folders[op.targetId] = folder.copyWith(name: op.name);
+        }
       case SyncOpKind.deleteFolder:
         final subtree = liveSubtreeOf(op.targetId);
-        if (subtree.isEmpty) break;
+        if (subtree.isEmpty) {
+          // Target already binned by a concurrent cascade: re-stamp it as
+          // an INDEPENDENT bin entry (cause null), so restoring the outer
+          // folder cannot revive it against this explicit delete — the
+          // folder-shaped twin of the deleteFile re-stamp above. Its own
+          // cascade descendants keep their original cause and follow the
+          // outer restore.
+          final target = folders[op.targetId];
+          if (target != null && target.deleted) {
+            folders[op.targetId] = target.copyWith(
+              deletedByFolderId: () => null,
+              tombstoneWall: () => op.hlc.wallMs,
+            );
+          }
+          break;
+        }
         for (final id in subtree) {
-          folders[id] = folders[id]!.copyWith(deleted: true);
+          folders[id] = folders[id]!.copyWith(
+            deleted: true,
+            // The TARGETED folder is the bin entry (cause null); every
+            // cascade-deleted descendant records the targeted ROOT.
+            deletedByFolderId: () =>
+                id == op.targetId ? null : op.targetId,
+            tombstoneWall: () => op.hlc.wallMs,
+          );
         }
         for (final e in files.entries.toList()) {
           final f = e.value;
           if (!f.deleted &&
               f.folderId != null &&
               subtree.contains(f.folderId)) {
-            files[e.key] = f.copyWith(deleted: true);
+            files[e.key] = f.copyWith(
+              deleted: true,
+              deletedByFolderId: () => op.targetId,
+              tombstoneWall: () => op.hlc.wallMs,
+            );
           }
         }
+      case SyncOpKind.restoreFolder:
+        // Model A: un-delete the folder as a UNIT — the folder itself plus
+        // exactly the items its own cascade binned (cause == target). A
+        // file individually deleted BEFORE the folder delete carries a null
+        // cause and stays in the bin; a file individually restored earlier
+        // had its cause cleared and is untouched. A concurrent foreign
+        // deleteFolder with a later HLC re-deletes — converged either way.
+        final folder = folders[op.targetId];
+        if (folder == null || !folder.deleted) break;
+        folders[op.targetId] = folder.copyWith(
+          deleted: false,
+          deletedByFolderId: () => null,
+          tombstoneWall: () => null,
+        );
+        for (final e in folders.entries.toList()) {
+          if (e.value.deleted &&
+              e.value.deletedByFolderId == op.targetId) {
+            folders[e.key] = e.value.copyWith(
+              deleted: false,
+              deletedByFolderId: () => null,
+              tombstoneWall: () => null,
+            );
+          }
+        }
+        for (final e in files.entries.toList()) {
+          if (e.value.deleted &&
+              e.value.deletedByFolderId == op.targetId) {
+            files[e.key] = e.value.copyWith(
+              deleted: false,
+              deletedByFolderId: () => null,
+              tombstoneWall: () => null,
+            );
+          }
+        }
+      case SyncOpKind.purgeFolder:
+        // Terminal removal of the folder ENTITY, inline (see purgedFolders
+        // note above). Contained files are purged by their own explicit
+        // purgeFile ops recorded by the bin action — never derived here.
+        // Cascade causes pointing at a purged folder are left as-is: the
+        // bin displays such leftovers (an interrupted purge batch)
+        // individually, and the cause still names a real deleteFolder in
+        // history, which is what the bin-cause invariant checks.
+        purgedFolders.add(op.targetId);
+        folders.remove(op.targetId);
       case SyncOpKind.registerDevice:
         devices[op.targetId] = op.name ?? op.targetId;
     }

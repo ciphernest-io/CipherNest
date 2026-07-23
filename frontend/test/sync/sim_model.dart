@@ -27,7 +27,11 @@ enum ActionKind {
   moveFile,
   setFavorite,
   createFolder,
+  moveFolder, // reparent; cycle-forming moves are skipped deterministically
+  renameFolder,
   deleteFolder,
+  restoreFolder, // un-delete folder + its own cascade as a unit (Model A)
+  purgeFolder, // permanent deletion of the folder entity — terminal
 }
 
 class LocalAction {
@@ -76,10 +80,17 @@ class FileMeta {
   final String? folderId;
   final bool favorite;
 
+  /// Cascade cause (Model A): the targeted root of the deleteFolder whose
+  /// cascade binned this file; null = individually deleted, or live.
+  /// Included in equality — devices must agree on WHY something is binned,
+  /// or restoreFolder would diverge.
+  final String? deletedByFolder;
+
   const FileMeta({
     required this.name,
     required this.folderId,
     required this.favorite,
+    this.deletedByFolder,
   });
 
   @override
@@ -87,61 +98,86 @@ class FileMeta {
       other is FileMeta &&
       other.name == name &&
       other.folderId == folderId &&
-      other.favorite == favorite;
+      other.favorite == favorite &&
+      other.deletedByFolder == deletedByFolder;
 
   @override
-  int get hashCode => Object.hash(name, folderId, favorite);
+  int get hashCode => Object.hash(name, folderId, favorite, deletedByFolder);
 
   @override
-  String toString() => 'FileMeta($name, folder=$folderId, fav=$favorite)';
+  String toString() => 'FileMeta($name, folder=$folderId, fav=$favorite'
+      '${deletedByFolder != null ? ', by=$deletedByFolder' : ''})';
 }
 
 class FolderMeta {
   final String name;
   final String? parentId;
 
-  const FolderMeta({required this.name, required this.parentId});
+  /// Cascade cause, mirroring [FileMeta.deletedByFolder]: null on a folder
+  /// the user deleted directly (the bin entry), the targeted root's id on
+  /// cascade-deleted descendants.
+  final String? deletedByFolder;
+
+  const FolderMeta({
+    required this.name,
+    required this.parentId,
+    this.deletedByFolder,
+  });
 
   @override
   bool operator ==(Object other) =>
-      other is FolderMeta && other.name == name && other.parentId == parentId;
+      other is FolderMeta &&
+      other.name == name &&
+      other.parentId == parentId &&
+      other.deletedByFolder == deletedByFolder;
 
   @override
-  int get hashCode => Object.hash(name, parentId);
+  int get hashCode => Object.hash(name, parentId, deletedByFolder);
 
   @override
-  String toString() => 'FolderMeta($name, parent=$parentId)';
+  String toString() => 'FolderMeta($name, parent=$parentId'
+      '${deletedByFolder != null ? ', by=$deletedByFolder' : ''})';
 }
 
 /// A device's user-visible state after materialization.
 ///
-/// `live` and `binned` are disjoint. A file in neither is ABSENT — and an
-/// absent file that was ever durably created is the "vanished" condition
-/// invariant 3 exists to kill.
+/// `live` and `binned` are disjoint (same for `folders`/`binnedFolders`).
+/// A file in neither is ABSENT — and an absent file that was ever durably
+/// created is the "vanished" condition invariant 3 exists to kill.
+///
+/// Normalization contract (invariant 4 enforces it): LIVE entries' folder
+/// pointers are resolved — a live file's folderId / live folder's parentId
+/// is either null or a key of [folders]. BINNED entries keep their RAW
+/// pointers (possibly into [binnedFolders] or nowhere) — the bin needs the
+/// original context, and a child must be able to rejoin a later-restored
+/// parent.
 class MaterializedState {
   final Map<String, FileMeta> live;
   final Map<String, FileMeta> binned;
   final Map<String, FolderMeta> folders;
+  final Map<String, FolderMeta> binnedFolders;
 
   const MaterializedState({
     required this.live,
     required this.binned,
     required this.folders,
+    required this.binnedFolders,
   });
 
-  static const empty =
-      MaterializedState(live: {}, binned: {}, folders: {});
+  static const empty = MaterializedState(
+      live: {}, binned: {}, folders: {}, binnedFolders: {});
 
   @override
   bool operator ==(Object other) =>
       other is MaterializedState &&
       _mapEq(other.live, live) &&
       _mapEq(other.binned, binned) &&
-      _mapEq(other.folders, folders);
+      _mapEq(other.folders, folders) &&
+      _mapEq(other.binnedFolders, binnedFolders);
 
   @override
-  int get hashCode =>
-      Object.hash(live.length, binned.length, folders.length);
+  int get hashCode => Object.hash(
+      live.length, binned.length, folders.length, binnedFolders.length);
 
   static bool _mapEq<V>(Map<String, V> a, Map<String, V> b) {
     if (a.length != b.length) return false;
@@ -163,6 +199,7 @@ class MaterializedState {
     section('live', live, other.live);
     section('binned', binned, other.binned);
     section('folders', folders, other.folders);
+    section('binnedFolders', binnedFolders, other.binnedFolders);
     return out.isEmpty ? '  (states identical)' : out.toString();
   }
 }
@@ -172,7 +209,9 @@ class MaterializedState {
 // ---------------------------------------------------------------------------
 
 class InvariantViolation {
-  final int invariant; // 1 = convergence, 2 = resurrection, 3 = vanish
+  // 1 = convergence, 2 = resurrection, 3 = vanish,
+  // 4 = tree safety (acyclic, parents resolve, no orphaned live file)
+  final int invariant;
   final String detail;
   const InvariantViolation(this.invariant, this.detail);
 
