@@ -847,6 +847,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
             trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: () => Navigator.pushNamed(context, AppRoutes.recycleBin),
           ),
+          SwitchListTile(
+            secondary: ThemeIcon('folderOpen', color: cs.primary),
+            title: Text('Category tabs show foldered files',
+                style: TextStyle(color: cs.onSurface)),
+            subtitle: Text(
+              DatabaseService.folderLensAll
+                  ? 'Photos, Documents, Music and Other show everything, '
+                      'wherever it\'s filed'
+                  : 'Category tabs show only unfiled items — folders own '
+                      'the rest',
+              style: TextStyle(color: cs.onSurface.withAlpha(140)),
+            ),
+            value: DatabaseService.folderLensAll,
+            onChanged: (v) async {
+              await DatabaseService().setFolderLensAll(v);
+              if (mounted) setState(() {});
+            },
+          ),
 
           const Divider(),
 

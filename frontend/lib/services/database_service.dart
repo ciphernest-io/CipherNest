@@ -44,6 +44,25 @@ class DatabaseService extends ChangeNotifier {
   Database? _database;
   String? _currentAccountId;
 
+  /// The folder-lens setting: ON (default) = category tabs are lenses over
+  /// the WHOLE corpus regardless of folder placement; OFF = they show only
+  /// root files and folders own the rest. Cached statically so list queries
+  /// stay sync; Settings flips it via [setFolderLensAll].
+  static bool folderLensAll = true;
+  static const String kFolderLensPref = 'folder_lens_all_v1';
+
+  static Future<void> initFolderLens() async {
+    final prefs = await SharedPreferences.getInstance();
+    folderLensAll = prefs.getBool(kFolderLensPref) ?? true;
+  }
+
+  Future<void> setFolderLensAll(bool value) async {
+    folderLensAll = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(kFolderLensPref, value);
+    notifyListeners();
+  }
+
   void setCurrentAccount(String email) {
     _currentAccountId = email;
     notifyListeners();
@@ -509,6 +528,7 @@ class DatabaseService extends ChangeNotifier {
     String? contentHash,
     int? sizeBytes,
     int? capturedAt,
+    String? folderId,
   }) async {
     final db = await database;
     final updated = await db.update(
@@ -541,6 +561,7 @@ class DatabaseService extends ChangeNotifier {
         hash: contentHash,
         size: sizeBytes,
         captured: capturedAt,
+        folderId: folderId,
       );
     }
     notifyListeners();
@@ -637,15 +658,111 @@ class DatabaseService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Soft-deleted rows for the current account, most-recently-trashed first.
-  Future<List<CnestFile>> getDeletedFiles() async {
+  /// Soft-deleted rows for the current account, most-recently-trashed
+  /// first. INDIVIDUAL entries only by default: cascade-binned files
+  /// (deleted_by_folder_id pointing at an existing folder row) belong to
+  /// their folder's single bin entry — deleting a 500-photo folder must not
+  /// flood the Photos tab with 500 rows. Orphaned causes (folder row gone —
+  /// an interrupted purge batch) fall back to individual display so nothing
+  /// becomes unreachable. Pass [type] to scope to one bin tab.
+  Future<List<CnestFile>> getDeletedFiles({CnestFileType? type}) async {
     final db = await database;
     if (_currentAccountId == null) return [];
     final maps = await db.query(
       'files',
-      where: 'is_deleted = 1 AND account_id = ?',
-      whereArgs: [_currentAccountId],
+      where: 'is_deleted = 1 AND account_id = ? AND '
+          '(deleted_by_folder_id IS NULL OR '
+          'deleted_by_folder_id NOT IN (SELECT id FROM folders))'
+          '${type != null ? ' AND type = ?' : ''}',
+      whereArgs: [
+        _currentAccountId,
+        if (type != null) type.index,
+      ],
       orderBy: 'deleted_at DESC',
+    );
+    return maps.map((m) => CnestFile.fromMap(m)).toList();
+  }
+
+  /// Binned files a folder's delete cascade owns — the drill-in contents.
+  Future<List<CnestFile>> getCascadeBinnedFiles(String folderId) async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final maps = await db.query(
+      'files',
+      where:
+          'account_id = ? AND is_deleted = 1 AND deleted_by_folder_id = ?',
+      whereArgs: [_currentAccountId, folderId],
+      orderBy: 'created_at DESC',
+    );
+    return maps.map((m) => CnestFile.fromMap(m)).toList();
+  }
+
+  /// Cascade-binned subfolders of a deleted folder (cause = the targeted
+  /// root, whatever the nesting depth).
+  Future<List<CnestFolder>> getCascadeBinnedFolders(String folderId) async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final rows = await db.query(
+      'folders',
+      where:
+          'account_id = ? AND is_deleted = 1 AND deleted_by_folder_id = ?',
+      whereArgs: [_currentAccountId, folderId],
+      orderBy: 'name COLLATE NOCASE ASC',
+    );
+    return rows.map((r) => CnestFolder.fromMap(r)).toList();
+  }
+
+  /// Cascade file count per binned folder entry, one query — the "N items"
+  /// chip on the bin's Folders tab.
+  Future<Map<String, int>> getCascadeBinnedCounts() async {
+    final db = await database;
+    if (_currentAccountId == null) return {};
+    final rows = await db.rawQuery(
+        'SELECT deleted_by_folder_id AS cause, COUNT(*) AS n FROM files '
+        'WHERE account_id = ? AND is_deleted = 1 AND '
+        'deleted_by_folder_id IS NOT NULL GROUP BY deleted_by_folder_id',
+        [_currentAccountId]);
+    return {
+      for (final r in rows) r['cause'] as String: r['n'] as int,
+    };
+  }
+
+  /// Ancestor chain of [folderId], root-first, ENDING with the folder
+  /// itself — deleted ancestors included (the bin greys them). Cycle-capped
+  /// defensively; materialized live trees are acyclic by invariant.
+  Future<List<CnestFolder>> getFolderPathSegments(String folderId) async {
+    final db = await database;
+    final chain = <CnestFolder>[];
+    final seen = <String>{};
+    String? cursor = folderId;
+    while (cursor != null && seen.add(cursor)) {
+      final rows = await db.query('folders',
+          where: 'id = ?', whereArgs: [cursor], limit: 1);
+      if (rows.isEmpty) break;
+      final folder = CnestFolder.fromMap(rows.first);
+      chain.insert(0, folder);
+      cursor = folder.parentId;
+    }
+    return chain;
+  }
+
+  /// Bin search: EVERY binned file matching [query] — cascade-binned ones
+  /// included (that's the point: finding a photo that vanished inside a
+  /// deleted folder), LIKE-escaped.
+  Future<List<CnestFile>> searchDeletedFiles(String query) async {
+    final db = await database;
+    if (_currentAccountId == null || query.trim().isEmpty) return [];
+    final escaped = query
+        .replaceAll(r'\', r'\\')
+        .replaceAll('%', r'\%')
+        .replaceAll('_', r'\_');
+    final maps = await db.query(
+      'files',
+      where: 'is_deleted = 1 AND account_id = ? AND '
+          "filename LIKE ? ESCAPE '\\'",
+      whereArgs: [_currentAccountId, '%$escaped%'],
+      orderBy: 'deleted_at DESC',
+      limit: 100,
     );
     return maps.map((m) => CnestFile.fromMap(m)).toList();
   }
@@ -1093,9 +1210,13 @@ class DatabaseService extends ChangeNotifier {
     final db = await database;
     if (_currentAccountId == null) return [];
 
+    // Lens OFF: category tabs scope to root; foldered files live in the
+    // Folders browser only. Lens ON (default): folder placement is
+    // invisible here — typed views cover the whole corpus.
     final List<Map<String, dynamic>> maps = await db.query(
       'files',
-      where: 'type = ? AND account_id = ? AND is_deleted = 0',
+      where: 'type = ? AND account_id = ? AND is_deleted = 0'
+          '${folderLensAll ? '' : ' AND folder_id IS NULL'}',
       whereArgs: [type.index, _currentAccountId],
       orderBy: 'created_at DESC',
     );

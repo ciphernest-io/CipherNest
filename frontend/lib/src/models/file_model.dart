@@ -100,6 +100,18 @@ class CnestFile {
   /// gets its in-flight protection window.
   final int? uploadStartedAt;
 
+  /// Virtual-tree location (v15): the live folder containing this file,
+  /// null = root. Op-owned — applyMergedState keeps it normalized
+  /// (live-or-root); typed tabs ignore it (lens ON) unless the user turns
+  /// folder scoping on.
+  final String? folderId;
+
+  /// Cascade cause (v15): the deleted folder whose delete binned this file;
+  /// null = live, or individually deleted. The bin's type tabs exclude
+  /// cause-carrying rows (they belong to the folder's single entry) and
+  /// search uses it for the `Restore '<folder>'` CTA.
+  final String? deletedByFolderId;
+
   CnestFile({
     required this.id,
     this.cloudId,
@@ -123,6 +135,8 @@ class CnestFile {
     this.fps,
     this.deviceModel,
     this.uploadStartedAt,
+    this.folderId,
+    this.deletedByFolderId,
   });
 
   Map<String, dynamic> toMap() {
@@ -149,6 +163,8 @@ class CnestFile {
       'fps': fps,
       'device_model': deviceModel,
       'upload_started_at': uploadStartedAt,
+      'folder_id': folderId,
+      'deleted_by_folder_id': deletedByFolderId,
     };
   }
 
@@ -176,6 +192,8 @@ class CnestFile {
       fps: map['fps'] as int?,
       deviceModel: map['device_model'] as String?,
       uploadStartedAt: map['upload_started_at'] as int?,
+      folderId: map['folder_id'] as String?,
+      deletedByFolderId: map['deleted_by_folder_id'] as String?,
     );
   }
 }

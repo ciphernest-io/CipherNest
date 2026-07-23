@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import '../../config/theme_controller.dart';
 import '../../config/theme_packs.dart';
+import '../../widgets/folder_picker_sheet.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -367,6 +368,26 @@ class PicturesTabState extends State<PicturesTab> {
     _refresh();
   }
 
+  /// Moves the selection into a picked folder (or back to root). Pure
+  /// metadata — the encrypted blobs never move; the op-log carries the
+  /// placement to every device.
+  Future<void> _moveSelectedToFolder() async {
+    final pick = await showFolderPicker(context);
+    if (pick == null) return;
+    final ids = List<String>.from(_selectedIds);
+    for (final id in ids) {
+      try {
+        await DatabaseService().moveFileToFolder(id, pick.folderId);
+      } catch (_) {
+        // Best-effort bulk move.
+      }
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('${ids.length} moved to "${pick.label}"')));
+    _exitSelection();
+  }
+
   Future<void> _shareSelectedFilenames(List<CnestFile> all) async {
     // Bulk share of encrypted files isn't a single share — surface a sheet
     // explaining and offering "share first" for the highest-selected one,
@@ -727,6 +748,11 @@ class PicturesTabState extends State<PicturesTab> {
               ),
             ),
             const Spacer(),
+            IconButton(
+              tooltip: 'Move to folder',
+              icon: ThemeIcon('folder'),
+              onPressed: () => _moveSelectedToFolder(),
+            ),
             IconButton(
               icon: ThemeIcon('shareFat'),
               onPressed: () => _shareSelectedFilenames(all),

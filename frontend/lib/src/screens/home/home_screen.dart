@@ -730,6 +730,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final cards = <Widget>[
       _DashboardCard(
+        title: 'Folders',
+        icon: 'folderOpen',
+        color: cs.primary,
+        onTap: () => Navigator.pushNamed(context, AppRoutes.folders),
+      ),
+      _DashboardCard(
         title: 'Photos & Videos',
         icon: 'images',
         color: cs.primary,

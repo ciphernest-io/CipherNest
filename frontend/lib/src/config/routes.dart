@@ -17,6 +17,7 @@ import '../screens/documents/other_files_screen.dart';
 import '../screens/settings/settings_screen.dart';
 import '../screens/settings/key_management_screen.dart';
 import '../screens/settings/recycle_bin_screen.dart';
+import '../screens/folders/folder_browser_screen.dart';
 import '../screens/migration/migration_screen.dart';
 import '../screens/gallery/album_detail_screen.dart';
 import '../screens/music/music_home_screen.dart';
@@ -47,6 +48,7 @@ class AppRoutes {
   static const String activeShares = '/active-shares';
   static const String sharedViewer = '/shared-viewer';
   static const String recycleBin = '/recycle-bin';
+  static const String folders = '/folders';
 
   // CHANGED argument name to 'routeSettings' to avoid conflict
   static Route<dynamic> generateRoute(RouteSettings routeSettings) {
@@ -139,6 +141,10 @@ class AppRoutes {
 
       case recycleBin:
         return MaterialPageRoute(builder: (_) => const RecycleBinScreen());
+
+      case folders:
+        return MaterialPageRoute(
+            builder: (_) => const FolderBrowserScreen());
 
       default:
         return MaterialPageRoute(

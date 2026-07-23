@@ -90,6 +90,13 @@ class _AlbumsTabState extends State<AlbumsTab> {
             const SizedBox(height: 16),
             Text('No albums yet',
                 style: TextStyle(color: cs.onSurface.withAlpha(120))),
+            const SizedBox(height: 6),
+            // Honesty label (deliberate): albums are device-local in an app
+            // whose headline feature is sync — say so instead of letting it
+            // read as a bug. Folders sync; albums don't (yet — v1.1).
+            Text('Albums live on this device only — they don\'t sync yet.',
+                style: TextStyle(
+                    color: cs.onSurface.withAlpha(120), fontSize: 12)),
             const SizedBox(height: 16),
             ElevatedButton.icon(
               onPressed: _createAlbum,
@@ -107,6 +114,32 @@ class _AlbumsTabState extends State<AlbumsTab> {
     // +1 for the "Create Album" card at the end
     final itemCount = _albums.length + 1;
 
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+          child: Row(
+            children: [
+              ThemeIcon('info',
+                  size: 14, color: cs.onSurface.withAlpha(120)),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'On this device — albums don\'t sync yet',
+                  style: TextStyle(
+                      color: cs.onSurface.withAlpha(120), fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(child: _buildAlbumGrid(itemCount)),
+      ],
+    );
+  }
+
+  Widget _buildAlbumGrid(int itemCount) {
     return GridView.builder(
       padding: const EdgeInsets.all(12),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
