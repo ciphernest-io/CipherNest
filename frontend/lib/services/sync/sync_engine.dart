@@ -56,11 +56,31 @@ class SyncConflict {
 
   /// True if permanently purged (gone), false if soft-deleted (in the bin).
   final bool purged;
+
+  /// True when the conflicted item is a FOLDER (my rename/move vs a foreign
+  /// deleteFolder) — the notice copy differs.
+  final bool isFolder;
   const SyncConflict({
     required this.fileId,
     required this.fileName,
     required this.deleterDeviceId,
     required this.purged,
+    this.isFolder = false,
+  });
+}
+
+/// A moveFolder of THIS device that the Kleppmann cycle rule skipped: the
+/// user's move silently didn't happen, so they get told once.
+class UndoneFolderMove {
+  final String opKey;
+  final String folderName;
+
+  /// The device whose conflicting move won, when attributable.
+  final String? otherDeviceId;
+  const UndoneFolderMove({
+    required this.opKey,
+    required this.folderName,
+    this.otherDeviceId,
   });
 }
 
@@ -121,6 +141,8 @@ class SyncEngine {
   /// with `pending = 1` (test-pinned in sync_engine_db_test.dart), and
   /// [fullResync] explicitly refuses to mint ops from surviving rows.
   Future<SyncOp> recordLocalOp(LocalSyncAction action) async {
+    assert(action.kind != SyncOpKind.unknown,
+        'the unknown sentinel is a decode artifact, never a user action');
     final db = await _db();
     final deviceId = await _deviceId();
     return db.transaction((txn) async {
@@ -467,12 +489,25 @@ class SyncEngine {
     final allOps = opRows.map(_rowToOp).toList();
     final state = replayOps(allOps);
 
+    // Live-or-root normalization at the WRITE boundary (op_replay's header
+    // promise): a live item's folder pointer resolves against live folders;
+    // binned items keep the RAW pointer (the bin shows original context,
+    // and the raw pointer is what lets a child rejoin a restored parent).
+    String? liveOrRoot(String? id) => id != null &&
+            state.folders.containsKey(id) &&
+            !state.folders[id]!.deleted
+        ? id
+        : null;
+
     final fileRows = await db.query('files',
         columns: [
           'id',
           'filename',
           'is_favorite',
           'is_deleted',
+          'deleted_at',
+          'folder_id',
+          'deleted_by_folder_id',
           'size_bytes',
           'content_hash',
           'created_at',
@@ -502,6 +537,23 @@ class SyncEngine {
       final id = e.key;
       final f = e.value;
       final row = existing[id];
+      // ONE derived map, spread into the insert AND diffed into the update —
+      // the two paths structurally cannot disagree on an op-owned column
+      // (the created_at-divergence bug class, closed by construction).
+      //
+      // deleted_at comes from replay's EXPLICIT tombstone wall — the HLC
+      // wall of whichever op flipped deleted, deleteFolder cascades
+      // included. The old per-column scan only knew deleteFile ops, so a
+      // cascade-binned file materialized with deleted_at = 0 and the
+      // 30-day bin sweep would have purged it instantly.
+      final derived = <String, Object?>{
+        'filename': f.name,
+        'is_favorite': f.favorite ? 1 : 0,
+        'is_deleted': f.deleted ? 1 : 0,
+        'deleted_at': f.deleted ? f.tombstoneWall : null,
+        'folder_id': f.deleted ? f.folderId : liveOrRoot(f.folderId),
+        'deleted_by_folder_id': f.deletedByFolderId,
+      };
       // Every file the log knows is materialized, live or binned. Tombstones
       // are eternal and identical on every device (no GC), so this converges
       // without any age-based "ghost" cutoff. The Recycle Bin screen filters
@@ -515,7 +567,6 @@ class SyncEngine {
               'id': id,
               'cloud_id': null, // reconcile joins the blob by stem later
               'account_id': accountId,
-              'filename': f.name,
               // Size + hash travel in the createFile op, so a peer shows the
               // right size immediately (fixes the "0 bytes" a synced file
               // showed before reconcile joined the blob) and can dedup by
@@ -529,23 +580,15 @@ class SyncEngine {
               'created_at': create?.captured ?? _createWall(opRows, id) ?? nowMs,
               'is_uploaded': 1,
               'local_path': null,
-              'is_favorite': f.favorite ? 1 : 0,
-              'is_deleted': f.deleted ? 1 : 0,
-              'deleted_at': f.deleted ? _tombstoneWall(opRows, id) : null,
               'type': CnestFileTypeWire.fromFilename(f.name).index,
+              ...derived,
             },
             conflictAlgorithm: ConflictAlgorithm.ignore);
       } else {
         final update = <String, Object?>{};
-        if (row['filename'] != f.name) update['filename'] = f.name;
-        if ((row['is_favorite'] == 1) != f.favorite) {
-          update['is_favorite'] = f.favorite ? 1 : 0;
-        }
-        if ((row['is_deleted'] == 1) != f.deleted) {
-          update['is_deleted'] = f.deleted ? 1 : 0;
-          update['deleted_at'] =
-              f.deleted ? _tombstoneWall(opRows, id) : null;
-        }
+        derived.forEach((col, value) {
+          if (row[col] != value) update[col] = value;
+        });
         // Backfill accurate plaintext size / content hash from the create op
         // for rows first seeded by reconcile from the blob listing (which
         // only knows the ENCRYPTED size and no hash).
@@ -571,6 +614,52 @@ class SyncEngine {
         }
       }
     }
+
+    // ---- Folders: a FULLY derived table --------------------------------
+    // Every folder row is a pure function of the log (no blobs, no
+    // reconcile, no op-less legacy rows): upsert everything replay knows —
+    // deleted folders keep their rows for the Recycle Bin — and drop rows
+    // replay doesn't (purgeFolder is terminal). Same one-derived-map
+    // discipline as files.
+    final folderRows = await db.query('folders',
+        where: 'account_id = ?', whereArgs: [accountId]);
+    final existingFolders = {
+      for (final r in folderRows) r['id'] as String: r
+    };
+    for (final e in state.folders.entries) {
+      final id = e.key;
+      final f = e.value;
+      final derived = <String, Object?>{
+        'name': f.name,
+        'parent_id': f.deleted ? f.parentId : liveOrRoot(f.parentId),
+        'is_deleted': f.deleted ? 1 : 0,
+        'deleted_at': f.deleted ? f.tombstoneWall : null,
+        'deleted_by_folder_id': f.deletedByFolderId,
+        // Device-identical folder ordering: the createFolder op's HLC wall.
+        'created_at': _folderCreateWall(opRows, id),
+      };
+      final row = existingFolders[id];
+      if (row == null) {
+        batch.insert(
+            'folders',
+            {'id': id, 'account_id': accountId, ...derived},
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      } else {
+        final update = <String, Object?>{};
+        derived.forEach((col, value) {
+          if (row[col] != value) update[col] = value;
+        });
+        if (update.isNotEmpty) {
+          batch.update('folders', update, where: 'id = ?', whereArgs: [id]);
+        }
+      }
+    }
+    for (final id in existingFolders.keys) {
+      if (!state.folders.containsKey(id)) {
+        batch.delete('folders', where: 'id = ?', whereArgs: [id]);
+      }
+    }
+
     await batch.commit(noResult: true);
     DatabaseService().notifyFilesChanged();
   }
@@ -595,8 +684,9 @@ class SyncEngine {
         if (op.kind == SyncOpKind.purgeFile) op.targetId,
     };
 
-    // Files this device has a pending edit on.
+    // Items this device has a pending edit on.
     const editKinds = {'renameFile', 'moveFile', 'setFavorite', 'restoreFile'};
+    const folderEditKinds = {'renameFolder', 'moveFolder'};
     final pendingEdits = await db.query('sync_ops',
         where: 'account_id = ? AND pending = 1 AND device_id = ?',
         whereArgs: [accountId, thisDevice]);
@@ -604,18 +694,19 @@ class SyncEngine {
       for (final r in pendingEdits)
         if (editKinds.contains(r['kind'])) r['target_id'] as String: null,
     };
-    if (myEditedIds.isEmpty) return const [];
+    final myEditedFolderIds = <String>{
+      for (final r in pendingEdits)
+        if (folderEditKinds.contains(r['kind'])) r['target_id'] as String,
+    };
+    if (myEditedIds.isEmpty && myEditedFolderIds.isEmpty) return const [];
 
     // Who deleted/purged each — only a FOREIGN deletion is a conflict.
-    String? foreignDeleter(String id) {
+    String? foreignDeleter(String id, Set<SyncOpKind> deleteKinds) {
       String? who;
       Hlc? best;
       for (final op in allOps) {
         if (op.targetId != id) continue;
-        if (op.kind != SyncOpKind.deleteFile &&
-            op.kind != SyncOpKind.purgeFile) {
-          continue;
-        }
+        if (!deleteKinds.contains(op.kind)) continue;
         if (best == null || op.hlc > best) {
           best = op.hlc;
           who = op.deviceId;
@@ -630,13 +721,77 @@ class SyncEngine {
       final f = state.files[id];
       final isDeleted = isGone || (f?.deleted ?? false);
       if (!isDeleted) continue;
-      final deleter = foreignDeleter(id);
+      final deleter =
+          foreignDeleter(id, {SyncOpKind.deleteFile, SyncOpKind.purgeFile});
       if (deleter == null) continue;
       out.add(SyncConflict(
         fileId: id,
         fileName: f?.name ?? id,
         deleterDeviceId: deleter,
         purged: isGone,
+      ));
+    }
+    // Folder analog: my pending rename/move on a folder a FOREIGN device
+    // deleted (in the bin) or purged (absent from replay's folders map).
+    for (final id in myEditedFolderIds) {
+      final folder = state.folders[id];
+      final isGone = folder == null;
+      final isDeleted = isGone || folder.deleted;
+      if (!isDeleted) continue;
+      final deleter = foreignDeleter(
+          id, {SyncOpKind.deleteFolder, SyncOpKind.purgeFolder});
+      if (deleter == null) continue;
+      out.add(SyncConflict(
+        fileId: id,
+        fileName: folder?.name ?? id,
+        deleterDeviceId: deleter,
+        purged: isGone,
+        isFolder: true,
+      ));
+    }
+    return out;
+  }
+
+  /// This device's moveFolder ops that the cycle rule skipped — the user's
+  /// move silently didn't happen and they should hear it once. The caller
+  /// (SyncCoordinator) dedups against an already-notified set; this method
+  /// just reports the current deterministic truth.
+  Future<List<UndoneFolderMove>> detectUndoneFolderMoves() async {
+    final db = await _db();
+    final thisDevice = await _deviceId();
+    final allOps = (await db.query('sync_ops',
+            where: 'account_id = ?', whereArgs: [accountId]))
+        .map(_rowToOp)
+        .toList();
+    final state = replayOps(allOps);
+    if (state.skippedFolderMoves.isEmpty) return const [];
+
+    final byKey = {for (final op in allOps) op.opKey: op};
+    final out = <UndoneFolderMove>[];
+    for (final key in state.skippedFolderMoves) {
+      final op = byKey[key];
+      if (op == null || op.deviceId != thisDevice) continue;
+      // Best-effort attribution: the latest FOREIGN move touching my
+      // folder or my intended destination is the one that made mine a
+      // cycle.
+      String? winner;
+      Hlc? best;
+      for (final other in allOps) {
+        if (other.kind != SyncOpKind.moveFolder) continue;
+        if (other.deviceId == thisDevice) continue;
+        if (other.targetId != op.targetId &&
+            other.targetId != op.folderId) {
+          continue;
+        }
+        if (best == null || other.hlc > best) {
+          best = other.hlc;
+          winner = other.deviceId;
+        }
+      }
+      out.add(UndoneFolderMove(
+        opKey: key,
+        folderName: state.folders[op.targetId]?.name ?? op.targetId,
+        otherDeviceId: winner,
       ));
     }
     return out;
@@ -667,7 +822,9 @@ class SyncEngine {
         'seq': op.seq,
         'hlc_wall': op.hlc.wallMs,
         'hlc_counter': op.hlc.counter,
-        'kind': op.kind.name,
+        // kindName, not kind.name: an unknown op keeps its ORIGINAL kind
+        // string so it round-trips verbatim through rows and snapshots.
+        'kind': op.kindName,
         'target_id': op.targetId,
         'name': op.name,
         'folder_id': op.folderId,
@@ -678,20 +835,7 @@ class SyncEngine {
         'pending': pending ? 1 : 0,
       };
 
-  SyncOp _rowToOp(Map<String, Object?> row) => SyncOp(
-        kind: SyncOpKind.values.firstWhere((k) => k.name == row['kind']),
-        deviceId: row['device_id'] as String,
-        seq: row['seq'] as int,
-        hlc: Hlc(row['hlc_wall'] as int, row['hlc_counter'] as int),
-        targetId: row['target_id'] as String,
-        name: row['name'] as String?,
-        folderId: row['folder_id'] as String?,
-        favorite:
-            row['favorite'] == null ? null : (row['favorite'] as int) == 1,
-        hash: row['content_hash'] as String?,
-        size: row['size_bytes'] as int?,
-        captured: row['captured_at'] as int?,
-      );
+  SyncOp _rowToOp(Map<String, Object?> row) => SyncOp.fromRow(row);
 
   /// The createFile op for a file id (carries name/hash/size/captured), or null.
   SyncOp? _createOp(List<SyncOp> ops, String id) {
@@ -701,20 +845,19 @@ class SyncEngine {
     return null;
   }
 
-  int _tombstoneWall(List<Map<String, Object?>> opRows, String id) {
-    var wall = 0;
-    for (final r in opRows) {
-      if (r['target_id'] == id && r['kind'] == SyncOpKind.deleteFile.name) {
-        final w = r['hlc_wall'] as int;
-        if (w > wall) wall = w;
-      }
-    }
-    return wall;
-  }
-
   int? _createWall(List<Map<String, Object?>> opRows, String id) {
     for (final r in opRows) {
       if (r['target_id'] == id && r['kind'] == SyncOpKind.createFile.name) {
+        return r['hlc_wall'] as int;
+      }
+    }
+    return null;
+  }
+
+  int? _folderCreateWall(List<Map<String, Object?>> opRows, String id) {
+    for (final r in opRows) {
+      if (r['target_id'] == id &&
+          r['kind'] == SyncOpKind.createFolder.name) {
         return r['hlc_wall'] as int;
       }
     }

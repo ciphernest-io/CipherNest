@@ -89,7 +89,21 @@ Future<Database> newDeviceDb() async {
       is_favorite INTEGER DEFAULT 0,
       is_deleted INTEGER DEFAULT 0,
       deleted_at INTEGER,
-      type INTEGER
+      type INTEGER,
+      folder_id TEXT,
+      deleted_by_folder_id TEXT
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE folders(
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      parent_id TEXT,
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      deleted_at INTEGER,
+      deleted_by_folder_id TEXT,
+      created_at INTEGER
     )
   ''');
   return db;
@@ -562,5 +576,342 @@ void main() {
     final seen = await dbB.query('sync_seen_segments');
     expect(seen.where((r) => r['name'] == 'ops_devX_0.cnest'), isEmpty,
         reason: 'an unreadable segment must be retried, not absorbed');
+  });
+
+  // -----------------------------------------------------------------------
+  // Folders (Model A) materialization
+  // -----------------------------------------------------------------------
+
+  Future<Map<String, Object?>?> folderRow(Database db, String id) async {
+    final rows = await db.query('folders',
+        where: 'id = ?', whereArgs: [id], limit: 1);
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  /// Every op-owned column, both tables, compared row-for-row — the
+  /// materializer-drift net: an op-owned column written on insert but
+  /// missed on diff-update (or vice versa) fails HERE, whatever the column.
+  Future<void> expectConvergedMaterialization(Database x, Database y) async {
+    const fileCols = [
+      'id',
+      'filename',
+      'is_favorite',
+      'is_deleted',
+      'deleted_at',
+      'folder_id',
+      'deleted_by_folder_id',
+      'size_bytes',
+      'content_hash',
+      'created_at',
+      'type',
+    ];
+    final fx = await x.query('files', columns: fileCols, orderBy: 'id');
+    final fy = await y.query('files', columns: fileCols, orderBy: 'id');
+    expect(fx, fy, reason: 'files materialization diverged');
+    final ox = await x.query('folders', orderBy: 'id');
+    final oy = await y.query('folders', orderBy: 'id');
+    expect(ox, oy, reason: 'folders materialization diverged');
+  }
+
+  test(
+      'INSTANT-PURGE REGRESSION: cascade-binned files carry the deleteFolder '
+      'op\'s wall as deleted_at, never 0', () async {
+    // Realistic epoch walls: with the old deleted_at=0 behavior these rows
+    // would read as deleted in 1970 — instantly past any 30-day TTL.
+    final base = DateTime.now().millisecondsSinceEpoch;
+    var now = base;
+    a = engineFor(dbA, cloud, 'devA', wallClock: () => now);
+
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFolder, targetId: 'F', name: 'Holiday'));
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFile,
+        targetId: 'f1',
+        name: 'a.jpg',
+        folderId: 'F'));
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFile,
+        targetId: 'f2',
+        name: 'b.jpg',
+        folderId: 'F'));
+    now = base + 1000;
+    await a.recordLocalOp(
+        const LocalSyncAction(kind: SyncOpKind.deleteFile, targetId: 'f1'));
+    now = base + 2000;
+    await a.recordLocalOp(
+        const LocalSyncAction(kind: SyncOpKind.deleteFolder, targetId: 'F'));
+    await a.syncCycle();
+    await b.syncCycle();
+
+    for (final db in [dbA, dbB]) {
+      final f1 = (await fileRow(db, 'f1'))!;
+      expect(f1['is_deleted'], 1);
+      expect(f1['deleted_at'], base + 1000,
+          reason: 'individual delete keeps its own wall');
+      expect(f1['deleted_by_folder_id'], isNull,
+          reason: 'individual entry, never absorbed by the cascade');
+
+      final f2 = (await fileRow(db, 'f2'))!;
+      expect(f2['is_deleted'], 1);
+      expect(f2['deleted_at'], base + 2000,
+          reason: 'THE regression: cascade wall, not 0/epoch — a 0 here '
+              'meant the next bin sweep permanently purged the folder\'s '
+              'entire contents');
+      expect(f2['deleted_by_folder_id'], 'F');
+
+      final folder = (await folderRow(db, 'F'))!;
+      expect(folder['is_deleted'], 1);
+      expect(folder['deleted_at'], base + 2000);
+      expect(folder['deleted_by_folder_id'], isNull);
+    }
+    await expectConvergedMaterialization(dbA, dbB);
+  });
+
+  test(
+      'rich two-device folder history converges column-for-column, '
+      'including the seed-178 re-stamp at the SQLite layer', () async {
+    final base = DateTime.now().millisecondsSinceEpoch;
+    var nowA = base;
+    var nowB = base + 500;
+    a = engineFor(dbA, cloud, 'devA', wallClock: () => nowA);
+    b = engineFor(dbB, cloud, 'devB', wallClock: () => nowB);
+
+    // A builds a small tree and shares it.
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFolder, targetId: 'P', name: 'Parent'));
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFolder,
+        targetId: 'C',
+        name: 'Child',
+        folderId: 'P'));
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFile,
+        targetId: 'f1',
+        name: 'in-child.jpg',
+        folderId: 'C'));
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFile, targetId: 'f2', name: 'root.jpg'));
+    await a.syncCycle();
+    await b.syncCycle();
+
+    // B reorganizes: moves f2 into C, renames C.
+    nowB = base + 1000;
+    await b.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.moveFile, targetId: 'f2', folderId: 'C'));
+    await b.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.renameFolder, targetId: 'C', name: 'Trip'));
+    await b.syncCycle();
+    await a.syncCycle();
+
+    // CONCURRENT: A deletes folder C (cascade bins f1+f2); B — later HLC,
+    // unaware — individually deletes f1. The merged fold must re-stamp f1
+    // as an individual entry (seed-178) ON BOTH DEVICES' ROWS.
+    nowA = base + 2000;
+    await a.recordLocalOp(
+        const LocalSyncAction(kind: SyncOpKind.deleteFolder, targetId: 'C'));
+    nowB = base + 3000;
+    await b.recordLocalOp(
+        const LocalSyncAction(kind: SyncOpKind.deleteFile, targetId: 'f1'));
+    await a.syncCycle();
+    await b.syncCycle();
+    await a.syncCycle();
+
+    for (final db in [dbA, dbB]) {
+      final f1 = (await fileRow(db, 'f1'))!;
+      expect(f1['is_deleted'], 1);
+      expect(f1['deleted_by_folder_id'], isNull,
+          reason: 'seed-178 re-stamp reaches SQLite on both devices');
+      expect(f1['deleted_at'], base + 3000,
+          reason: 're-stamp carries the explicit deleteFile\'s wall');
+      final f2 = (await fileRow(db, 'f2'))!;
+      expect(f2['is_deleted'], 1);
+      expect(f2['deleted_by_folder_id'], 'C');
+      expect(f2['deleted_at'], base + 2000);
+    }
+
+    // A restores C: f2 comes back inside it; f1 stays deleted.
+    nowA = base + 4000;
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.restoreFolder, targetId: 'C'));
+    await a.syncCycle();
+    await b.syncCycle();
+
+    for (final db in [dbA, dbB]) {
+      final c = (await folderRow(db, 'C'))!;
+      expect(c['is_deleted'], 0);
+      expect(c['name'], 'Trip', reason: 'rename survived the round trip');
+      expect(c['parent_id'], 'P');
+      final f2 = (await fileRow(db, 'f2'))!;
+      expect(f2['is_deleted'], 0);
+      expect(f2['folder_id'], 'C');
+      expect(f2['deleted_at'], isNull);
+      expect(f2['deleted_by_folder_id'], isNull);
+      final f1 = (await fileRow(db, 'f1'))!;
+      expect(f1['is_deleted'], 1,
+          reason: 'the explicit individual delete survives the restore');
+    }
+    await expectConvergedMaterialization(dbA, dbB);
+  });
+
+  test('restore under a dead parent lands at root in SQLite, rejoins when '
+      'the parent is restored', () async {
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFolder, targetId: 'P', name: 'P'));
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFolder,
+        targetId: 'C',
+        name: 'C',
+        folderId: 'P'));
+    await a.recordLocalOp(
+        const LocalSyncAction(kind: SyncOpKind.deleteFolder, targetId: 'C'));
+    await a.recordLocalOp(
+        const LocalSyncAction(kind: SyncOpKind.deleteFolder, targetId: 'P'));
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.restoreFolder, targetId: 'C'));
+    await a.syncCycle();
+    await b.syncCycle();
+
+    for (final db in [dbA, dbB]) {
+      final c = (await folderRow(db, 'C'))!;
+      expect(c['is_deleted'], 0);
+      expect(c['parent_id'], isNull,
+          reason: 'parent still binned -> normalized to root');
+    }
+
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.restoreFolder, targetId: 'P'));
+    await a.syncCycle();
+    await b.syncCycle();
+
+    for (final db in [dbA, dbB]) {
+      final c = (await folderRow(db, 'C'))!;
+      expect(c['parent_id'], 'P',
+          reason: 'structure remembered: child rejoins the restored parent');
+    }
+    await expectConvergedMaterialization(dbA, dbB);
+  });
+
+  test('purgeFolder removes the folder row on every device', () async {
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFolder, targetId: 'X', name: 'X'));
+    await a.syncCycle();
+    await b.syncCycle();
+    expect(await folderRow(dbB, 'X'), isNotNull);
+
+    await a.recordLocalOp(
+        const LocalSyncAction(kind: SyncOpKind.deleteFolder, targetId: 'X'));
+    await a.recordLocalOp(
+        const LocalSyncAction(kind: SyncOpKind.purgeFolder, targetId: 'X'));
+    await a.syncCycle();
+    await b.syncCycle();
+
+    expect(await folderRow(dbA, 'X'), isNull);
+    expect(await folderRow(dbB, 'X'), isNull);
+    await expectConvergedMaterialization(dbA, dbB);
+  });
+
+  test('folder edit-vs-delete: my pending rename on a foreign-deleted '
+      'folder is a folder-shaped conflict', () async {
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFolder, targetId: 'F', name: 'Shared'));
+    await a.syncCycle();
+    await b.syncCycle();
+
+    // B renames (pending), A deletes and pushes.
+    await b.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.renameFolder, targetId: 'F', name: 'Mine'));
+    await a.recordLocalOp(
+        const LocalSyncAction(kind: SyncOpKind.deleteFolder, targetId: 'F'));
+    await a.syncCycle();
+    await b.pullAndMerge();
+
+    final conflicts = await b.detectConflicts();
+    expect(conflicts.length, 1);
+    expect(conflicts.first.isFolder, isTrue);
+    expect(conflicts.first.deleterDeviceId, 'devA');
+    expect(conflicts.first.purged, isFalse);
+    expect(await a.detectConflicts(), isEmpty);
+  });
+
+  test('undone folder move: the cycle-skip loser is reported on the losing '
+      'device only, with the winner attributed', () async {
+    final base = DateTime.now().millisecondsSinceEpoch;
+    var nowA = base;
+    var nowB = base + 1000; // B's concurrent move orders LATER -> loses
+    a = engineFor(dbA, cloud, 'devA', wallClock: () => nowA);
+    b = engineFor(dbB, cloud, 'devB', wallClock: () => nowB);
+
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFolder, targetId: 'X', name: 'X'));
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFolder, targetId: 'Y', name: 'Y'));
+    await a.syncCycle();
+    await b.syncCycle();
+
+    // Concurrent: A moves X under Y; B moves Y under X (recorded before
+    // either sees the other's op).
+    nowA = base + 2000;
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.moveFolder, targetId: 'X', folderId: 'Y'));
+    nowB = base + 3000;
+    await b.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.moveFolder, targetId: 'Y', folderId: 'X'));
+    await a.syncCycle();
+    await b.syncCycle();
+    await a.syncCycle();
+
+    final undoneB = await b.detectUndoneFolderMoves();
+    expect(undoneB.length, 1, reason: 'B\'s later-ordering move lost');
+    expect(undoneB.first.folderName, 'Y');
+    expect(undoneB.first.otherDeviceId, 'devA');
+    expect(await a.detectUndoneFolderMoves(), isEmpty,
+        reason: 'the winner is never notified');
+
+    // The tree itself converged: X under Y, Y at root, on both devices.
+    for (final db in [dbA, dbB]) {
+      expect((await folderRow(db, 'X'))!['parent_id'], 'Y');
+      expect((await folderRow(db, 'Y'))!['parent_id'], isNull);
+    }
+    await expectConvergedMaterialization(dbA, dbB);
+  });
+
+  test('FORWARD-COMPAT: a segment carrying an unknown op kind still merges '
+      'its known ops; the unknown op persists verbatim for the upgrade',
+      () async {
+    // A future app version recorded "teleportFile" alongside a normal
+    // create. Simulate by planting the pending rows directly (recordLocalOp
+    // asserts against minting unknowns locally).
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFile, targetId: 'f1', name: 'cat.jpg'));
+    await dbA.insert('sync_ops', {
+      'op_key': 'devA:999',
+      'account_id': account,
+      'device_id': 'devA',
+      'seq': 999,
+      'hlc_wall': 2000000,
+      'hlc_counter': 0,
+      'kind': 'teleportFile',
+      'target_id': 'f1',
+      'name': 'somewhere',
+      'pending': 1,
+    });
+    await a.syncCycle();
+    await b.syncCycle();
+
+    // The known op merged and materialized on B…
+    final f1 = (await fileRow(dbB, 'f1'))!;
+    expect(f1['filename'], 'cat.jpg');
+    // …the unknown op is preserved VERBATIM in B's log…
+    final rows = await dbB.query('sync_ops',
+        where: "kind = 'teleportFile'");
+    expect(rows.length, 1, reason: 'unknown op must ride along, not poison');
+    // …and round-trips with its original kind string (compaction-safe).
+    final reparsed = SyncOp.fromRow(rows.single);
+    expect(reparsed.kind, SyncOpKind.unknown);
+    expect(reparsed.kindName, 'teleportFile');
+    expect(reparsed.toJson()['k'], 'teleportFile');
+    // The segment was legitimately absorbed — no unreadable count, no
+    // retry loop.
+    expect(await b.pullAndMerge(), 0);
   });
 }

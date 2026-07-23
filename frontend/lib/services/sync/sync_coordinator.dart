@@ -1,10 +1,14 @@
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../cloud/account_registry.dart';
 import 'cloud_sync_transport.dart';
 import 'device_registry_service.dart';
 import 'sync_engine.dart';
 import 'sync_op.dart';
+
+/// Once-only memory for undone-folder-move notices (op keys already shown).
+const kNotifiedUndoneMovesPref = 'sync_notified_undone_moves_v1';
 
 /// Entry point the rest of the app talks to: holds one [SyncEngine] per
 /// active account and shields UI flows from sync failures — recording an
@@ -81,17 +85,60 @@ class SyncCoordinator {
   Future<void> _surfaceConflicts() async {
     final accountId = _engineAccountId;
     if (accountId == null) return;
-    final found = await engine!.detectConflicts();
-    if (found.isEmpty) return;
     final messages = <String>[];
+
+    final found = await engine!.detectConflicts();
     for (final c in found) {
       final who = await DeviceRegistryService()
           .nameFor(c.deleterDeviceId, accountId: accountId);
-      messages.add(c.purged
-          ? '"${c.fileName}" was permanently deleted on $who.'
-          : 'You edited "${c.fileName}", but it was deleted on $who — '
-              'it\'s in the Recycle Bin.');
+      if (c.isFolder) {
+        messages.add(c.purged
+            ? 'Folder "${c.fileName}" was permanently deleted on $who.'
+            : 'You edited folder "${c.fileName}", but it was deleted on '
+                '$who — it\'s in the Recycle Bin.');
+      } else {
+        messages.add(c.purged
+            ? '"${c.fileName}" was permanently deleted on $who.'
+            : 'You edited "${c.fileName}", but it was deleted on $who — '
+                'it\'s in the Recycle Bin.');
+      }
     }
+
+    // Cycle-skipped folder moves of THIS device: told once per op, ever —
+    // the skip is a permanent fact of the log, so without the persisted
+    // dedup it would re-announce after every sync.
+    try {
+      final undone = await engine!.detectUndoneFolderMoves();
+      if (undone.isNotEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        final seen =
+            (prefs.getStringList(kNotifiedUndoneMovesPref) ?? []).toSet();
+        var changed = false;
+        for (final u in undone) {
+          if (!seen.add(u.opKey)) continue;
+          changed = true;
+          final who = u.otherDeviceId == null
+              ? 'another device'
+              : await DeviceRegistryService()
+                  .nameFor(u.otherDeviceId!, accountId: accountId);
+          messages.add('Your move of folder "${u.folderName}" was undone — '
+              'it conflicted with a folder move on $who.');
+        }
+        if (changed) {
+          // Bounded: keep the most recent entries only.
+          final list = seen.toList();
+          await prefs.setStringList(
+              kNotifiedUndoneMovesPref,
+              list.length > 200
+                  ? list.sublist(list.length - 200)
+                  : list);
+        }
+      }
+    } catch (e) {
+      debugPrint('SyncCoordinator: undone-move surfacing failed: $e');
+    }
+
+    if (messages.isEmpty) return;
     conflicts.value = messages;
   }
 

@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import '../src/models/file_model.dart';
+import '../src/models/folder_model.dart';
 import '../src/models/album_model.dart';
 import '../src/models/share_model.dart';
 import 'cache_manager_service.dart';
@@ -76,7 +77,7 @@ class DatabaseService extends ChangeNotifier {
 
     final db = await openDatabase(
       path,
-      version: 14,
+      version: 15,
       onCreate: (db, version) async {
         await _createSchema(db);
         await _createSyncSchema(db);
@@ -224,7 +225,51 @@ class DatabaseService extends ChangeNotifier {
         if (oldVersion < 14) {
           await db.execute('ALTER TABLE files ADD COLUMN device_model TEXT');
         }
+        // v15: the virtual folder tree (Model A). `folders` + both new
+        // files columns are MATERIALIZED VIEW state, written exclusively by
+        // SyncEngine.applyMergedState from the op-log:
+        //  * files.folder_id — live location, normalized live-or-root at
+        //    write time (raw pointers live only in the log).
+        //  * files.deleted_by_folder_id / folders.deleted_by_folder_id —
+        //    the EXPLICIT cascade cause (the targeted root of the
+        //    deleteFolder that binned this item; NULL = individual delete).
+        //    The bin's type tabs filter on it and restoreFolder restores by
+        //    it — never inferred from a missing timestamp.
+        if (oldVersion < 15) {
+          await db.execute('ALTER TABLE files ADD COLUMN folder_id TEXT');
+          await db.execute(
+              'ALTER TABLE files ADD COLUMN deleted_by_folder_id TEXT');
+          await db.execute(_createFoldersTableSql);
+          await db.execute(_createFoldersIndexSql);
+          await db.execute(_createFilesFolderIndexSql);
+        }
   }
+
+  /// The virtual folder tree (v15). Fully op-derived — every row is
+  /// written by applyMergedState; there is no reconcile for folders (no
+  /// blobs) and no op-less legacy rows, so the table is always an exact
+  /// function of the log. Deleted folders KEEP their rows (the Recycle Bin
+  /// shows them); only a purgeFolder op removes one.
+  static const String _createFoldersTableSql = '''
+      CREATE TABLE IF NOT EXISTS folders(
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        parent_id TEXT,
+        is_deleted INTEGER NOT NULL DEFAULT 0,
+        deleted_at INTEGER,
+        deleted_by_folder_id TEXT,
+        created_at INTEGER
+      )
+    ''';
+
+  static const String _createFoldersIndexSql =
+      'CREATE INDEX IF NOT EXISTS idx_folders_account '
+      'ON folders(account_id, parent_id)';
+
+  static const String _createFilesFolderIndexSql =
+      'CREATE INDEX IF NOT EXISTS idx_files_folder '
+      'ON files(account_id, folder_id)';
 
   static const String _createSharesTableSql = '''
       CREATE TABLE shares(
@@ -323,9 +368,14 @@ class DatabaseService extends ChangeNotifier {
         video_codec TEXT,
         audio_codec TEXT,
         fps INTEGER,
-        device_model TEXT
+        device_model TEXT,
+        folder_id TEXT,
+        deleted_by_folder_id TEXT
       )
     ''');
+    await db.execute(_createFoldersTableSql);
+    await db.execute(_createFoldersIndexSql);
+    await db.execute(_createFilesFolderIndexSql);
     await db.execute('''
       CREATE TABLE albums(
         id TEXT PRIMARY KEY,
@@ -645,8 +695,202 @@ class DatabaseService extends ChangeNotifier {
     final rows = await db.query(
       'files',
       columns: ['id'],
+      // Cascade-binned files (deleted_by_folder_id set) are swept through
+      // their FOLDER's bin entry, not individually — one user action, one
+      // bin entry, one expiry. The NOT IN clause keeps orphans sweepable:
+      // a file whose cause folder row is gone (interrupted purge batch)
+      // falls back to individual expiry.
       where: 'is_deleted = 1 AND account_id = ? AND deleted_at IS NOT NULL '
-          'AND deleted_at <= ?',
+          'AND deleted_at <= ? AND (deleted_by_folder_id IS NULL OR '
+          'deleted_by_folder_id NOT IN (SELECT id FROM folders))',
+      whereArgs: [_currentAccountId, cutoff],
+    );
+    return rows.map((r) => r['id'] as String).toList();
+  }
+
+  // -----------------------------------------------------------------------
+  // Folders — the virtual tree (Model A)
+  // -----------------------------------------------------------------------
+  //
+  // The folders table is a PURE materialized view of the op-log: every
+  // mutation below only records an op — SyncEngine.recordLocalOp
+  // immediately re-materializes (applyMergedState) and fires
+  // notifyFilesChanged, so the local UI updates in the same call without a
+  // second writer existing anywhere. Concurrency (cycles, cascade vs
+  // individual deletes, restore races) is resolved deterministically at
+  // replay; the only guard here is the local move-into-own-subtree check,
+  // which exists for immediate UX feedback, not correctness.
+
+  /// Creates a folder and returns its id (null when signed out).
+  Future<String?> createFolder(String name, {String? parentId}) async {
+    if (_currentAccountId == null) return null;
+    final id = const Uuid().v4();
+    await SyncCoordinator()
+        .record(SyncOpKind.createFolder, id, name: name, folderId: parentId);
+    return id;
+  }
+
+  Future<void> renameFolder(String id, String newName) =>
+      SyncCoordinator().record(SyncOpKind.renameFolder, id, name: newName);
+
+  /// Reparents [id] under [newParentId] (null = root). Returns false —
+  /// recording nothing — when the destination is the folder itself or one
+  /// of its descendants (the same rule replay enforces globally).
+  Future<bool> moveFolder(String id, String? newParentId) async {
+    if (newParentId != null) {
+      var cursor = newParentId;
+      final hops = <String>{};
+      while (true) {
+        if (cursor == id) return false;
+        if (!hops.add(cursor)) break; // defensive: corrupt local chain
+        final rows = await (await database).query('folders',
+            columns: ['parent_id'],
+            where: 'id = ? AND is_deleted = 0',
+            whereArgs: [cursor],
+            limit: 1);
+        final parent = rows.isEmpty ? null : rows.first['parent_id'] as String?;
+        if (parent == null) break;
+        cursor = parent;
+      }
+    }
+    await SyncCoordinator()
+        .record(SyncOpKind.moveFolder, id, folderId: newParentId);
+    return true;
+  }
+
+  /// Soft-deletes the folder: the subtree and every live file inside it go
+  /// to the Recycle Bin as ONE folder entry (cascade causes stamped by
+  /// replay).
+  Future<void> deleteFolder(String id) =>
+      SyncCoordinator().record(SyncOpKind.deleteFolder, id);
+
+  /// Restores a binned folder as a unit: the folder plus exactly the items
+  /// its own delete cascade binned. Items deleted individually stay in the
+  /// bin (Model A).
+  Future<void> restoreFolder(String id) =>
+      SyncCoordinator().record(SyncOpKind.restoreFolder, id);
+
+  /// Moves a file into [folderId] (null = root). The row is updated
+  /// locally for instant UI, then the op re-materializes the same value.
+  Future<void> moveFileToFolder(String fileId, String? folderId) async {
+    final db = await database;
+    await db.update('files', {'folder_id': folderId},
+        where: 'id = ?', whereArgs: [fileId]);
+    await SyncCoordinator()
+        .record(SyncOpKind.moveFile, fileId, folderId: folderId);
+    notifyListeners();
+  }
+
+  /// Live folders under [parentId] (null = root), name-ordered.
+  Future<List<CnestFolder>> getFolders({String? parentId}) async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final rows = await db.query(
+      'folders',
+      where: parentId == null
+          ? 'account_id = ? AND is_deleted = 0 AND parent_id IS NULL'
+          : 'account_id = ? AND is_deleted = 0 AND parent_id = ?',
+      whereArgs:
+          parentId == null ? [_currentAccountId] : [_currentAccountId, parentId],
+      orderBy: 'name COLLATE NOCASE ASC',
+    );
+    return rows.map((r) => CnestFolder.fromMap(r)).toList();
+  }
+
+  /// Live files directly inside [folderId] (null = root), newest first.
+  Future<List<CnestFile>> getFilesInFolder(String? folderId) async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final rows = await db.query(
+      'files',
+      where: folderId == null
+          ? 'account_id = ? AND is_deleted = 0 AND folder_id IS NULL'
+          : 'account_id = ? AND is_deleted = 0 AND folder_id = ?',
+      whereArgs:
+          folderId == null ? [_currentAccountId] : [_currentAccountId, folderId],
+      orderBy: 'created_at DESC',
+    );
+    return rows.map((r) => CnestFile.fromMap(r)).toList();
+  }
+
+  /// Live-file count per live folder id, one query (folder cards show it).
+  Future<Map<String, int>> getFolderFileCounts() async {
+    final db = await database;
+    if (_currentAccountId == null) return {};
+    final rows = await db.rawQuery(
+        'SELECT folder_id, COUNT(*) AS n FROM files '
+        'WHERE account_id = ? AND is_deleted = 0 AND folder_id IS NOT NULL '
+        'GROUP BY folder_id',
+        [_currentAccountId]);
+    return {
+      for (final r in rows) r['folder_id'] as String: r['n'] as int,
+    };
+  }
+
+  /// Binned TOP-LEVEL folder entries (deleted directly, not by a cascade) —
+  /// the Recycle Bin's Folders tab. Most recently trashed first.
+  Future<List<CnestFolder>> getDeletedFolders() async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final rows = await db.query(
+      'folders',
+      where: 'account_id = ? AND is_deleted = 1 AND '
+          'deleted_by_folder_id IS NULL',
+      whereArgs: [_currentAccountId],
+      orderBy: 'deleted_at DESC',
+    );
+    return rows.map((r) => CnestFolder.fromMap(r)).toList();
+  }
+
+  /// Ids of binned files a deleteFolder([folderId]) cascade binned — the
+  /// contents a folder purge must permanently delete.
+  Future<List<String>> getCascadeBinnedFileIds(String folderId) async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final rows = await db.query(
+      'files',
+      columns: ['id'],
+      where:
+          'account_id = ? AND is_deleted = 1 AND deleted_by_folder_id = ?',
+      whereArgs: [_currentAccountId, folderId],
+    );
+    return rows.map((r) => r['id'] as String).toList();
+  }
+
+  /// Records the terminal purgeFolder ops for [id] and every cascade-binned
+  /// descendant folder. Contents must already be purged file-by-file
+  /// (purgeFile ops via [permanentlyDeleteFile]) — folder purge NEVER
+  /// derives a file set, so the condemned-blob sweep, reconcile's tombstone
+  /// guard, and Vault Health stay tree-agnostic.
+  Future<void> purgeFolderEntity(String id) async {
+    final db = await database;
+    final descendants = await db.query(
+      'folders',
+      columns: ['id'],
+      where: 'account_id = ? AND deleted_by_folder_id = ?',
+      whereArgs: [_currentAccountId, id],
+    );
+    for (final row in descendants) {
+      await SyncCoordinator()
+          .record(SyncOpKind.purgeFolder, row['id'] as String);
+    }
+    await SyncCoordinator().record(SyncOpKind.purgeFolder, id);
+  }
+
+  /// Binned folder entries whose 30-day TTL has lapsed — the folder-shaped
+  /// half of the bin sweep.
+  Future<List<String>> getExpiredFolderIds({
+    Duration ttl = const Duration(days: 30),
+  }) async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final cutoff = DateTime.now().subtract(ttl).millisecondsSinceEpoch;
+    final rows = await db.query(
+      'folders',
+      columns: ['id'],
+      where: 'account_id = ? AND is_deleted = 1 AND '
+          'deleted_by_folder_id IS NULL AND deleted_at IS NOT NULL AND '
+          'deleted_at <= ?',
       whereArgs: [_currentAccountId, cutoff],
     );
     return rows.map((r) => r['id'] as String).toList();

@@ -127,10 +127,17 @@ class VaultState {
   final Map<String, FolderState> folders;
   final Map<String, String> devices; // deviceId -> display name
 
+  /// Op keys of moveFolder ops the Kleppmann cycle rule skipped — same set
+  /// on every device (the skip is a function of the total order). The
+  /// conflict-notice layer intersects this with the local device's own ops
+  /// to tell the user their move was undone; replay itself never acts on it.
+  final Set<String> skippedFolderMoves;
+
   const VaultState({
     required this.files,
     required this.folders,
     required this.devices,
+    this.skippedFolderMoves = const {},
   });
 }
 
@@ -165,6 +172,9 @@ VaultState replayOps(Iterable<SyncOp> ops) {
   // see it already gone). The set only guards createFolder so a straggler
   // create with the same UUID stays dead — terminality, same as files.
   final purgedFolders = <String>{};
+
+  // Cycle-skipped moveFolder op keys, reported via VaultState.
+  final skippedFolderMoves = <String>{};
 
   String? liveFolderOrRoot(String? id) =>
       id != null && folders.containsKey(id) && !folders[id]!.deleted
@@ -291,8 +301,12 @@ VaultState replayOps(Iterable<SyncOp> ops) {
         final newParent = liveFolderOrRoot(op.folderId);
         // Kleppmann rule: a move that would create a cycle at this point in
         // the fold is skipped. The order is global, so every device skips
-        // the same op — deterministic, no reconciliation needed.
-        if (wouldCycle(op.targetId, newParent)) break;
+        // the same op — deterministic, no reconciliation needed. The skip
+        // is REPORTED so the losing device can tell its user.
+        if (wouldCycle(op.targetId, newParent)) {
+          skippedFolderMoves.add(op.opKey);
+          break;
+        }
         folders[op.targetId] = folder.copyWith(parentId: () => newParent);
       case SyncOpKind.renameFolder:
         // LWW by fold order; delete wins (a rename of a binned folder is
@@ -387,6 +401,11 @@ VaultState replayOps(Iterable<SyncOp> ops) {
         folders.remove(op.targetId);
       case SyncOpKind.registerDevice:
         devices[op.targetId] = op.name ?? op.targetId;
+      case SyncOpKind.unknown:
+        // Forward-compat: an op from a newer app version. Preserved in the
+        // log verbatim (rawKind), meaningless to this build's fold — the
+        // upgrade re-replays it with full meaning.
+        break;
     }
   }
 
@@ -397,5 +416,10 @@ VaultState replayOps(Iterable<SyncOp> ops) {
     files.remove(id);
   }
 
-  return VaultState(files: files, folders: folders, devices: devices);
+  return VaultState(
+    files: files,
+    folders: folders,
+    devices: devices,
+    skippedFolderMoves: skippedFolderMoves,
+  );
 }

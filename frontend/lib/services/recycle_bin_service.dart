@@ -20,56 +20,101 @@ class RecycleBinService {
   /// Returns the number of rows successfully purged. Cloud or filesystem
   /// failures for individual files are swallowed so one stuck row doesn't
   /// block the rest.
+  ///
+  /// Folder entries sweep FIRST: a cascade-binned file expires through its
+  /// folder's single bin entry (same wall, one user action = one expiry),
+  /// and [DatabaseService.getExpiredDeletionIds] excludes cascade files
+  /// whose folder row still exists, so the two passes never double-handle.
   Future<int> sweepRecycleBin({
     Duration ttl = const Duration(days: 30),
   }) async {
     final db = DatabaseService();
+    int purged = 0;
+
+    try {
+      for (final folderId in await db.getExpiredFolderIds(ttl: ttl)) {
+        purged += await purgeFolderPermanently(folderId);
+      }
+    } catch (e) {
+      debugPrint('Bin sweep: folder pass failed: $e');
+    }
+
     final List<String> expiredIds;
     try {
       expiredIds = await db.getExpiredDeletionIds(ttl: ttl);
     } catch (_) {
-      return 0;
+      return purged;
     }
-    if (expiredIds.isEmpty) return 0;
+    if (expiredIds.isEmpty) return purged;
 
     final cloudIdsByFile = await _loadCloudIds(expiredIds);
     final tempDir = await getTemporaryDirectory();
-
-    int purged = 0;
     for (final id in expiredIds) {
-      final ids = cloudIdsByFile[id];
-      final cloudId = ids?['cloud_id'];
-      final thumbId = ids?['thumbnail_cloud_id'];
-
-      // A failed cloud delete never blocks the purge: the purge tombstone
-      // condemns the blob and the sync cycle's condemned-blob sweep retries
-      // the deletion until it lands. Log it anyway — silent swallows here
-      // once hid the failure that resurrected deleted photos.
-      if (cloudId != null) {
-        try {
-          await CloudService().deleteFile(cloudId);
-        } catch (e) {
-          debugPrint('Bin sweep: blob delete failed ($cloudId): $e');
-        }
-      }
-      if (thumbId != null) {
-        try {
-          await CloudService().deleteFile(thumbId);
-        } catch (e) {
-          debugPrint('Bin sweep: thumb delete failed ($thumbId): $e');
-        }
-      }
-
-      try {
-        await db.permanentlyDeleteFile(id);
+      if (await _purgeOneFile(db, tempDir, id, cloudIdsByFile[id])) {
         purged++;
-      } catch (_) {
-        continue;
       }
-
-      await _wipeTempArtifacts(tempDir, id, cloudId);
     }
     return purged;
+  }
+
+  /// Permanently deletes a binned folder: every file its cascade binned
+  /// (blob + row + purgeFile op, one by one), then the folder entities
+  /// (purgeFolder ops). Shared by the sweep and the bin's "Delete forever".
+  /// Interruption-safe by re-tap: already-purged files are gone from the
+  /// query, the folder entry remains until [purgeFolderEntity] lands, and
+  /// replay treats leftover causes as individual bin entries.
+  Future<int> purgeFolderPermanently(String folderId) async {
+    final db = DatabaseService();
+    final fileIds = await db.getCascadeBinnedFileIds(folderId);
+    final cloudIdsByFile = await _loadCloudIds(fileIds);
+    final tempDir = await getTemporaryDirectory();
+    var purged = 0;
+    for (final id in fileIds) {
+      if (await _purgeOneFile(db, tempDir, id, cloudIdsByFile[id])) {
+        purged++;
+      }
+    }
+    await db.purgeFolderEntity(folderId);
+    return purged;
+  }
+
+  /// One file's permanent deletion: best-effort blob deletes, the row +
+  /// purgeFile op, temp-artifact wipe. Returns whether the row purge landed.
+  Future<bool> _purgeOneFile(
+    DatabaseService db,
+    Directory tempDir,
+    String id,
+    Map<String, String?>? cloudIds,
+  ) async {
+    final cloudId = cloudIds?['cloud_id'];
+    final thumbId = cloudIds?['thumbnail_cloud_id'];
+
+    // A failed cloud delete never blocks the purge: the purge tombstone
+    // condemns the blob and the sync cycle's condemned-blob sweep retries
+    // the deletion until it lands. Log it anyway — silent swallows here
+    // once hid the failure that resurrected deleted photos.
+    if (cloudId != null) {
+      try {
+        await CloudService().deleteFile(cloudId);
+      } catch (e) {
+        debugPrint('Bin sweep: blob delete failed ($cloudId): $e');
+      }
+    }
+    if (thumbId != null) {
+      try {
+        await CloudService().deleteFile(thumbId);
+      } catch (e) {
+        debugPrint('Bin sweep: thumb delete failed ($thumbId): $e');
+      }
+    }
+
+    try {
+      await db.permanentlyDeleteFile(id);
+    } catch (_) {
+      return false;
+    }
+    await _wipeTempArtifacts(tempDir, id, cloudId);
+    return true;
   }
 
   /// One-shot read of the cloud_id + thumbnail_cloud_id for the rows we're

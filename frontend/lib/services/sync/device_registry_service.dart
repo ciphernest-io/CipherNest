@@ -97,14 +97,5 @@ class DeviceRegistryService {
     return 'another device';
   }
 
-  SyncOp _rowToOp(Map<String, Object?> row) => SyncOp.fromJson({
-        'k': row['kind'],
-        'd': row['device_id'],
-        's': row['seq'],
-        'h': {'w': row['hlc_wall'], 'c': row['hlc_counter']},
-        't': row['target_id'],
-        'n': row['name'],
-        'f': row['folder_id'],
-        'v': row['favorite'] == null ? null : (row['favorite'] as int) == 1,
-      });
+  SyncOp _rowToOp(Map<String, Object?> row) => SyncOp.fromRow(row);
 }

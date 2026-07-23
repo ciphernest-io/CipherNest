@@ -115,14 +115,7 @@ class VaultHealthService {
     }
   }
 
-  SyncOp _rowToOp(Map<String, Object?> row) => SyncOp.fromJson({
-        'k': row['kind'],
-        'd': row['device_id'],
-        's': row['seq'],
-        'h': {'w': row['hlc_wall'], 'c': row['hlc_counter']},
-        't': row['target_id'],
-        'n': row['name'],
-        'f': row['folder_id'],
-        'v': row['favorite'] == null ? null : (row['favorite'] as int) == 1,
-      });
+  // Shared row mapper (tolerant of newer versions' op kinds) — the three
+  // hand-copied variants of this used to drift; SyncOp.fromRow is the one.
+  SyncOp _rowToOp(Map<String, Object?> row) => SyncOp.fromRow(row);
 }

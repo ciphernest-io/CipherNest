@@ -42,6 +42,16 @@ enum SyncOpKind {
   /// need to understand tree semantics.
   purgeFolder,
   registerDevice,
+
+  /// FORWARD-COMPAT SENTINEL, never recorded locally: an op whose kind
+  /// string this build doesn't know (written by a newer app version). It is
+  /// preserved VERBATIM — [SyncOp.rawKind] keeps the original string, so
+  /// the op round-trips through sync_ops rows, segment JSON, and compaction
+  /// snapshots unchanged — and replay simply ignores it. The moment the app
+  /// updates, the already-merged rows materialize with full meaning. This
+  /// is what keeps one new op kind from turning a whole segment into a
+  /// poison pill for not-yet-updated devices.
+  unknown,
 }
 
 class SyncOp {
@@ -82,6 +92,10 @@ class SyncOp {
   /// HLC wall, which is also identical on every device. Additive & optional.
   final int? captured;
 
+  /// Set ONLY when [kind] is [SyncOpKind.unknown]: the original kind string
+  /// from a newer app version, preserved for verbatim round-tripping.
+  final String? rawKind;
+
   const SyncOp({
     required this.kind,
     required this.deviceId,
@@ -94,13 +108,18 @@ class SyncOp {
     this.hash,
     this.size,
     this.captured,
+    this.rawKind,
   });
 
   /// Idempotency key.
   String get opKey => '$deviceId:$seq';
 
+  /// The wire/storage kind string — the ORIGINAL one for unknown ops, so
+  /// verbatim folding stays verbatim across app versions.
+  String get kindName => rawKind ?? kind.name;
+
   Map<String, dynamic> toJson() => {
-        'k': kind.name,
+        'k': kindName,
         'd': deviceId,
         's': seq,
         'h': hlc.toJson(),
@@ -113,19 +132,59 @@ class SyncOp {
         if (captured != null) 'ca': captured,
       };
 
-  factory SyncOp.fromJson(Map<String, dynamic> json) => SyncOp(
-        kind: SyncOpKind.values.firstWhere((k) => k.name == json['k']),
-        deviceId: json['d'] as String,
-        seq: json['s'] as int,
-        hlc: Hlc.fromJson(json['h'] as Map<String, dynamic>),
-        targetId: json['t'] as String,
-        name: json['n'] as String?,
-        folderId: json['f'] as String?,
-        favorite: json['v'] as bool?,
-        hash: json['ch'] as String?,
-        size: json['sz'] as int?,
-        captured: json['ca'] as int?,
-      );
+  /// Resolves a kind string; null for strings this build doesn't know
+  /// (including the sentinel's own name — 'unknown' is never a wire kind).
+  static SyncOpKind? kindFromName(String? name) {
+    for (final k in SyncOpKind.values) {
+      if (k != SyncOpKind.unknown && k.name == name) return k;
+    }
+    return null;
+  }
+
+  /// TOLERANT by design: an unrecognized kind becomes [SyncOpKind.unknown]
+  /// with [rawKind] preserved, instead of throwing — one new op kind from a
+  /// newer app version must never make a whole segment unreadable.
+  factory SyncOp.fromJson(Map<String, dynamic> json) {
+    final raw = json['k'] as String;
+    final kind = kindFromName(raw);
+    return SyncOp(
+      kind: kind ?? SyncOpKind.unknown,
+      rawKind: kind == null ? raw : null,
+      deviceId: json['d'] as String,
+      seq: json['s'] as int,
+      hlc: Hlc.fromJson(json['h'] as Map<String, dynamic>),
+      targetId: json['t'] as String,
+      name: json['n'] as String?,
+      folderId: json['f'] as String?,
+      favorite: json['v'] as bool?,
+      hash: json['ch'] as String?,
+      size: json['sz'] as int?,
+      captured: json['ca'] as int?,
+    );
+  }
+
+  /// The ONE sync_ops-row -> op mapping, shared by every reader (the
+  /// engine, Vault Health, the device registry) so the three copies that
+  /// used to drift cannot. Same tolerance as [SyncOp.fromJson].
+  factory SyncOp.fromRow(Map<String, Object?> row) {
+    final raw = row['kind'] as String;
+    final kind = kindFromName(raw);
+    return SyncOp(
+      kind: kind ?? SyncOpKind.unknown,
+      rawKind: kind == null ? raw : null,
+      deviceId: row['device_id'] as String,
+      seq: row['seq'] as int,
+      hlc: Hlc(row['hlc_wall'] as int, row['hlc_counter'] as int),
+      targetId: row['target_id'] as String,
+      name: row['name'] as String?,
+      folderId: row['folder_id'] as String?,
+      favorite:
+          row['favorite'] == null ? null : (row['favorite'] as int) == 1,
+      hash: row['content_hash'] as String?,
+      size: row['size_bytes'] as int?,
+      captured: row['captured_at'] as int?,
+    );
+  }
 
   @override
   String toString() =>
