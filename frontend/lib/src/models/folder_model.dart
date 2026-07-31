@@ -14,6 +14,11 @@ class CnestFolder {
   final String? deletedByFolderId;
   final DateTime? createdAt;
 
+  /// True for the auto-sync "Phone Backup" tree. Derived from the id
+  /// prefix (see SystemFolders) and stamped by applyMergedState, so it
+  /// converges with the id itself.
+  final bool isSystem;
+
   const CnestFolder({
     required this.id,
     required this.name,
@@ -22,6 +27,7 @@ class CnestFolder {
     this.deletedAt,
     this.deletedByFolderId,
     this.createdAt,
+    this.isSystem = false,
   });
 
   factory CnestFolder.fromMap(Map<String, dynamic> map) => CnestFolder(
@@ -36,5 +42,6 @@ class CnestFolder {
         createdAt: map['created_at'] == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch(map['created_at'] as int),
+        isSystem: (map['is_system'] as int? ?? 0) == 1,
       );
 }

@@ -19,6 +19,7 @@ import 'package:ciphernest/services/sync/hlc.dart';
 import 'package:ciphernest/services/sync/segment_codec.dart';
 import 'package:ciphernest/services/sync/sync_engine.dart';
 import 'package:ciphernest/services/sync/sync_op.dart';
+import 'package:ciphernest/services/system_folders.dart';
 
 class FakeTransport implements SyncTransport {
   final Map<String, Uint8List> objects = {};
@@ -103,7 +104,8 @@ Future<Database> newDeviceDb() async {
       is_deleted INTEGER NOT NULL DEFAULT 0,
       deleted_at INTEGER,
       deleted_by_folder_id TEXT,
-      created_at INTEGER
+      created_at INTEGER,
+      is_system INTEGER NOT NULL DEFAULT 0
     )
   ''');
   return db;
@@ -807,6 +809,46 @@ void main() {
 
     expect(await folderRow(dbA, 'X'), isNull);
     expect(await folderRow(dbB, 'X'), isNull);
+    await expectConvergedMaterialization(dbA, dbB);
+  });
+
+  test(
+      'system folders: independent deterministic creates fold to ONE row '
+      'with is_system stamped; user folders stay 0', () async {
+    final rootId = SystemFolders.rootId;
+    final camId = SystemFolders.bucketId('Camera');
+
+    // Both devices mint the SAME ids independently (offline), then sync —
+    // exactly what two phones running auto-sync do.
+    for (final e in [a, b]) {
+      await e.recordLocalOp(LocalSyncAction(
+          kind: SyncOpKind.createFolder,
+          targetId: rootId,
+          name: 'Phone Backup'));
+      await e.recordLocalOp(LocalSyncAction(
+          kind: SyncOpKind.createFolder,
+          targetId: camId,
+          name: 'Camera',
+          folderId: rootId));
+    }
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFolder, targetId: 'U', name: 'Holiday'));
+    await a.syncCycle();
+    await b.syncCycle();
+    await a.syncCycle();
+
+    for (final db in [dbA, dbB]) {
+      final root = (await folderRow(db, rootId))!;
+      expect(root['is_system'], 1);
+      final cam = (await folderRow(db, camId))!;
+      expect(cam['is_system'], 1);
+      expect(cam['parent_id'], rootId);
+      final user = (await folderRow(db, 'U'))!;
+      expect(user['is_system'], 0);
+      // First-create-wins: the duplicate creates folded, no ghost rows.
+      final all = await db.query('folders');
+      expect(all.length, 3);
+    }
     await expectConvergedMaterialization(dbA, dbB);
   });
 

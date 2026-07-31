@@ -18,6 +18,7 @@ import 'key_manager_service.dart';
 import 'mp4_metadata_parser.dart';
 import 'sync/sync_coordinator.dart';
 import 'sync_service.dart';
+import 'system_folders.dart';
 
 /// One gallery asset inside the scan window, tagged with whether the vault
 /// already has it. Duplicates still ride through [AutoSyncService.runFullSync]
@@ -26,10 +27,16 @@ class ScannedAsset {
   final AssetEntity asset;
   final bool duplicate;
   final int capturedMs;
+
+  /// The MediaStore bucket (album) the asset lives in — "Camera",
+  /// "Screenshots", "WhatsApp Images"… Null when only the aggregate
+  /// all-photos album claimed it. Drives system-folder placement.
+  final String? bucketName;
   const ScannedAsset({
     required this.asset,
     required this.duplicate,
     required this.capturedMs,
+    this.bucketName,
   });
 }
 
@@ -110,7 +117,8 @@ class AutoSyncService {
           continue;
         }
         try {
-          final didSync = await _syncAsset(entry.asset);
+          final didSync =
+              await _syncAsset(entry.asset, bucketName: entry.bucketName);
           if (didSync) {
             synced++;
           } else {
@@ -232,13 +240,21 @@ class AutoSyncService {
       return GalleryScan(entries: const [], windowMaxMs: windowMaxMs);
     }
 
-    // Collect all assets from all albums
+    // Collect all assets from all albums. Real (non-aggregate) albums also
+    // record which bucket each asset belongs to — first bucket wins for the
+    // rare asset MediaStore lists in two.
     final allAssets = <AssetEntity>[];
+    final bucketByAssetId = <String, String>{};
     for (final album in albums) {
       final count = await album.assetCountAsync;
       if (count == 0) continue;
       final assets = await album.getAssetListRange(start: 0, end: count);
       allAssets.addAll(assets);
+      if (!album.isAll && album.name.trim().isNotEmpty) {
+        for (final a in assets) {
+          bucketByAssetId.putIfAbsent(a.id, () => album.name.trim());
+        }
+      }
     }
 
     // Vault-side dedup. Only COMPLETED uploads (plus attempts that are in
@@ -278,6 +294,7 @@ class AutoSyncService {
         asset: asset,
         duplicate: duplicate,
         capturedMs: asset.createDateTime.millisecondsSinceEpoch,
+        bucketName: bucketByAssetId[asset.id],
       ));
     }
 
@@ -289,10 +306,46 @@ class AutoSyncService {
     return GalleryScan(entries: entries, windowMaxMs: windowMaxMs);
   }
 
+  /// Resolves (creating if needed) the system folder an auto-synced asset
+  /// files into: `Phone Backup/<bucket>`. Deterministic ids (SystemFolders)
+  /// make every device converge on the same tree; replay's
+  /// first-create-wins guard folds the duplicate creates.
+  ///
+  /// Deletion is RESPECTED, never fought: a binned bucket sends new files
+  /// to the Phone Backup root; a binned root (or a purged folder — purge is
+  /// terminal, replay drops re-creates of the id) sends them to the vault
+  /// root. Either way the file still ingests and shows in the gallery lens.
+  Future<String?> _ensureBucketFolder(String? bucketName) async {
+    if (bucketName == null || bucketName.isEmpty) return null;
+    final dbs = DatabaseService();
+
+    final rootId = SystemFolders.rootId;
+    var root = await dbs.getFolderById(rootId);
+    if (root == null) {
+      if (await dbs.isFolderPurged(rootId)) return null;
+      await dbs.createFolder(SystemFolders.rootName, id: rootId);
+      root = await dbs.getFolderById(rootId);
+      if (root == null) return null; // signed out mid-run
+    }
+    if (root.isDeleted) return null;
+
+    final bId = SystemFolders.bucketId(bucketName);
+    var bucket = await dbs.getFolderById(bId);
+    if (bucket == null) {
+      if (await dbs.isFolderPurged(bId)) return rootId;
+      await dbs.createFolder(bucketName, parentId: rootId, id: bId);
+      bucket = await dbs.getFolderById(bId);
+      if (bucket == null) return rootId;
+    }
+    if (bucket.isDeleted) return rootId;
+    return bId;
+  }
+
   /// Encrypts and uploads a single gallery asset. With [existingRow] the
   /// pending row is retried IN PLACE (heal path) — no delete-then-recreate,
   /// so the gallery tile never flashes.
-  Future<bool> _syncAsset(AssetEntity asset, {CnestFile? existingRow}) async {
+  Future<bool> _syncAsset(AssetEntity asset,
+      {CnestFile? existingRow, String? bucketName}) async {
     final account = AccountRegistry().activeAccount;
     if (account == null) {
       // Transient (sign-out mid-run). Must throw, not return false: false
@@ -309,6 +362,12 @@ class AutoSyncService {
     final isVideo = asset.type == AssetType.video;
     final isImage = asset.type == AssetType.image || isVideo;
     final fileId = existingRow?.id ?? const Uuid().v4();
+
+    // System-folder placement: Phone Backup/<bucket>. Heal retries keep
+    // the placement the original attempt stamped on the row.
+    final folderId = existingRow != null
+        ? existingRow.folderId
+        : await _ensureBucketFolder(bucketName);
 
     Uint8List? thumbnailBytes;
 
@@ -383,6 +442,7 @@ class AutoSyncService {
         audioCodec: mp4?.audioCodec,
         fps: mp4?.fps,
         deviceModel: mp4?.deviceModel,
+        folderId: folderId,
       );
       await DatabaseService().addFile(newFile);
     } else {
@@ -447,7 +507,8 @@ class AutoSyncService {
           filename: filename,
           contentHash: contentHash,
           sizeBytes: fileSize,
-          capturedAt: capturedMs > 0 ? capturedMs : null);
+          capturedAt: capturedMs > 0 ? capturedMs : null,
+          folderId: folderId);
 
       return true;
     } catch (e) {

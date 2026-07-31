@@ -53,7 +53,19 @@ Two devices = S (phone) and V (tablet/second phone), same account. Sync = pull-t
 - [ ] Settings → "Category tabs show foldered files" default ON. Turn OFF → Photos/Documents/Music/Other show only unfiled items; folder browser unchanged. Turn back ON → everything reappears.
 - [ ] Albums tab shows the "On this device — albums don't sync yet" line (and in the empty state).
 
-## 7. Sweep (can't wait 30 days)
+## 7. Phase C — system folders + Files-tab media presentation
+
+The one-tree model this phase implements: **Files = the Drive view** (everything as a file system, media as rows), **Photos & Videos = the Google Photos view** (all media as the swipeable timeline). A photo appears in BOTH; only the presentation differs.
+
+- [ ] `[DB]` **Deterministic convergence:** enable auto-sync on S and V, take a photo on each → both devices show ONE "Phone Backup" root with ONE "Camera" bucket under it (tested: independent creates fold to one row, `is_system` = 1 on both). What's unverified: the screens.
+- [ ] `[UI]` **Single root row:** Files root shows "Phone Backup" as ONE row (phone icon, "Auto-synced media · N items" subtitle), sorted BELOW user folders. Buckets (Camera / Screenshots / WhatsApp Images…) appear only after tapping in.
+- [ ] `[UI]` **Auto-synced photo appears in BOTH views:** in the gallery timeline (as always) AND as a file row in Phone Backup/Camera. It is NOT hidden from the gallery.
+- [ ] `[UI]` **Media as rows, not a grid:** every media file anywhere in the Files tree renders as a row — thumbnail left, name/size/date right; videos get a small play glyph on the thumb. The grid stays in Photos & Videos.
+- [ ] `[UI]` **Single-file preview:** tapping a media row opens it full-screen IN PLACE. Back returns to the folder. Try to swipe sideways → nothing (no adjacent files). No filmstrip, no scrubber, no "1 / N" counter. Videos: play/pause, mute, frame-capture still work (no timeline scrub — deliberate).
+- [ ] `[UI]` **Deletion respected, never fought:** delete the Camera bucket → next auto-synced photo files into Phone Backup root. Delete Phone Backup itself → next photo lands at the vault root (unfiled), still visible in the gallery. Purge a system folder from the bin → it is NEVER recreated (purge is terminal); new photos take the same fallback. `[LOG]` for the terminality, `[UI]` for where files land visibly.
+- [ ] `[UI]` **Rename survives:** rename "Camera" to anything → later auto-synced camera photos still file into it (placement is by id, not name), and it keeps its system icon.
+
+## 8. Sweep (can't wait 30 days)
 
 The folder-aware sweep is `[DB]`-tested (expiry math, folder-first ordering, orphan fallback). On-device spot check if desired: none practical without clock games — trust the tests here, or temporarily shorten the TTL in a debug build.
 

@@ -35,10 +35,18 @@ class ImageViewerScreen extends StatefulWidget {
   final List<CnestFile> files;
   final int initialIndex;
 
+  /// Drive-style single-file preview (launched from the Files browser):
+  /// full-screen in place, back returns to the folder. No timeline chrome —
+  /// no filmstrip, no scrubber, no position counter — and with the one-item
+  /// [files] list the pager has nothing to swipe to. The swipe-through
+  /// gallery experience stays exclusive to the Photos & Videos tab.
+  final bool standalone;
+
   const ImageViewerScreen({
     super.key,
     required this.files,
     required this.initialIndex,
+    this.standalone = false,
   });
 
   @override
@@ -1137,13 +1145,14 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                       _currentFiles[_currentIndex].filename,
                       style: TextStyle(fontSize: 14, color: overlayColor),
                     ),
-                    Text(
-                      '${_currentIndex + 1} / ${_currentFiles.length}',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: overlayColor.withValues(alpha: 0.7),
+                    if (!widget.standalone)
+                      Text(
+                        '${_currentIndex + 1} / ${_currentFiles.length}',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: overlayColor.withValues(alpha: 0.7),
+                        ),
                       ),
-                    ),
                   ],
                 ),
                 leading: IconButton(
@@ -1409,46 +1418,48 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
           children: [
             if (_currentIsVideo)
               _buildVideoPillRow(overlayColor, vertical: false),
-            SizedBox(
-              height: _stripBarHeight,
-              // Width MUST be pinned: with a loose width, the Stack
-              // shrink-wraps its only non-positioned child — the 2.5 px
-              // playhead — collapsing the whole bar to a sliver the moment
-              // a video expands (and poisoning _stripViewport for all the
-              // centering math afterwards).
-              width: double.infinity,
-              child: Stack(
-                clipBehavior: Clip.none,
-                alignment: Alignment.center,
-                children: [
-                  Positioned.fill(
-                    child: _buildFilmstrip(axis: Axis.horizontal),
-                  ),
-                  // Fixed center playhead: in expanded mode the FILM moves,
-                  // the line doesn't (Samsung).
-                  if (_videoExpanded && _activeVideo != null)
-                    IgnorePointer(
-                      child: Container(
-                        width: 2.5,
-                        height: _thumbH + 14,
-                        decoration: BoxDecoration(
-                          color: overlayColor,
-                          borderRadius: BorderRadius.circular(2),
-                          // Halo in the opposite tone — the line rides over
-                          // photo frames, which can match either mode.
-                          boxShadow: [
-                            BoxShadow(
-                              color: theme.colorScheme.surface
-                                  .withValues(alpha: 0.7),
-                              blurRadius: 2,
-                            ),
-                          ],
+            if (!widget.standalone)
+              SizedBox(
+                height: _stripBarHeight,
+                // Width MUST be pinned: with a loose width, the Stack
+                // shrink-wraps its only non-positioned child — the 2.5 px
+                // playhead — collapsing the whole bar to a sliver the moment
+                // a video expands (and poisoning _stripViewport for all the
+                // centering math afterwards).
+                width: double.infinity,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  alignment: Alignment.center,
+                  children: [
+                    Positioned.fill(
+                      child: _buildFilmstrip(axis: Axis.horizontal),
+                    ),
+                    // Fixed center playhead: in expanded mode the FILM
+                    // moves, the line doesn't (Samsung).
+                    if (_videoExpanded && _activeVideo != null)
+                      IgnorePointer(
+                        child: Container(
+                          width: 2.5,
+                          height: _thumbH + 14,
+                          decoration: BoxDecoration(
+                            color: overlayColor,
+                            borderRadius: BorderRadius.circular(2),
+                            // Halo in the opposite tone — the line rides
+                            // over photo frames, which can match either
+                            // mode.
+                            boxShadow: [
+                              BoxShadow(
+                                color: theme.colorScheme.surface
+                                    .withValues(alpha: 0.7),
+                                blurRadius: 2,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
             Container(
               margin: const EdgeInsets.fromLTRB(16, 8, 16, 10),
               padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -1486,9 +1497,12 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                   padding: const EdgeInsets.only(top: 8),
                   child: _buildVideoPillRow(overlayColor, vertical: true),
                 ),
-              Expanded(
-                child: _buildFilmstrip(axis: Axis.vertical),
-              ),
+              if (widget.standalone)
+                const Spacer()
+              else
+                Expanded(
+                  child: _buildFilmstrip(axis: Axis.vertical),
+                ),
               Container(
                 margin: const EdgeInsets.fromLTRB(4, 4, 4, 8),
                 padding: const EdgeInsets.symmetric(vertical: 6),

@@ -26,6 +26,7 @@ import 'package:sqflite/sqflite.dart';
 import '../../src/models/file_model.dart';
 import '../database_service.dart';
 import '../device_identity_service.dart';
+import '../system_folders.dart';
 import 'compaction.dart';
 import 'hlc.dart';
 import 'vault_health_service.dart';
@@ -637,6 +638,8 @@ class SyncEngine {
         'deleted_by_folder_id': f.deletedByFolderId,
         // Device-identical folder ordering: the createFolder op's HLC wall.
         'created_at': _folderCreateWall(opRows, id),
+        // Pure function of the (synced) id — converges by construction.
+        'is_system': SystemFolders.isSystemId(id) ? 1 : 0,
       };
       final row = existingFolders[id];
       if (row == null) {

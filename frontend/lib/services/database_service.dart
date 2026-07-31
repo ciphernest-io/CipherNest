@@ -96,7 +96,7 @@ class DatabaseService extends ChangeNotifier {
 
     final db = await openDatabase(
       path,
-      version: 15,
+      version: 16,
       onCreate: (db, version) async {
         await _createSchema(db);
         await _createSyncSchema(db);
@@ -262,6 +262,15 @@ class DatabaseService extends ChangeNotifier {
           await db.execute(_createFoldersIndexSql);
           await db.execute(_createFilesFolderIndexSql);
         }
+        // v16: folders.is_system — 1 for the auto-sync "Phone Backup" tree.
+        // Derived (id prefix, see SystemFolders) and stamped by
+        // applyMergedState's derived map, so it converges by construction.
+        // Guard: a <15 upgrade just created the table WITH the column.
+        if (oldVersion < 16 && oldVersion >= 15) {
+          await db.execute(
+              'ALTER TABLE folders ADD COLUMN is_system INTEGER NOT NULL '
+              'DEFAULT 0');
+        }
   }
 
   /// The virtual folder tree (v15). Fully op-derived — every row is
@@ -278,7 +287,8 @@ class DatabaseService extends ChangeNotifier {
         is_deleted INTEGER NOT NULL DEFAULT 0,
         deleted_at INTEGER,
         deleted_by_folder_id TEXT,
-        created_at INTEGER
+        created_at INTEGER,
+        is_system INTEGER NOT NULL DEFAULT 0
       )
     ''';
 
@@ -839,12 +849,46 @@ class DatabaseService extends ChangeNotifier {
   // which exists for immediate UX feedback, not correctness.
 
   /// Creates a folder and returns its id (null when signed out).
-  Future<String?> createFolder(String name, {String? parentId}) async {
+  ///
+  /// [id] lets the auto-sync system-folder path mint DETERMINISTIC ids
+  /// (see SystemFolders) so every device converges on one folder; user
+  /// folders always take the default UUIDv4.
+  Future<String?> createFolder(String name,
+      {String? parentId, String? id}) async {
     if (_currentAccountId == null) return null;
-    final id = const Uuid().v4();
-    await SyncCoordinator()
-        .record(SyncOpKind.createFolder, id, name: name, folderId: parentId);
-    return id;
+    final folderId = id ?? const Uuid().v4();
+    await SyncCoordinator().record(SyncOpKind.createFolder, folderId,
+        name: name, folderId: parentId);
+    return folderId;
+  }
+
+  /// Single folder row by id, INCLUDING deleted ones — the auto-sync
+  /// placement path must see a binned system folder to respect its deletion
+  /// rather than resurrect it.
+  Future<CnestFolder?> getFolderById(String id) async {
+    final db = await database;
+    if (_currentAccountId == null) return null;
+    final rows = await db.query('folders',
+        where: 'account_id = ? AND id = ?',
+        whereArgs: [_currentAccountId, id],
+        limit: 1);
+    if (rows.isEmpty) return null;
+    return CnestFolder.fromMap(rows.first);
+  }
+
+  /// Whether a purgeFolder op for [id] exists anywhere in the log. Purge is
+  /// terminal — replay's create-guard drops any later createFolder for the
+  /// same id — so the auto-sync ensure path must stop re-minting a purged
+  /// system folder or it would churn a dead op into the log every run.
+  Future<bool> isFolderPurged(String id) async {
+    final db = await database;
+    if (_currentAccountId == null) return false;
+    final rows = await db.query('sync_ops',
+        columns: ['op_key'],
+        where: "account_id = ? AND kind = 'purgeFolder' AND target_id = ?",
+        whereArgs: [_currentAccountId, id],
+        limit: 1);
+    return rows.isNotEmpty;
   }
 
   Future<void> renameFolder(String id, String newName) =>

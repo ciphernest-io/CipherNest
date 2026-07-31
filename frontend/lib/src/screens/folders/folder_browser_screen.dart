@@ -1,16 +1,22 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../../../services/database_service.dart';
 import '../../models/file_model.dart';
 import '../../models/folder_model.dart';
+import '../../utils/byte_format.dart';
 import '../../widgets/folder_picker_sheet.dart';
 import '../../widgets/theme_icon.dart';
 import '../gallery/image_viewer_screen.dart';
 import '../gallery/pictures_tab.dart' show GalleryGridItem;
 
-/// The virtual folder tree, browsed one level at a time (Samsung "My
-/// Files" idiom): subfolder rows on top, a mixed-type file grid below.
-/// Navigating into a folder pushes another instance of this screen.
+/// The virtual folder tree, browsed one level at a time: subfolder rows on
+/// top, files as Drive-style rows below (thumbnail left, name/size/date
+/// right). This tab is the FILE SYSTEM view of the one vault tree — media
+/// here renders as rows and opens as an in-place single-file preview; the
+/// swipeable grid/timeline presentation of the same files stays exclusive
+/// to the Photos & Videos tab. Navigating into a folder pushes another
+/// instance of this screen.
 ///
 /// All mutations route through DatabaseService's folder choke points —
 /// every action becomes an op, and the visible state is applyMergedState's
@@ -292,99 +298,145 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       );
     }
 
+    // System folders ("Phone Backup" tree) sit BELOW user folders as one
+    // unobtrusive row each — the auto-sync machinery must not clutter the
+    // root's user-created organization.
+    final userFolders = _folders.where((f) => !f.isSystem).toList();
+    final systemFolders = _folders.where((f) => f.isSystem).toList();
+
     return CustomScrollView(
       slivers: [
-        if (_folders.isNotEmpty)
+        if (userFolders.isNotEmpty)
           SliverList.builder(
-            itemCount: _folders.length,
-            itemBuilder: (context, i) {
-              final f = _folders[i];
-              final n = _counts[f.id] ?? 0;
-              return ListTile(
-                leading: ThemeIcon('folder', color: cs.primary, size: 28),
-                title: Text(f.name,
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-                subtitle: Text('$n item${n == 1 ? '' : 's'}',
-                    style: TextStyle(
-                        color: cs.onSurface.withAlpha(140), fontSize: 12)),
-                trailing: const ThemeIcon('caretRight', size: 16),
-                onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => FolderBrowserScreen(folder: f))),
-              );
-            },
+            itemCount: userFolders.length,
+            itemBuilder: (context, i) => _folderRow(cs, userFolders[i]),
+          ),
+        if (systemFolders.isNotEmpty)
+          SliverList.builder(
+            itemCount: systemFolders.length,
+            itemBuilder: (context, i) => _folderRow(cs, systemFolders[i]),
           ),
         if (_folders.isNotEmpty && _files.isNotEmpty)
           const SliverToBoxAdapter(child: Divider(height: 1)),
         if (_files.isNotEmpty)
-          SliverPadding(
-            padding: const EdgeInsets.only(top: 1.5),
-            sliver: SliverGrid.builder(
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                crossAxisSpacing: 1.5,
-                mainAxisSpacing: 1.5,
-              ),
-              itemCount: _files.length,
-              itemBuilder: (context, i) {
-                final file = _files[i];
-                final isSelected = _selectedIds.contains(file.id);
-                return GestureDetector(
-                  onTap: () {
-                    if (_selectionMode) {
-                      _toggleSelected(file.id);
-                      return;
-                    }
-                    if (file.type == CnestFileType.image) {
-                      final images = _files
-                          .where((f) => f.type == CnestFileType.image)
-                          .toList();
-                      Navigator.of(context).push(MaterialPageRoute(
-                          builder: (_) => ImageViewerScreen(
-                              files: images,
-                              initialIndex: images.indexOf(file))));
-                    } else {
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                          content: Text(
-                              '"${file.filename}" opens from its category '
-                              'tab')));
-                    }
-                  },
-                  onLongPress: () => setState(() {
-                    _selectionMode = true;
-                    _selectedIds.add(file.id);
-                  }),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      GalleryGridItem(key: ValueKey(file.id), file: file),
-                      if (_selectionMode)
-                        Container(
-                          color: isSelected
-                              ? Colors.black45
-                              : Colors.transparent,
-                          child: Align(
-                            alignment: Alignment.topRight,
-                            child: Padding(
-                              padding: const EdgeInsets.all(4.0),
-                              child: ThemeIcon(
-                                isSelected
-                                    ? 'checkCircle'
-                                    : 'radio_button_unchecked',
-                                selected: isSelected,
-                                color: Colors.white,
-                                size: 22,
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                );
-              },
-            ),
+          SliverList.builder(
+            itemCount: _files.length,
+            itemBuilder: (context, i) => _fileRow(cs, _files[i]),
           ),
         const SliverToBoxAdapter(child: SizedBox(height: 24)),
       ],
     );
+  }
+
+  Widget _folderRow(ColorScheme cs, CnestFolder f) {
+    final n = _counts[f.id] ?? 0;
+    final countLabel = '$n item${n == 1 ? '' : 's'}';
+    return ListTile(
+      leading: ThemeIcon(f.isSystem ? 'smartphone' : 'folder',
+          color: f.isSystem ? cs.onSurface.withAlpha(160) : cs.primary,
+          size: 28),
+      title: Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text(
+          f.isSystem ? 'Auto-synced media · $countLabel' : countLabel,
+          style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 12)),
+      trailing: const ThemeIcon('caretRight', size: 16),
+      onTap: () => Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => FolderBrowserScreen(folder: f))),
+    );
+  }
+
+  // ---- File rows (Drive idiom: thumb/icon left, name + size · date) -----
+
+  static const _videoExts = {'mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v'};
+
+  bool _isMedia(CnestFile f) => f.type == CnestFileType.image;
+
+  bool _isVideo(CnestFile f) {
+    final dot = f.filename.lastIndexOf('.');
+    if (dot < 0) return false;
+    return _videoExts.contains(f.filename.substring(dot + 1).toLowerCase());
+  }
+
+  String _typeIcon(CnestFile f) => switch (f.type) {
+        CnestFileType.audio => 'musicNote',
+        CnestFileType.document => 'fileText',
+        _ => 'file',
+      };
+
+  Widget _fileRow(ColorScheme cs, CnestFile file) {
+    final isSelected = _selectedIds.contains(file.id);
+    final subtitle =
+        '${formatBytes(file.sizeBytes)} · ${DateFormat.yMMMd().format(file.createdAt)}';
+
+    final Widget leading;
+    if (_isMedia(file)) {
+      leading = ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: SizedBox(
+          width: 44,
+          height: 44,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              GalleryGridItem(
+                  key: ValueKey('row_${file.id}'),
+                  file: file,
+                  decodeWidth: 96,
+                  compact: true),
+              if (_isVideo(file))
+                const Center(
+                    child: ThemeIcon('playCircle',
+                        color: Colors.white, size: 18)),
+            ],
+          ),
+        ),
+      );
+    } else {
+      leading = SizedBox(
+        width: 44,
+        height: 44,
+        child: Center(
+            child: ThemeIcon(_typeIcon(file), color: cs.primary, size: 26)),
+      );
+    }
+
+    return ListTile(
+      leading: leading,
+      title: Text(file.filename,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 14)),
+      subtitle: Text(subtitle,
+          style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 12)),
+      trailing: _selectionMode
+          ? ThemeIcon(isSelected ? 'checkCircle' : 'radio_button_unchecked',
+              selected: isSelected,
+              color: isSelected ? cs.primary : cs.onSurface.withAlpha(120),
+              size: 22)
+          : null,
+      onTap: () => _openFile(file),
+      onLongPress: () => setState(() {
+        _selectionMode = true;
+        _selectedIds.add(file.id);
+      }),
+    );
+  }
+
+  void _openFile(CnestFile file) {
+    if (_selectionMode) {
+      _toggleSelected(file.id);
+      return;
+    }
+    if (_isMedia(file)) {
+      // Drive-style preview: THIS file, full-screen, in place. Back
+      // returns here. No filmstrip, no swiping a timeline — that lives in
+      // the Photos & Videos tab.
+      Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => ImageViewerScreen(
+              files: [file], initialIndex: 0, standalone: true)));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('"${file.filename}" opens from its category tab')));
+    }
   }
 }
