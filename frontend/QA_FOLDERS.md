@@ -65,7 +65,20 @@ The one-tree model this phase implements: **Files = the Drive view** (everything
 - [ ] `[UI]` **Deletion respected, never fought:** delete the Camera bucket → next auto-synced photo files into Phone Backup root. Delete Phone Backup itself → next photo lands at the vault root (unfiled), still visible in the gallery. Purge a system folder from the bin → it is NEVER recreated (purge is terminal); new photos take the same fallback. `[LOG]` for the terminality, `[UI]` for where files land visibly.
 - [ ] `[UI]` **Rename survives:** rename "Camera" to anything → later auto-synced camera photos still file into it (placement is by id, not name), and it keeps its system icon.
 
-## 8. Sweep (can't wait 30 days)
+## 8. Phase D — multi-file upload, upload-here, folder import
+
+Everything in this section is `[UI]` + real-cloud plumbing — zero property-test coverage. The pipeline itself is the OLD home-screen flow extracted verbatim (plus folderId + the dedup pre-check), so single-file uploads are regression checks, not new behavior.
+
+- [ ] **Single-file regression, all four home categories:** photo, video, PDF (thumbnail renders), audio (plays offline after upload). Behavior must be IDENTICAL to before — same snackbar, same rollback on airplane-mode failure (no phantom row, no bin entry).
+- [ ] **Multi-select from home:** pick 5+ photos at once → FAB counts "Encrypting 2/5…", all land in the gallery, one summary snackbar. Background the app mid-batch → notification shows, batch completes.
+- [ ] **Duplicate pre-check:** upload the same photo twice from home → second run reports "1 already in your vault", NO new row, NO cloud upload. A video duplicate is NOT pre-checked (streamed single-pass — lands as "name (1)", deliberate).
+- [ ] **Upload here (both v1 limitations closed):** Files browser FAB → "Upload files" inside a folder → files land IN that folder, correctly typed by extension (a jpg picked here still gets a thumbnail + shows in Photos). Root browser → lands unfiled.
+- [ ] **Non-media open from the browser:** tap a PDF/zip row → spinner on the row → opens in the system viewer (decrypt to app-private temp only). Tap a music row → plays as a single track (full-queue behavior stays in the Music tab).
+- [ ] **Folder import:** FAB → "Import a folder" → pick a folder with subfolders → CipherNest mirrors the structure under the current folder, files upload one at a time with progress; summary names the new folder. Files whose bytes already exist in the vault are SKIPPED (counted as "already in your vault") — they do NOT get a copy in the imported folder (dedup semantics, deliberate). Empty subfolders are not created. >2000 files → summary says "first 2000 files only".
+- [ ] **OEM picker check (the pre-authorized cut):** if ACTION_OPEN_DOCUMENT_TREE misbehaves on either phone (empty tree, crash, unreadable docs), that's the cut condition — report it and "Import a folder" gets removed in favor of multi-file only.
+- [ ] **Cache hygiene:** after any import/upload (success AND failure), Settings cache figure returns to baseline — SAF cache copies and picker copies must not linger.
+
+## 9. Sweep (can't wait 30 days)
 
 The folder-aware sweep is `[DB]`-tested (expiry math, folder-first ordering, orphan fallback). On-device spot check if desired: none practical without clock games — trust the tests here, or temporarily shorten the TTL in a debug build.
 

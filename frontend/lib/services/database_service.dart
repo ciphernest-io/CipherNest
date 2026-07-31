@@ -1083,6 +1083,23 @@ class DatabaseService extends ChangeNotifier {
     return rows.map((r) => r['filename'] as String).toSet();
   }
 
+  /// True when a LIVE, fully-uploaded row already holds these exact
+  /// plaintext bytes — the batch-upload duplicate pre-check. Binned rows
+  /// don't count (restoring one shouldn't have blocked a re-upload).
+  Future<bool> hasActiveContentHash(String hash) async {
+    final db = await database;
+    if (_currentAccountId == null) return false;
+    final rows = await db.query(
+      'files',
+      columns: ['id'],
+      where: 'account_id = ? AND content_hash = ? AND is_deleted = 0 '
+          'AND cloud_id IS NOT NULL',
+      whereArgs: [_currentAccountId, hash],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
   Future<CnestFile?> getFileById(String id) async {
     final db = await database;
     final rows =

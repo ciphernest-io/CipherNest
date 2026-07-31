@@ -1,17 +1,7 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../../widgets/theme_icon.dart';
-import 'package:uuid/uuid.dart';
-import 'package:flutter_image_compress/flutter_image_compress.dart'; 
-import 'package:printing/printing.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:photo_manager/photo_manager.dart';
-import 'dart:io';
-import 'dart:ui' as ui;
-import 'package:video_thumbnail/video_thumbnail.dart'; // NEW IMPORT
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../config/routes.dart';
@@ -19,25 +9,14 @@ import '../../config/theme_controller.dart';
 import '../../widgets/account_switcher.dart';
 import '../../widgets/ciphernest_logo.dart';
 
-import '../../models/file_model.dart';
 import '../../utils/byte_format.dart';
-import '../../utils/filename_dedup.dart';
-import '../../utils/media_store_uri.dart';
-import '../../../services/auto_sync_service.dart';
-import '../../../services/cnest_errors.dart';
 import '../../../services/database_service.dart';
-import '../../../services/mp4_metadata_parser.dart';
-import '../../../services/upload_foreground_guard.dart';
-import '../../../services/database_backup_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/cloud/account_registry.dart';
-import '../../../services/encryption_service.dart';
-import '../../../services/file_metadata_service.dart';
 import '../../../services/sync_service.dart';
 import '../../../services/sync/sync_coordinator.dart';
+import '../../../services/upload_pipeline.dart';
 import '../../widgets/friendly_error_sheet.dart';
-
-enum _UploadCategory { media, document, audio, other }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -48,6 +27,8 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isUploading = false;
+  int _uploadDone = 0;
+  int _uploadTotal = 0;
   bool _isLoadingSession = true;
   Map<String, int>? _vaultStats;
 
@@ -149,571 +130,71 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<Uint8List?> _generatePdfThumbnail(Uint8List fileBytes) async {
-    try {
-      await for (final page in Printing.raster(fileBytes, pages: [0], dpi: 72)) {
-        final pdfImage = await page.toImage();
-        final recorder = ui.PictureRecorder();
-        final canvas = Canvas(recorder);
-        final paint = Paint()..color = Colors.white;
-        
-        canvas.drawRect(
-          Rect.fromLTWH(0, 0, pdfImage.width.toDouble(), pdfImage.height.toDouble()),
-          paint
-        );
-
-        canvas.drawImage(pdfImage, Offset.zero, Paint());
-
-        final compositedImage = await recorder.endRecording().toImage(
-          pdfImage.width, 
-          pdfImage.height
-        );
-
-        final byteData = await compositedImage.toByteData(format: ui.ImageByteFormat.png);
-        if (byteData == null) return null;
-        var pngBytes = byteData.buffer.asUint8List();
-
-        final jpegBytes = await FlutterImageCompress.compressWithList(
-           pngBytes,
-           minHeight: 300,
-           minWidth: 300,
-           quality: 60,
-           format: CompressFormat.jpeg,
-        );
-        return jpegBytes;
-      }
-      return null;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  /// Resolves a FilePicker pick to the corresponding photo_manager
-  /// AssetEntity so the vault entry ties back to the phone's gallery.
-  /// Three tiers, tried in order:
-  ///
-  ///   1. `pickedIdentifier` — the content URI file_picker opened. Both
-  ///      direct `content://media/...` URIs AND the SAF media-documents
-  ///      URIs (what custom-extension picks actually return — the id is
-  ///      URL-encoded as `video:123`) resolve via [extractMediaStoreId] to
-  ///      the MediaStore id photo_manager keys on. Zero enumeration.
-  ///
-  ///   2. Global filename scan — the aggregate "all" album (onlyAll), up
-  ///      to 2000 recent entries, matched by title + byte size.
-  ///
-  ///   3. Fallback — if the picker returned a direct `/storage/…` path
-  ///      we can at least store that as `localPath`, even without an
-  ///      assetId. Better than sending grid renders to the cloud.
-  Future<_GalleryAssetMatch?> _resolveGalleryAsset({
-    required String filename,
-    required int fileSize,
-    required String fallbackPath,
-    String? pickedIdentifier,
-  }) async {
-    // TIER 1 — content URI → MediaStore id.
-    if (pickedIdentifier != null) {
-      final id = extractMediaStoreId(pickedIdentifier);
-      if (id != null) {
-        try {
-          final asset = await AssetEntity.fromId(id);
-          if (asset != null) {
-            final f = await asset.file;
-            if (f != null) {
-              return _GalleryAssetMatch(
-                assetId: asset.id,
-                localPath: f.path,
-              );
-            }
-          }
-        } catch (e) {
-          debugPrint('AssetEntity.fromId($id) failed: $e');
-        }
-      }
-    }
-
-    // TIER 2 — filename scan across the whole gallery. onlyAll asks
-    // MediaStore for THE aggregate album directly — the old "first
-    // non-empty album" guess could land on an image bucket and miss
-    // videos entirely.
-    try {
-      final perm = await PhotoManager.requestPermissionExtend();
-      if (perm.isAuth) {
-        final albums = await PhotoManager.getAssetPathList(
-          type: RequestType.common,
-          onlyAll: true,
-        );
-        if (albums.isNotEmpty) {
-          final album = albums.first;
-          final count = await album.assetCountAsync;
-          final assets = count == 0
-              ? const <AssetEntity>[]
-              : await album.getAssetListRange(
-                  start: 0,
-                  end: count.clamp(0, 2000),
-                );
-          for (final a in assets) {
-            if (a.title == filename) {
-              final f = await a.file;
-              if (f != null) {
-                // Filename is not identity — require the byte length to match
-                // too, so a different image that happens to reuse the name is
-                // not bound as this file's local shortcut. (fileSize == 0 ⇒
-                // unknown; accept on name alone in that case.)
-                if (fileSize > 0 && await f.length() != fileSize) continue;
-                return _GalleryAssetMatch(
-                  assetId: a.id,
-                  localPath: f.path,
-                );
-              }
-            }
-          }
-        }
-      }
-    } catch (e) {
-      debugPrint('_resolveGalleryAsset filename scan failed: $e');
-    }
-
-    // TIER 3 — direct-path fallback.
-    if (fallbackPath.startsWith('/storage/') ||
-        fallbackPath.startsWith('/sdcard/')) {
-      return _GalleryAssetMatch(assetId: null, localPath: fallbackPath);
-    }
-    return null;
-  }
-
-  Future<void> _handleUpload({required _UploadCategory category}) async {
-    final isMedia = category == _UploadCategory.media;
-    final isAudio = category == _UploadCategory.audio;
-    final isOther = category == _UploadCategory.other;
-
-    Uint8List? fileBytes;
-    Stream<List<int>>? fileStream;
-    int? fileSize;
-    String filename = '';
-    Uint8List? thumbnailBytes;
-    bool isVideo = false;
-    String? pickedPath;
-    // True when the pick is a real on-device file (kept for local-first
-    // loading); false when it's file_picker's throwaway cache copy, which
-    // MUST be deleted whether the upload succeeds or fails — hence hoisted
-    // for the finally block.
-    bool isLocalFile = false;
-    // Hoisted above the try so the catch block can roll back the DB
-    // row that gets inserted in step 4 when a later step (upload) fails.
-    String? fileId;
-    // Whether THIS call took a foreground-service ref (a picker cancel
-    // bails before begin(); its finally must not release someone else's).
-    bool fgPinned = false;
-
-    try {
-      // --- 1. UNIFIED PICKER (FilePicker Only) ---
-      // "Other" deliberately opens the unrestricted system picker so users
-      // can bring in zips, code files, ipynbs — anything they want vaulted.
-      List<String>? exts;
-      if (isMedia) {
+  Future<void> _handleUpload({required UploadCategory category}) async {
+    // "Other" deliberately opens the unrestricted system picker so users
+    // can bring in zips, code files, ipynbs — anything they want vaulted.
+    List<String>? exts;
+    switch (category) {
+      case UploadCategory.media:
         exts = ['jpg', 'jpeg', 'png', 'heic', 'webp', 'mp4', 'mov', 'avi', 'mkv'];
-      } else if (isAudio) {
+      case UploadCategory.audio:
         exts = ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'opus', 'wma'];
-      } else if (isOther) {
+      case UploadCategory.other:
         exts = null;
-      } else {
+      case UploadCategory.document:
         exts = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt'];
-      }
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: exts == null ? FileType.any : FileType.custom,
-        allowedExtensions: exts,
-        withData: false,
-        allowMultiple: false,
+    }
+    final result = await FilePicker.platform.pickFiles(
+      type: exts == null ? FileType.any : FileType.custom,
+      allowedExtensions: exts,
+      withData: false,
+      allowMultiple: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+
+    setState(() {
+      _isUploading = true;
+      _uploadDone = 0;
+      _uploadTotal = result.files.length;
+    });
+    try {
+      // Home uploads target the vault ROOT — folder-targeted uploads live
+      // in the Files browser's "upload here".
+      final outcomes = await UploadPipeline.uploadBatch(
+        result.files,
+        category: category,
+        onProgress: (done, total) {
+          if (mounted) setState(() => _uploadDone = done);
+        },
       );
-
-      if (result == null || result.files.isEmpty) return;
-
-      final pickedFile = result.files.first;
-      filename = pickedFile.name;
-      fileSize = pickedFile.size;
-      pickedPath = pickedFile.path; // Vital for cleanup
-
-      if (pickedPath == null) throw Exception("Could not retrieve file path");
-
-      // Validations
-      final ext = filename.split('.').last.toLowerCase();
-      isVideo = ['mp4', 'mov', 'avi', 'mkv'].contains(ext);
-
-      // --- 2. PREPARE STREAM OR BYTES ---
-      if (isVideo) {
-        fileStream = File(pickedPath).openRead();
-        
-        try {
-          final uint8list = await VideoThumbnail.thumbnailData(
-            video: pickedPath,
-            imageFormat: ImageFormat.JPEG,
-            maxWidth: 300, 
-            quality: 50,
-          );
-          thumbnailBytes = uint8list;
-        } catch (e) {
-          debugPrint("Video thumbnail generation failed: $e");
-        }
-      } else {
-        fileBytes = await File(pickedPath).readAsBytes();
-      }
-
-      // Pin the process at foreground priority for the rest of the flow —
-      // backgrounding the app must not freeze the encrypt+upload. Ask for
-      // notification permission first (Android 13+): without it the pin
-      // still works, but the "Securing your file…" notification is
-      // invisible and a backgrounded upload looks like nothing is running.
-      if (await Permission.notification.isDenied) {
-        await Permission.notification.request();
-      }
-      await UploadForegroundGuard().begin();
-      fgPinned = true;
-
-      setState(() => _isUploading = true);
-
-      // --- 3. GENERATE IMAGE/DOC THUMBNAILS ---
-      if (!isVideo && fileBytes != null) {
-        if (isMedia) {
-           try {
-            thumbnailBytes = await FlutterImageCompress.compressWithList(
-              fileBytes,
-              minHeight: 300,
-              minWidth: 300,
-              quality: 50,
-            );
-          } catch (e) {
-            debugPrint("Image thumbnail failed: $e");
-          }
-        } else if (filename.toLowerCase().endsWith('.pdf')) {
-          thumbnailBytes = await _generatePdfThumbnail(fileBytes);
-        }
-      }
-
-      // --- 4. DATABASE ENTRY ---
-      fileId = const Uuid().v4();
-      CnestFileType type;
-      if (isVideo || isMedia) {
-        type = CnestFileType.image;
-      } else if (isAudio) {
-        type = CnestFileType.audio;
-      } else if (isOther) {
-        // Best-effort classify by extension so a music file the user picked
-        // through "Other Files" still lands in the Audio tab, etc.
-        type = CnestFileTypeWire.fromFilename(filename);
-      } else {
-        type = CnestFileType.document;
-      }
-      final currentEmail = CloudService().currentEmail;
-
-      if (currentEmail == null) throw Exception('No active account.');
-
-      // Duplicate-name rename: a second upload of "photo.jpg" lands as
-      // "photo (1).jpg" instead of a same-named twin. Auto-sync dedup is
-      // unaffected — it matches renamed rows by MediaStore asset id. The
-      // pre-rename name is kept for the gallery-asset resolve below, which
-      // matches against MediaStore titles.
-      final originalPickName = filename;
-      final taken = await DatabaseService()
-          .getActiveFilenames(stemPrefix: dedupQueryPrefix(filename));
-      filename = nextAvailableFilename(filename, taken);
-
-      // Detect if picked from local storage vs a cloud content provider
-      isLocalFile = pickedPath.startsWith('/storage/') || pickedPath.startsWith('/sdcard/');
-
-      // Try to resolve to a photo_manager AssetEntity so the vault entry
-      // ties back to the phone's gallery. Two wins: (1) smart albums like
-      // "Camera" can match by MediaStore bucket rather than filename hacks,
-      // and (2) the grid uses MediaStore thumbnails via assetId — no need
-      // to decrypt + cache a copy just to render a preview. Only relevant
-      // for media picks; other types have no MediaStore entry.
-      String? matchedAssetId;
-      String? matchedLocalPath;
-      if (isMedia) {
-        final match = await _resolveGalleryAsset(
-          filename: originalPickName,
-          fileSize: fileSize,
-          fallbackPath: pickedPath,
-          // FilePicker fills `identifier` with the source content:// URI
-          // on Android when the picker returns a MediaStore-backed file.
-          // That URI carries the MediaStore id, which is the fastest and
-          // most reliable resolve path.
-          pickedIdentifier: pickedFile.identifier,
-        );
-        matchedAssetId = match?.assetId;
-        matchedLocalPath = match?.localPath;
-      }
-
-      // Capture time = the device-identical gallery sort key. Prefer the
-      // image's own EXIF (baked in, timezone-stable across devices); for a
-      // gallery-resolved video (no EXIF) use MediaStore's DATE_TAKEN. Null
-      // for everything else — the sync layer then falls back to the create
-      // op's HLC wall, which is also identical on every device.
-      int? capturedMs;
-      if (fileBytes != null && isMedia && !isVideo) {
-        capturedMs =
-            await FileMetadataService.captureEpochFromImageBytes(fileBytes);
-      }
-      if (capturedMs == null && matchedAssetId != null) {
-        try {
-          final a = await AssetEntity.fromId(matchedAssetId);
-          final dt = a?.createDateTime;
-          if (dt != null && dt.millisecondsSinceEpoch > 0) {
-            capturedMs = dt.millisecondsSinceEpoch;
-          }
-        } catch (_) {}
-      }
-
-      // Media dimensions/duration, captured while the plaintext is still in
-      // hand — the ONLY moment they're free. Without them the details sheet
-      // of a file whose gallery counterpart disappears shows just a size.
-      int? mediaWidth;
-      int? mediaHeight;
-      int? mediaDurationMs;
-      String? mediaVideoCodec;
-      String? mediaAudioCodec;
-      int? mediaFps;
-      String? mediaDeviceModel;
-      if (isVideo) {
-        try {
-          final meta = await Mp4MetadataParser.parse(File(pickedPath));
-          mediaWidth = meta?.width;
-          mediaHeight = meta?.height;
-          mediaDurationMs = meta?.duration?.inMilliseconds;
-          mediaVideoCodec = meta?.videoCodec;
-          mediaAudioCodec = meta?.audioCodec;
-          mediaFps = meta?.fps;
-          mediaDeviceModel = meta?.deviceModel;
-        } catch (e) {
-          debugPrint('Video metadata parse failed: $e');
-        }
-      } else if (isMedia && fileBytes != null) {
-        final dims = await _imageDimensions(fileBytes);
-        mediaWidth = dims?.$1;
-        mediaHeight = dims?.$2;
-      }
-
-      final newFile = CnestFile(
-        id: fileId,
-        filename: filename,
-        sizeBytes: fileSize,
-        createdAt: capturedMs != null
-            ? DateTime.fromMillisecondsSinceEpoch(capturedMs)
-            : DateTime.now(),
-        isUploaded: false,
-        localPath: matchedLocalPath ?? (isLocalFile ? pickedPath : null),
-        assetId: matchedAssetId,
-        type: type,
-        provider: 0,
-        accountId: currentEmail,
-        width: mediaWidth,
-        height: mediaHeight,
-        durationMs: mediaDurationMs,
-        videoCodec: mediaVideoCodec,
-        audioCodec: mediaAudioCodec,
-        fps: mediaFps,
-        deviceModel: mediaDeviceModel,
-      );
-
-      await DatabaseService().addFile(newFile);
-      // The heal pass must never touch this row while its upload runs.
-      AutoSyncService.inFlightUploadIds.add(fileId);
-
-      // Video WITHOUT a MediaStore binding: cache the just-generated
-      // thumbnail locally, keyed by the row id, so the grid shows a frame
-      // DURING the upload. Asset-bound videos skip this entirely —
-      // MediaStore serves their tile, so writing a copy would just burn
-      // cache for nothing.
-      if (isVideo && thumbnailBytes != null && matchedAssetId == null) {
-        try {
-          final dir = await getTemporaryDirectory();
-          await File('${dir.path}/thumb_local_$fileId.jpg')
-              .writeAsBytes(thumbnailBytes);
-        } catch (_) {
-          // Best-effort — the tile just stays blank during upload.
-        }
-      }
-
-      // Audio: the picker usually hands us a throwaway cache copy, so no
-      // durable localPath survives. Keep a plaintext copy in the private
-      // audio cache so a track uploaded from this device plays locally
-      // without a cloud round-trip. The cache GC may evict it later;
-      // playback then falls back to streaming.
-      if (type == CnestFileType.audio && fileBytes != null) {
-        final plainCopy = fileBytes;
-        final audioFileId = fileId;
-        getTemporaryDirectory().then((dir) async {
-          try {
-            await File('${dir.path}/${audioFileId}_audio.bin')
-                .writeAsBytes(plainCopy);
-          } catch (_) {
-            // Best-effort cache write.
-          }
-        });
-      }
-
-      // --- 5. ENCRYPT & UPLOAD ---
-      // Content hash (plaintext SHA-256) is computed in the SAME pass as
-      // encryption — a Future for the streamed video (resolves when the
-      // upload drains the source), an immediate value for whole-file bytes.
-      String mainCloudFilename = '$fileId.cnest';
-      Future<String?> mainUploadFuture;
-      Future<String>? contentHashFuture;
-
-      if (isVideo && fileStream != null) {
-        final encryptedSize = EncryptionService.calculateEncryptedSize(fileSize);
-        final hashed = EncryptionService.encryptStreamWithHash(
-            fileStream, totalSize: fileSize);
-        contentHashFuture = hashed.hash;
-
-        mainUploadFuture = CloudService().uploadEncryptedFile(
-          filename: mainCloudFilename,
-          type: type,
-          originalName: filename,
-          stream: hashed.stream,
-          size: encryptedSize,
-          bytes: null,
-        );
-      } else if (fileBytes != null) {
-        final hashed = await EncryptionService.encryptFileWithHash(fileBytes);
-        contentHashFuture = Future.value(hashed.hash);
-        mainUploadFuture = CloudService().uploadEncryptedFile(
-          filename: mainCloudFilename,
-          type: type,
-          originalName: filename,
-          bytes: hashed.encrypted,
-        );
-      } else {
-        throw Exception("Invalid state");
-      }
-
-      Future<String?>? thumbUploadFuture;
-      String? thumbCloudFilename;
-
-      if (thumbnailBytes != null) {
-        final encryptedThumbBytes = await EncryptionService.encryptFile(thumbnailBytes);
-        thumbCloudFilename = '${fileId}_thumb.cnest';
-        thumbUploadFuture = CloudService().uploadEncryptedFile(
-          bytes: encryptedThumbBytes,
-          filename: thumbCloudFilename,
-          type: CnestFileType.image,
-        );
-      }
-
-      final mainCloudId = await mainUploadFuture;
-      final thumbCloudId = thumbUploadFuture != null ? await thumbUploadFuture : null;
-
-      if (mainCloudId == null) throw Exception('Main upload failed');
-
-      // The stream hash resolves once the upload has drained the source.
-      final contentHash = await contentHashFuture;
-
-      await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId,
-          filename: filename,
-          contentHash: contentHash,
-          sizeBytes: fileSize,
-          capturedAt: capturedMs);
-      DatabaseBackupService().scheduleBackup();
-
-      // Prime the grid's thumb cache from the bytes already in memory —
-      // without this the grid re-downloads and re-decrypts the thumbnail
-      // we JUST uploaded. Keyed by the MAIN cloud id (the grid's rung-3
-      // cache name). ONLY for videos with no MediaStore binding — an
-      // asset-bound video renders from MediaStore, so a cached copy would
-      // be pure dead weight until the gallery original disappears (at
-      // which point rung 3 re-downloads on demand).
-      if (isVideo && thumbnailBytes != null && matchedAssetId == null) {
-        try {
-          final dir = await getTemporaryDirectory();
-          await File('${dir.path}/thumb_$mainCloudId.jpg')
-              .writeAsBytes(thumbnailBytes);
-          final localThumb = File('${dir.path}/thumb_local_$fileId.jpg');
-          if (await localThumb.exists()) await localThumb.delete();
-        } catch (_) {}
-      }
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Secure Upload Complete')),
-        );
-      }
-
-    } catch (e, s) {
-      debugPrint('Upload failed: $e\n$s');
-      // The DB row for `fileId` may have been inserted BEFORE the upload
-      // started (step 4). If we don't roll it back here, the gallery keeps a
-      // phantom entry for a file that never made it to the cloud. HARD-delete
-      // (not soft) — a failed upload must vanish entirely, not land in the
-      // Recycle Bin as a mysterious "where did this come from?" entry that
-      // undermines trust in the bin. Matches the auto-sync rollback.
-      final rollbackId = fileId;
-      if (rollbackId != null) {
-        try {
-          await DatabaseService().rollbackFailedUpload(rollbackId);
-        } catch (rollbackErr) {
-          debugPrint('Upload rollback failed: $rollbackErr');
-        }
-        // Failure-path artifacts written before/for the upload: the
-        // plaintext audio cache copy and the pre-upload video thumb.
-        try {
-          final dir = await getTemporaryDirectory();
-          for (final f in [
-            File('${dir.path}/${rollbackId}_audio.bin'),
-            File('${dir.path}/thumb_local_$rollbackId.jpg'),
-          ]) {
-            if (await f.exists()) await f.delete();
-          }
-        } catch (_) {}
-      }
-      if (!mounted) return;
-      await showCnestError(context, _mapUploadError(e));
+      if (mounted) await _reportUploadOutcomes(outcomes);
     } finally {
-      if (fgPinned) await UploadForegroundGuard().end();
-      if (fileId != null) AutoSyncService.inFlightUploadIds.remove(fileId);
-      // The file_picker cache copy must die on BOTH outcomes — leaving it
-      // after a failed upload leaked the full file size into the app cache
-      // (invisible to the LRU sweep, visible in the Settings size figure).
-      // Real on-device files (isLocalFile) are kept for local-first loading.
-      if (pickedPath != null && !isLocalFile) {
-        try {
-          final pickerFile = File(pickedPath);
-          if (await pickerFile.exists()) await pickerFile.delete();
-        } catch (e) {
-          debugPrint('Picker-copy cleanup warning: $e');
-        }
-      }
       if (mounted) setState(() => _isUploading = false);
     }
   }
 
-  /// Header-only decode: dimensions without rasterizing the image.
-  Future<(int, int)?> _imageDimensions(Uint8List bytes) async {
-    try {
-      final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
-      final descriptor = await ui.ImageDescriptor.encoded(buffer);
-      final dims = descriptor.width > 0 && descriptor.height > 0
-          ? (descriptor.width, descriptor.height)
-          : null;
-      descriptor.dispose();
-      buffer.dispose();
-      return dims;
-    } catch (_) {
-      return null;
-    }
-  }
+  Future<void> _reportUploadOutcomes(List<UploadOutcome> outcomes) async {
+    final uploaded =
+        outcomes.where((o) => o.ok && !o.skippedDuplicate).length;
+    final dups = outcomes.where((o) => o.skippedDuplicate).length;
+    final failures = outcomes.where((o) => !o.ok).toList();
 
-  CnestError _mapUploadError(Object e) {
-    final msg = e.toString().toLowerCase();
-    // Drive: 403 with "storageQuotaExceeded" in the JSON body.
-    // Graph:  403/507 with "quotaLimitReached".
-    // Quota first — its exceptions can carry connection-ish wording that
-    // the network classifier would misread.
-    if (msg.contains('storagequotaexceeded') ||
-        msg.contains('quotalimitreached') ||
-        msg.contains('quota exceeded')) {
-      return const StorageFullError();
+    final parts = <String>[];
+    if (uploaded > 0) {
+      parts.add(outcomes.length == 1
+          ? 'Secure Upload Complete'
+          : '$uploaded file${uploaded == 1 ? '' : 's'} secured');
     }
-    return classifyNetworkError(e) ??
-        UnexpectedError(code: 'UPLOAD', debugDetail: e.toString());
+    if (dups > 0) parts.add('$dups already in your vault');
+    if (failures.isNotEmpty) parts.add('${failures.length} failed');
+    if (parts.isNotEmpty && mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(parts.join(' · '))));
+    }
+    if (failures.isNotEmpty && mounted) {
+      await showCnestError(
+          context, UploadPipeline.mapUploadError(failures.first.error!));
+    }
   }
 
   @override
@@ -847,7 +328,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         icon: _isUploading
           ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: cs.onPrimary, strokeWidth: 2))
           : ThemeIcon('plus', color: cs.onPrimary),
-        label: Text(_isUploading ? 'Encrypting...' : 'Add File'),
+        label: Text(_isUploading
+            ? (_uploadTotal > 1
+                ? 'Encrypting ${(_uploadDone + 1).clamp(1, _uploadTotal)}'
+                    '/$_uploadTotal...'
+                : 'Encrypting...')
+            : 'Add File'),
       ),
     );
   }
@@ -867,7 +353,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               title: Text('Upload Photo or Video', style: TextStyle(color: cs.onSurface)),
               onTap: () {
                 Navigator.pop(ctx);
-                _handleUpload(category: _UploadCategory.media);
+                _handleUpload(category: UploadCategory.media);
               },
             ),
             ListTile(
@@ -875,7 +361,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               title: Text('Upload Document', style: TextStyle(color: cs.onSurface)),
               onTap: () {
                 Navigator.pop(ctx);
-                _handleUpload(category: _UploadCategory.document);
+                _handleUpload(category: UploadCategory.document);
               },
             ),
             ListTile(
@@ -883,7 +369,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               title: Text('Upload Audio', style: TextStyle(color: cs.onSurface)),
               onTap: () {
                 Navigator.pop(ctx);
-                _handleUpload(category: _UploadCategory.audio);
+                _handleUpload(category: UploadCategory.audio);
               },
             ),
             ListTile(
@@ -893,7 +379,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 11)),
               onTap: () {
                 Navigator.pop(ctx);
-                _handleUpload(category: _UploadCategory.other);
+                _handleUpload(category: UploadCategory.other);
               },
             ),
           ],
@@ -1118,16 +604,6 @@ class _VaultUsageCard extends StatelessWidget {
       ),
     );
   }
-}
-
-/// Result of resolving a picked file against the phone's gallery — used by
-/// _handleUpload to tie manually-uploaded photos back to a MediaStore
-/// asset so smart albums and local-first thumbnails work the same as they
-/// do for auto-synced files.
-class _GalleryAssetMatch {
-  final String? assetId;
-  final String? localPath;
-  const _GalleryAssetMatch({this.assetId, this.localPath});
 }
 
 class _UsageSegment {

@@ -44,6 +44,8 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     // BiometricPrompt with CryptoObject for the Keystore-backed seed wrap.
     implementation("androidx.biometric:biometric:1.1.0")
+    // DocumentFile tree traversal for the SAF folder-import flow.
+    implementation("androidx.documentfile:documentfile:1.0.1")
 }
 
 flutter {

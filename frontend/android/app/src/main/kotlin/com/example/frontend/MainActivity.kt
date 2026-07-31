@@ -5,14 +5,26 @@ import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.core.content.ContextCompat
+import androidx.documentfile.provider.DocumentFile
 import com.ryanheise.audioservice.AudioServiceFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 // AudioServiceFragmentActivity = FlutterFragmentActivity (BiometricPrompt
 // requires a FragmentActivity) + the media-session plumbing background
 // playback needs.
 class MainActivity : AudioServiceFragmentActivity() {
+
+    companion object {
+        private const val TREE_REQUEST = 4821
+        // Traversal guards — a pathological tree must not wedge the pick.
+        private const val MAX_TREE_DEPTH = 8
+        private const val MAX_TREE_FILES = 2000
+    }
+
+    // Pending Dart result for an in-flight ACTION_OPEN_DOCUMENT_TREE pick.
+    private var treePickResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -100,8 +112,119 @@ class MainActivity : AudioServiceFragmentActivity() {
                         }
                     }
                 }
+                "pickFolderTree" -> {
+                    if (treePickResult != null) {
+                        result.error("busy", "A folder pick is already in progress", null)
+                    } else {
+                        try {
+                            treePickResult = result
+                            startActivityForResult(
+                                Intent(Intent.ACTION_OPEN_DOCUMENT_TREE),
+                                TREE_REQUEST,
+                            )
+                        } catch (e: Exception) {
+                            // OEM without a documents UI — the Dart side
+                            // falls back to multi-file selection.
+                            treePickResult = null
+                            result.error("unavailable", e.message, null)
+                        }
+                    }
+                }
+                "copyDocumentToCache" -> {
+                    val uriStr = call.argument<String>("uri")
+                    val name = call.argument<String>("name") ?: "file"
+                    if (uriStr == null) {
+                        result.error("bad_args", "uri required", null)
+                    } else {
+                        // Streams can be huge (videos) — never copy on the
+                        // main thread.
+                        Thread {
+                            try {
+                                val input = contentResolver
+                                    .openInputStream(Uri.parse(uriStr))
+                                    ?: throw java.io.IOException("open failed")
+                                val dir = File(cacheDir, "saf_import")
+                                    .apply { mkdirs() }
+                                val safe = name.replace(Regex("[/\\\\]"), "_")
+                                val out = File(
+                                    dir,
+                                    "${System.nanoTime()}_$safe",
+                                )
+                                input.use { i ->
+                                    out.outputStream().use { o -> i.copyTo(o) }
+                                }
+                                runOnUiThread { result.success(out.absolutePath) }
+                            } catch (e: Exception) {
+                                runOnUiThread {
+                                    result.error("copy_failed", e.message, null)
+                                }
+                            }
+                        }.start()
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != TREE_REQUEST) return
+        val res = treePickResult ?: return
+        treePickResult = null
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null) {
+            // User cancelled — null, not an error.
+            res.success(null)
+            return
+        }
+        // Enumeration hits the documents provider repeatedly — off the main
+        // thread. Only FILE entries are returned; the Dart side derives the
+        // folder structure from each entry's relative dir.
+        Thread {
+            try {
+                val root = DocumentFile.fromTreeUri(this, uri)
+                if (root == null || !root.isDirectory) {
+                    runOnUiThread { res.success(null) }
+                    return@Thread
+                }
+                val entries = ArrayList<Map<String, Any>>()
+                fun walk(dir: DocumentFile, rel: String, depth: Int) {
+                    if (depth > MAX_TREE_DEPTH || entries.size >= MAX_TREE_FILES) return
+                    for (child in dir.listFiles()) {
+                        if (entries.size >= MAX_TREE_FILES) return
+                        val name = child.name ?: continue
+                        if (child.isDirectory) {
+                            walk(
+                                child,
+                                if (rel.isEmpty()) name else "$rel/$name",
+                                depth + 1,
+                            )
+                        } else if (child.isFile) {
+                            entries.add(
+                                mapOf(
+                                    "name" to name,
+                                    "dir" to rel,
+                                    "size" to child.length(),
+                                    "uri" to child.uri.toString(),
+                                ),
+                            )
+                        }
+                    }
+                }
+                walk(root, "", 0)
+                runOnUiThread {
+                    res.success(
+                        mapOf(
+                            "name" to (root.name ?: "Imported folder"),
+                            "entries" to entries,
+                            "truncated" to (entries.size >= MAX_TREE_FILES),
+                        ),
+                    )
+                }
+            } catch (e: Exception) {
+                runOnUiThread { res.error("tree_failed", e.message, null) }
+            }
+        }.start()
     }
 }
