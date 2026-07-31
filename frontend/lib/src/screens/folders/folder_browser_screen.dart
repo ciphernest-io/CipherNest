@@ -323,9 +323,11 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
 
   /// SAF folder import: mirrors the picked tree as CipherNest folders under
   /// the current one, then uploads file-by-file (one plaintext cache copy
-  /// on disk at a time; the pipeline deletes it per file). Content-hash
-  /// dedup applies — bytes already live in the vault are skipped, not
-  /// re-uploaded.
+  /// on disk at a time; the pipeline deletes it per file). Windows-copy
+  /// semantics: the imported folder arrives INTACT — a file whose bytes
+  /// already exist elsewhere in the vault still becomes a real copy here
+  /// (skipDuplicates: false). A silently incomplete import is a worse
+  /// surprise than a duplicated photo.
   Future<void> _importFolder() async {
     SafTree? tree;
     try {
@@ -355,7 +357,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     // files.
     final guard = UploadForegroundGuard();
     await guard.begin();
-    var secured = 0, dups = 0, failed = 0;
+    var secured = 0, failed = 0;
     String rootName = picked.name;
     try {
       // Import root, sibling-name deduped ("Trip" -> "Trip (1)").
@@ -396,14 +398,13 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
             [PlatformFile(name: e.name, size: e.size, path: path)],
             category: UploadCategory.other,
             folderId: targetId,
+            skipDuplicates: false,
           );
           for (final o in res) {
-            if (!o.ok) {
-              failed++;
-            } else if (o.skippedDuplicate) {
-              dups++;
-            } else {
+            if (o.ok) {
               secured++;
+            } else {
+              failed++;
             }
           }
         }
@@ -413,7 +414,6 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       if (!mounted) return;
       final parts = <String>[];
       if (secured > 0) parts.add('$secured file${secured == 1 ? '' : 's'}');
-      if (dups > 0) parts.add('$dups already in your vault');
       if (failed > 0) parts.add('$failed failed');
       // No silent caps: a truncated walk is said out loud.
       if (picked.truncated) parts.add('first 2000 files only');

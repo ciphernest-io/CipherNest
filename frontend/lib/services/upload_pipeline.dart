@@ -62,10 +62,19 @@ class UploadPipeline {
   /// Uploads [picks] sequentially under ONE foreground-service pin.
   /// [onProgress] fires after each file with (done, total). Never throws —
   /// per-file failures land in the returned outcomes.
+  ///
+  /// [skipDuplicates] (default true) is the content-hash pre-check: bytes
+  /// already live in the vault are not re-uploaded. The FOLDER IMPORT path
+  /// passes false — Windows-copy semantics (Usman ruling, Aug 1): an
+  /// explicitly imported folder must arrive INTACT, so a matching file
+  /// becomes a real second row + second blob (a copy costs storage,
+  /// exactly like copying on disk; one row = one folder_id = one blob,
+  /// and rows must stay independent for delete/purge/sweep to hold).
   static Future<List<UploadOutcome>> uploadBatch(
     List<PlatformFile> picks, {
     required UploadCategory category,
     String? folderId,
+    bool skipDuplicates = true,
     void Function(int done, int total)? onProgress,
   }) async {
     if (picks.isEmpty) return const [];
@@ -81,7 +90,9 @@ class UploadPipeline {
       final outcomes = <UploadOutcome>[];
       for (var i = 0; i < picks.length; i++) {
         outcomes.add(await _uploadOne(picks[i],
-            category: category, folderId: folderId));
+            category: category,
+            folderId: folderId,
+            skipDuplicates: skipDuplicates));
         onProgress?.call(i + 1, picks.length);
       }
       return outcomes;
@@ -94,6 +105,7 @@ class UploadPipeline {
     PlatformFile pickedFile, {
     required UploadCategory category,
     String? folderId,
+    bool skipDuplicates = true,
   }) async {
     Uint8List? fileBytes;
     Stream<List<int>>? fileStream;
@@ -170,7 +182,8 @@ class UploadPipeline {
       if (fileBytes != null) {
         final hashed = await EncryptionService.encryptFileWithHash(fileBytes);
         preEncrypted = (encrypted: hashed.encrypted, hash: hashed.hash);
-        if (await DatabaseService().hasActiveContentHash(hashed.hash)) {
+        if (skipDuplicates &&
+            await DatabaseService().hasActiveContentHash(hashed.hash)) {
           return UploadOutcome._(filename, ok: true, skippedDuplicate: true);
         }
       }
