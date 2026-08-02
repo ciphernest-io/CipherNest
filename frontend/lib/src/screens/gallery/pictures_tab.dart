@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import '../../config/theme_controller.dart';
 import '../../config/theme_packs.dart';
+import '../../widgets/file_actions.dart';
 import '../../widgets/folder_picker_sheet.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
@@ -388,23 +389,19 @@ class PicturesTabState extends State<PicturesTab> {
     _exitSelection();
   }
 
-  Future<void> _shareSelectedFilenames(List<CnestFile> all) async {
-    // Bulk share of encrypted files isn't a single share — surface a sheet
-    // explaining and offering "share first" for the highest-selected one,
-    // since the magic link format is per-file.
+  Future<void> _shareSelected(List<CnestFile> all) async {
     final picked = all.where((f) => _selectedIds.contains(f.id)).toList();
     if (picked.isEmpty) return;
     if (picked.length == 1) {
-      await ShareDialog.show(context, picked.first);
-    } else if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Multi-file share isn\'t available yet — share photos one at a time.',
-          ),
-        ),
-      );
+      // Single file: choose between sending the file and the magic link.
+      await showShareChoiceSheet(context, picked.first,
+          onSecureLink: () => ShareDialog.show(context, picked.first));
+    } else {
+      // Multi-file: the magic link is per-file, so bulk share = send the
+      // actual files through the system sheet.
+      await sendFilesPlain(context, picked);
     }
+    if (mounted) _exitSelection();
   }
 
   Future<void> handleSync() async {
@@ -755,7 +752,7 @@ class PicturesTabState extends State<PicturesTab> {
             ),
             IconButton(
               icon: ThemeIcon('shareFat'),
-              onPressed: () => _shareSelectedFilenames(all),
+              onPressed: () => _shareSelected(all),
             ),
             IconButton(
               icon: ThemeIcon(

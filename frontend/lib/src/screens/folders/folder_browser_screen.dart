@@ -18,6 +18,7 @@ import '../../config/theme_controller.dart';
 import '../../models/file_model.dart';
 import '../../models/folder_model.dart';
 import '../../utils/byte_format.dart';
+import '../../widgets/file_actions.dart';
 import '../../widgets/folder_picker_sheet.dart';
 import '../../widgets/friendly_error_sheet.dart';
 import '../../widgets/theme_icon.dart';
@@ -200,6 +201,15 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       if (!_selectedIds.remove(id)) _selectedIds.add(id);
       if (_selectedIds.isEmpty) _selectionMode = false;
     });
+  }
+
+  Future<void> _moveOneFile(CnestFile file) async {
+    final pick = await showFolderPicker(context);
+    if (pick == null) return;
+    await DatabaseService().moveFileToFolder(file.id, pick.folderId);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Moved to "${pick.label}"')));
   }
 
   Future<void> _moveSelectedFiles() async {
@@ -657,7 +667,25 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
                   height: 18,
                   child: CircularProgressIndicator(
                       strokeWidth: 2, color: cs.onSurface))
-              : null),
+              : PopupMenuButton<String>(
+                  icon: ThemeIcon('dotsThreeVertical',
+                      color: cs.onSurface.withAlpha(120), size: 20),
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'send', child: Text('Send file')),
+                    PopupMenuItem(
+                        value: 'save', child: Text('Save to device')),
+                    PopupMenuItem(value: 'rename', child: Text('Rename')),
+                    PopupMenuItem(
+                        value: 'move', child: Text('Move to folder')),
+                  ],
+                  onSelected: (v) => switch (v) {
+                    'send' => sendFilesPlain(context, [file]),
+                    'save' => saveFileToDevice(context, file),
+                    'rename' => promptRenameFile(context, file),
+                    'move' => _moveOneFile(file),
+                    _ => null,
+                  },
+                )),
       onTap: () => _openFile(file),
       onLongPress: () => setState(() {
         _selectionMode = true;

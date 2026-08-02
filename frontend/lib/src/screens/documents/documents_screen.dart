@@ -16,6 +16,7 @@ import '../../../services/auto_sync_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/sync_service.dart';
+import '../../widgets/file_actions.dart';
 import '../share/share_dialog.dart';
 
 class DocumentsScreen extends StatefulWidget {
@@ -282,8 +283,20 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                           icon: ThemeIcon('dotsThreeVertical', color: cs.onSurface.withAlpha(120)),
                           itemBuilder: (ctx) => [
                             const PopupMenuItem(
+                              value: 'send',
+                              child: Text('Send file'),
+                            ),
+                            const PopupMenuItem(
                               value: 'share',
-                              child: Text('Share'),
+                              child: Text('Share secure link'),
+                            ),
+                            const PopupMenuItem(
+                              value: 'save',
+                              child: Text('Save to device'),
+                            ),
+                            const PopupMenuItem(
+                              value: 'rename',
+                              child: Text('Rename'),
                             ),
                             PopupMenuItem(
                               value: 'delete',
@@ -298,7 +311,13 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                             ),
                           ],
                           onSelected: (value) {
+                            if (value == 'send') sendFilesPlain(context, [file]);
                             if (value == 'share') ShareDialog.show(context, file);
+                            if (value == 'save') saveFileToDevice(context, file);
+                            if (value == 'rename') {
+                              promptRenameFile(context, file,
+                                  onRenamed: (_) => _refresh());
+                            }
                             if (value == 'delete') _handleDelete(file);
                           },
                         ),

@@ -11,6 +11,7 @@ import '../../../services/sync_service.dart';
 import '../../config/theme_controller.dart';
 import '../../models/album_model.dart';
 import '../../models/file_model.dart';
+import '../../widgets/file_actions.dart';
 import '../../widgets/theme_icon.dart';
 import '../share/share_dialog.dart';
 import 'audio_details_screen.dart';
@@ -143,7 +144,10 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
     final cs = Theme.of(context).colorScheme;
     return [
       const PopupMenuItem(value: 'playlist', child: Text('Add to playlist')),
-      const PopupMenuItem(value: 'share', child: Text('Share')),
+      const PopupMenuItem(value: 'send', child: Text('Send file')),
+      const PopupMenuItem(value: 'share', child: Text('Share secure link')),
+      const PopupMenuItem(value: 'save', child: Text('Save to device')),
+      const PopupMenuItem(value: 'rename', child: Text('Rename')),
       const PopupMenuItem(value: 'details', child: Text('Details')),
       PopupMenuItem(
         value: 'delete',
@@ -156,8 +160,14 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
     switch (action) {
       case 'playlist':
         PlaylistPickerSheet.show(context, file);
+      case 'send':
+        sendFilesPlain(context, [file]);
       case 'share':
         ShareDialog.show(context, file);
+      case 'save':
+        saveFileToDevice(context, file);
+      case 'rename':
+        promptRenameFile(context, file, onRenamed: (_) => _refresh());
       case 'details':
         Navigator.push(
           context,

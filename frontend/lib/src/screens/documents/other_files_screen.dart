@@ -14,6 +14,7 @@ import '../../../services/database_backup_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/sync_service.dart';
+import '../../widgets/file_actions.dart';
 import '../share/share_dialog.dart';
 
 /// Tab for everything that isn't a photo/video, document (Office/PDF), or
@@ -300,7 +301,12 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
                 icon: ThemeIcon('dotsThreeVertical',
                     color: cs.onSurface.withAlpha(120)),
                 itemBuilder: (_) => [
-                  const PopupMenuItem(value: 'share', child: Text('Share')),
+                  const PopupMenuItem(value: 'send', child: Text('Send file')),
+                  const PopupMenuItem(
+                      value: 'share', child: Text('Share secure link')),
+                  const PopupMenuItem(
+                      value: 'save', child: Text('Save to device')),
+                  const PopupMenuItem(value: 'rename', child: Text('Rename')),
                   PopupMenuItem(
                     value: 'delete',
                     child:
@@ -308,7 +314,12 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
                   ),
                 ],
                 onSelected: (v) {
+                  if (v == 'send') sendFilesPlain(context, [file]);
                   if (v == 'share') ShareDialog.show(context, file);
+                  if (v == 'save') saveFileToDevice(context, file);
+                  if (v == 'rename') {
+                    promptRenameFile(context, file, onRenamed: (_) => _refresh());
+                  }
                   if (v == 'delete') _handleDelete(file);
                 },
               ),

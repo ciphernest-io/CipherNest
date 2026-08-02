@@ -28,6 +28,7 @@ import '../../../services/auto_sync_service.dart';
 import '../../../services/file_metadata_service.dart';
 import '../../../services/image_edit_service.dart';
 import '../../../services/video_streaming_server.dart';
+import '../../widgets/file_actions.dart';
 import '../share/share_dialog.dart';
 import 'image_editor_screen.dart';
 
@@ -1168,6 +1169,10 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                     icon: ThemeIcon('dotsThreeVertical', color: overlayColor),
                     itemBuilder: (context) => [
                       const PopupMenuItem(
+                        value: 'save',
+                        child: Text('Save to device'),
+                      ),
+                      const PopupMenuItem(
                         value: 'copy',
                         child: Text('Copy to clipboard'),
                       ),
@@ -1179,6 +1184,10 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                     ],
                     onSelected: (val) {
                       switch (val) {
+                        case 'save':
+                          saveFileToDevice(
+                              context, _currentFiles[_currentIndex]);
+                          break;
                         case 'copy':
                           _copyToClipboard();
                           break;
@@ -1965,8 +1974,11 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       ),
       IconButton(
         icon: ThemeIcon('shareFat'),
-        onPressed: () =>
-            ShareDialog.show(context, _currentFiles[_currentIndex]),
+        onPressed: () {
+          final file = _currentFiles[_currentIndex];
+          showShareChoiceSheet(context, file,
+              onSecureLink: () => ShareDialog.show(context, file));
+        },
         color: overlayColor,
       ),
       // Copy/Print/Wallpaper live in the AppBar's overflow menu — one
