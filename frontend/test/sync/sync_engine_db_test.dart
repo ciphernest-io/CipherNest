@@ -815,13 +815,19 @@ void main() {
   });
 
   test(
-      'system folders: independent deterministic creates fold to ONE row '
-      'with is_system stamped; user folders stay 0', () async {
+      'system folders: independent deterministic creates fold to ONE '
+      'device+path chain with is_system stamped; user folders stay 0',
+      () async {
+    // The pCloud-style chain one phone mints: Phone Backup -> Samsung
+    // SM-A556E -> DCIM -> Camera. Both sim devices run the SAME derivation
+    // independently (offline), then sync — exactly what one phone's two
+    // installs (reinstall, model-keyed) do.
+    final key = SystemFolders.deviceKey('samsung', 'SM-A556E');
     final rootId = SystemFolders.rootId;
-    final camId = SystemFolders.bucketId('Camera');
+    final devId = SystemFolders.deviceId(key);
+    final dcimId = SystemFolders.pathSegmentId(key, ['DCIM']);
+    final camId = SystemFolders.pathSegmentId(key, ['DCIM', 'Camera']);
 
-    // Both devices mint the SAME ids independently (offline), then sync —
-    // exactly what two phones running auto-sync do.
     for (final e in [a, b]) {
       await e.recordLocalOp(LocalSyncAction(
           kind: SyncOpKind.createFolder,
@@ -829,9 +835,19 @@ void main() {
           name: 'Phone Backup'));
       await e.recordLocalOp(LocalSyncAction(
           kind: SyncOpKind.createFolder,
+          targetId: devId,
+          name: 'Samsung SM-A556E',
+          folderId: rootId));
+      await e.recordLocalOp(LocalSyncAction(
+          kind: SyncOpKind.createFolder,
+          targetId: dcimId,
+          name: 'DCIM',
+          folderId: devId));
+      await e.recordLocalOp(LocalSyncAction(
+          kind: SyncOpKind.createFolder,
           targetId: camId,
           name: 'Camera',
-          folderId: rootId));
+          folderId: dcimId));
     }
     await a.recordLocalOp(const LocalSyncAction(
         kind: SyncOpKind.createFolder, targetId: 'U', name: 'Holiday'));
@@ -840,16 +856,17 @@ void main() {
     await a.syncCycle();
 
     for (final db in [dbA, dbB]) {
-      final root = (await folderRow(db, rootId))!;
-      expect(root['is_system'], 1);
-      final cam = (await folderRow(db, camId))!;
-      expect(cam['is_system'], 1);
-      expect(cam['parent_id'], rootId);
+      final chain = {rootId: null, devId: rootId, dcimId: devId, camId: dcimId};
+      for (final e in chain.entries) {
+        final row = (await folderRow(db, e.key))!;
+        expect(row['is_system'], 1);
+        expect(row['parent_id'], e.value);
+      }
       final user = (await folderRow(db, 'U'))!;
       expect(user['is_system'], 0);
       // First-create-wins: the duplicate creates folded, no ghost rows.
       final all = await db.query('folders');
-      expect(all.length, 3);
+      expect(all.length, 5);
     }
     await expectConvergedMaterialization(dbA, dbB);
   });

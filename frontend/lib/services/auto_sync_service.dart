@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -30,13 +31,20 @@ class ScannedAsset {
 
   /// The MediaStore bucket (album) the asset lives in — "Camera",
   /// "Screenshots", "WhatsApp Images"… Null when only the aggregate
-  /// all-photos album claimed it. Drives system-folder placement.
+  /// all-photos album claimed it. Placement FALLBACK when [relativePath]
+  /// is unusable.
   final String? bucketName;
+
+  /// MediaStore RELATIVE_PATH ("DCIM/Camera/") on Android 10+; on ≤9 the
+  /// ABSOLUTE parent dir of DATA; null/blank when the provider has none.
+  /// Drives the real-path system-folder placement.
+  final String? relativePath;
   const ScannedAsset({
     required this.asset,
     required this.duplicate,
     required this.capturedMs,
     this.bucketName,
+    this.relativePath,
   });
 }
 
@@ -71,6 +79,9 @@ class AutoSyncService {
   Future<AutoSyncResult> runFullSync() async {
     if (_isSyncing) return AutoSyncResult(synced: 0, failed: 0, skipped: 0);
     _isSyncing = true;
+    // Stale chain decisions must not leak between runs (a folder binned
+    // since the last run changes where new files land).
+    _ensuredChain.clear();
 
     int synced = 0;
     int failed = 0;
@@ -117,8 +128,9 @@ class AutoSyncService {
           continue;
         }
         try {
-          final didSync =
-              await _syncAsset(entry.asset, bucketName: entry.bucketName);
+          final didSync = await _syncAsset(entry.asset,
+              bucketName: entry.bucketName,
+              relativePath: entry.relativePath);
           if (didSync) {
             synced++;
           } else {
@@ -295,6 +307,7 @@ class AutoSyncService {
         duplicate: duplicate,
         capturedMs: asset.createDateTime.millisecondsSinceEpoch,
         bucketName: bucketByAssetId[asset.id],
+        relativePath: asset.relativePath,
       ));
     }
 
@@ -306,46 +319,106 @@ class AutoSyncService {
     return GalleryScan(entries: entries, windowMaxMs: windowMaxMs);
   }
 
+  /// Per-run memo of ensured system-folder chains: derivation key -> the
+  /// folder id to file into (null = vault root). Cleared each runFullSync.
+  final Map<String, String?> _ensuredChain = {};
+
+  /// (idKey, displayName) of THIS phone, keyed on the model string so a
+  /// reinstall reuses the same subtree (accepted trade-off: two identical
+  /// handsets merge). Cached for the process lifetime.
+  static (String, String)? _deviceIdentityCache;
+
+  Future<(String, String)> _deviceIdentity() async {
+    final cached = _deviceIdentityCache;
+    if (cached != null) return cached;
+    (String, String) identity;
+    try {
+      final info = await DeviceInfoPlugin().androidInfo;
+      final manufacturer = info.manufacturer.trim();
+      final model = info.model.trim();
+      identity = manufacturer.isEmpty && model.isEmpty
+          ? ('unknown device', 'This device')
+          : (
+              SystemFolders.deviceKey(manufacturer, model),
+              SystemFolders.deviceDisplayName(manufacturer, model),
+            );
+    } catch (_) {
+      // Non-Android / plugin failure: a stable generic key still yields one
+      // deterministic subtree.
+      identity = ('unknown device', 'This device');
+    }
+    _deviceIdentityCache = identity;
+    return identity;
+  }
+
+  /// The asset's directory path as folder segments. MediaStore
+  /// RELATIVE_PATH ("DCIM/Camera/") splits directly; Android ≤9 gives an
+  /// ABSOLUTE parent dir — usable only after stripping the primary-storage
+  /// prefix. Anything unusable falls back to the album [bucketName] as a
+  /// single level.
+  static List<String> pathSegments(String? relativePath, String? bucketName) {
+    var rp = relativePath?.trim() ?? '';
+    if (rp.startsWith('/')) {
+      final m = RegExp(r'^/storage/emulated/\d+/').firstMatch(rp);
+      rp = m != null ? rp.substring(m.end) : '';
+    }
+    final segments =
+        rp.split('/').where((s) => s.trim().isNotEmpty).toList();
+    if (segments.isNotEmpty) return segments;
+    final bucket = bucketName?.trim();
+    return (bucket == null || bucket.isEmpty) ? const [] : [bucket];
+  }
+
   /// Resolves (creating if needed) the system folder an auto-synced asset
-  /// files into: `Phone Backup/<bucket>`. Deterministic ids (SystemFolders)
-  /// make every device converge on the same tree; replay's
+  /// files into: `Phone Backup / <Device> / <real path>` (pCloud-style,
+  /// e.g. Phone Backup / Samsung SM-A556E / DCIM / Camera). Deterministic
+  /// ids (SystemFolders) make every run converge on the same tree; replay's
   /// first-create-wins guard folds the duplicate creates.
   ///
-  /// Deletion is RESPECTED, never fought: a binned bucket sends new files
-  /// to the Phone Backup root; a binned root (or a purged folder — purge is
-  /// terminal, replay drops re-creates of the id) sends them to the vault
-  /// root. Either way the file still ingests and shows in the gallery lens.
-  Future<String?> _ensureBucketFolder(String? bucketName) async {
-    if (bucketName == null || bucketName.isEmpty) return null;
+  /// Deletion is RESPECTED per level, never fought: a binned or purged
+  /// level (purge is terminal — replay drops re-creates of the id) stops
+  /// the walk and files land in the NEAREST LIVE ANCESTOR — the device
+  /// folder, then Phone Backup, then the vault root. Either way the file
+  /// still ingests and shows in the gallery.
+  Future<String?> _ensureSystemPath(
+      {String? bucketName, String? relativePath}) async {
+    final (key, display) = await _deviceIdentity();
+    final segments = pathSegments(relativePath, bucketName);
+    final memoKey = '$key|${segments.join('/')}';
+    if (_ensuredChain.containsKey(memoKey)) return _ensuredChain[memoKey];
+
+    final chain = <(String, String)>[
+      (SystemFolders.rootId, SystemFolders.rootName),
+      (SystemFolders.deviceId(key), display),
+      for (var i = 0; i < segments.length; i++)
+        (SystemFolders.pathSegmentId(key, segments.sublist(0, i + 1)),
+            segments[i]),
+    ];
+
     final dbs = DatabaseService();
-
-    final rootId = SystemFolders.rootId;
-    var root = await dbs.getFolderById(rootId);
-    if (root == null) {
-      if (await dbs.isFolderPurged(rootId)) return null;
-      await dbs.createFolder(SystemFolders.rootName, id: rootId);
-      root = await dbs.getFolderById(rootId);
-      if (root == null) return null; // signed out mid-run
+    String? parent; // null = vault root
+    for (final (id, name) in chain) {
+      var row = await dbs.getFolderById(id);
+      if (row == null) {
+        if (await dbs.isFolderPurged(id)) break;
+        await dbs.createFolder(name, parentId: parent, id: id);
+        row = await dbs.getFolderById(id);
+        if (row == null) break; // signed out mid-run
+      }
+      if (row.isDeleted) break;
+      parent = id;
     }
-    if (root.isDeleted) return null;
-
-    final bId = SystemFolders.bucketId(bucketName);
-    var bucket = await dbs.getFolderById(bId);
-    if (bucket == null) {
-      if (await dbs.isFolderPurged(bId)) return rootId;
-      await dbs.createFolder(bucketName, parentId: rootId, id: bId);
-      bucket = await dbs.getFolderById(bId);
-      if (bucket == null) return rootId;
-    }
-    if (bucket.isDeleted) return rootId;
-    return bId;
+    _ensuredChain[memoKey] = parent;
+    return parent;
   }
 
   /// Encrypts and uploads a single gallery asset. With [existingRow] the
   /// pending row is retried IN PLACE (heal path) — no delete-then-recreate,
   /// so the gallery tile never flashes.
   Future<bool> _syncAsset(AssetEntity asset,
-      {CnestFile? existingRow, String? bucketName}) async {
+      {CnestFile? existingRow,
+      String? bucketName,
+      String? relativePath}) async {
     final account = AccountRegistry().activeAccount;
     if (account == null) {
       // Transient (sign-out mid-run). Must throw, not return false: false
@@ -363,11 +436,12 @@ class AutoSyncService {
     final isImage = asset.type == AssetType.image || isVideo;
     final fileId = existingRow?.id ?? const Uuid().v4();
 
-    // System-folder placement: Phone Backup/<bucket>. Heal retries keep
-    // the placement the original attempt stamped on the row.
+    // System-folder placement: Phone Backup/<Device>/<real path>. Heal
+    // retries keep the placement the original attempt stamped on the row.
     final folderId = existingRow != null
         ? existingRow.folderId
-        : await _ensureBucketFolder(bucketName);
+        : await _ensureSystemPath(
+            bucketName: bucketName, relativePath: relativePath);
 
     Uint8List? thumbnailBytes;
 
