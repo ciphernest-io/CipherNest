@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 
-import '../../../services/cache_manager_service.dart';
-import '../../../services/cloud/cloud_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/recycle_bin_service.dart';
 import '../../models/file_model.dart';
@@ -384,32 +382,12 @@ class _FilesBinTabState extends State<_FilesBinTab> {
     );
     if (confirm != true) return;
 
-    // Cloud + DB purge, then cache wipe through invalidateFile so its
-    // ChangeNotifier fires and the Settings cache tile updates. A failed
-    // cloud delete never blocks the purge: the purge tombstone condemns
-    // the blob and the condemned-blob sweep retries until it lands.
+    // Cloud + DB purge + cache wipe, one shared path with the bin viewer
+    // (RecycleBinService). A failed cloud delete never blocks the purge:
+    // the purge tombstone condemns the blob and the condemned-blob sweep
+    // retries until it lands.
     for (final f in picked) {
-      try {
-        if (f.cloudId != null) await CloudService().deleteFile(f.cloudId!);
-      } catch (e) {
-        debugPrint('Delete forever: blob delete failed (${f.cloudId}): $e');
-      }
-      try {
-        if (f.thumbnailCloudId != null) {
-          await CloudService().deleteFile(f.thumbnailCloudId!);
-        }
-      } catch (e) {
-        debugPrint(
-            'Delete forever: thumb delete failed (${f.thumbnailCloudId}): $e');
-      }
-      try {
-        await DatabaseService().permanentlyDeleteFile(f.id);
-      } catch (_) {}
-      await CacheManagerService().invalidateFile(
-        fileId: f.id,
-        cloudId: f.cloudId,
-        thumbnailCloudId: f.thumbnailCloudId,
-      );
+      await RecycleBinService().purgeFilePermanently(f);
     }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -496,7 +474,9 @@ class _FilesBinTabState extends State<_FilesBinTab> {
             }
             Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => ImageViewerScreen(
-                    files: _files, initialIndex: index)));
+                    files: _files,
+                    initialIndex: index,
+                    fromRecycleBin: true)));
           },
           onLongPress: () => setState(() {
             _selectionMode = true;
@@ -646,8 +626,8 @@ class _BinSearchResultTile extends StatelessWidget {
               child: const Text('Restore'),
             ),
       onTap: () => Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) =>
-              ImageViewerScreen(files: [file], initialIndex: 0))),
+          builder: (_) => ImageViewerScreen(
+              files: [file], initialIndex: 0, fromRecycleBin: true))),
       textColor: cs.onSurface,
     );
   }

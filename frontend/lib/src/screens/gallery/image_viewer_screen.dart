@@ -24,6 +24,7 @@ import '../../../services/local_content_guard.dart';
 import '../../utils/byte_format.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
+import '../../../services/recycle_bin_service.dart';
 import '../../../services/auto_sync_service.dart';
 import '../../../services/file_metadata_service.dart';
 import '../../../services/image_edit_service.dart';
@@ -43,11 +44,19 @@ class ImageViewerScreen extends StatefulWidget {
   /// gallery experience stays exclusive to the Photos & Videos tab.
   final bool standalone;
 
+  /// Recycle-bin mode: the delete button purges PERMANENTLY (with its own
+  /// confirm), a Restore action appears, and every export/edit affordance
+  /// (favourite, edit, share, save, wallpaper, print, copy, info-sheet
+  /// rename) is hidden — a binned file is evidence, not a workspace.
+  /// Swiping stays: the bin passes its own binned-only list.
+  final bool fromRecycleBin;
+
   const ImageViewerScreen({
     super.key,
     required this.files,
     required this.initialIndex,
     this.standalone = false,
+    this.fromRecycleBin = false,
   });
 
   @override
@@ -534,11 +543,79 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     }
   }
 
+  /// Removes the current file from the in-viewer list after a delete or
+  /// restore, popping (result true) when nothing is left to show.
+  void _removeCurrentFromList() {
+    setState(() {
+      _currentFiles.removeAt(_currentIndex);
+      _hasDeleted = true;
+      if (_currentFiles.isEmpty) {
+        Navigator.pop(context, true);
+      } else if (_currentIndex >= _currentFiles.length) {
+        _currentIndex = _currentFiles.length - 1;
+      }
+    });
+  }
+
+  /// Bin mode: the file is ALREADY binned — recording another deleteFile
+  /// would restart its 30-day clock and detach it from its folder's restore
+  /// group (the op_replay re-stamp branch). The only delete offered here is
+  /// the permanent one.
+  Future<void> _handleDeleteForever() async {
+    final file = _currentFiles[_currentIndex];
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete permanently?'),
+        content: const Text(
+          'This cannot be undone. The file is removed from your vault and '
+          'your cloud everywhere.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              'Delete forever',
+              style: TextStyle(color: Theme.of(ctx).colorScheme.error),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    await RecycleBinService().purgeFilePermanently(file);
+    if (!mounted) return;
+    _removeCurrentFromList();
+    if (_currentFiles.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Permanently deleted')));
+    }
+  }
+
+  /// Bin mode: un-deletes the current file (its folder cause, if any, is
+  /// handled by replay) and drops it from the binned list.
+  Future<void> _handleRestore() async {
+    final file = _currentFiles[_currentIndex];
+    await DatabaseService().restoreFile(file.id);
+    if (!mounted) return;
+    _removeCurrentFromList();
+    if (_currentFiles.isNotEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Restored')));
+    }
+  }
+
   // --- DELETE LOGIC ---
   // Soft-delete: the encrypted blob and decrypted cache stay put for 30 days
   // so restores are instant and offline. RecycleBinService.sweepRecycleBin
   // wipes them at TTL.
   Future<void> _handleDelete() async {
+    if (widget.fromRecycleBin) return _handleDeleteForever();
     final fileToDelete = _currentFiles[_currentIndex];
     final confirm = await showDialog<bool>(
       context: context,
@@ -571,17 +648,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       AutoSyncService.trackDeletion(fileToDelete.filename, fileToDelete.sizeBytes);
       DatabaseBackupService().scheduleBackup();
 
-      setState(() {
-        _currentFiles.removeAt(_currentIndex);
-        _hasDeleted = true;
-        if (_currentFiles.isEmpty) {
-          Navigator.pop(context, true);
-        } else {
-          if (_currentIndex >= _currentFiles.length) {
-            _currentIndex = _currentFiles.length - 1;
-          }
-        }
-      });
+      _removeCurrentFromList();
 
       if (_currentFiles.isNotEmpty) {
         ScaffoldMessenger.of(
@@ -1076,6 +1143,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         builder: (_, controller) => _InfoSheetBody(
           file: file,
           scrollController: controller,
+          canEdit: !widget.fromRecycleBin,
           onEdit: () async {
             final changed = await _showEditInfo(file);
             // Sheet's own BuildContext (`ctx`) — safe to pop once we know
@@ -1133,45 +1201,51 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                   onPressed: () => Navigator.pop(context, _hasDeleted),
                 ),
                 actions: [
-                  IconButton(
-                    icon: ThemeIcon('arrowsCounterClockwise'),
-                    onPressed: () {},
-                  ),
-                  PopupMenuButton<String>(
-                    icon: ThemeIcon('dotsThreeVertical', color: overlayColor),
-                    itemBuilder: (context) => [
-                      const PopupMenuItem(
-                        value: 'save',
-                        child: Text('Save to device'),
-                      ),
-                      const PopupMenuItem(
-                        value: 'copy',
-                        child: Text('Copy to clipboard'),
-                      ),
-                      const PopupMenuItem(
-                        value: 'wall',
-                        child: Text('Set as wallpaper'),
-                      ),
-                      const PopupMenuItem(value: 'print', child: Text('Print')),
-                    ],
-                    onSelected: (val) {
-                      switch (val) {
-                        case 'save':
-                          saveFileToDevice(
-                              context, _currentFiles[_currentIndex]);
-                          break;
-                        case 'copy':
-                          _copyToClipboard();
-                          break;
-                        case 'wall':
-                          _setAsWallpaper();
-                          break;
-                        case 'print':
-                          _printCurrent();
-                          break;
-                      }
-                    },
-                  ),
+                  // Export affordances are wrong for a binned file — bin
+                  // mode keeps the bar to Restore / Info / Delete forever.
+                  if (!widget.fromRecycleBin) ...[
+                    IconButton(
+                      icon: ThemeIcon('arrowsCounterClockwise'),
+                      onPressed: () {},
+                    ),
+                    PopupMenuButton<String>(
+                      icon:
+                          ThemeIcon('dotsThreeVertical', color: overlayColor),
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(
+                          value: 'save',
+                          child: Text('Save to device'),
+                        ),
+                        const PopupMenuItem(
+                          value: 'copy',
+                          child: Text('Copy to clipboard'),
+                        ),
+                        const PopupMenuItem(
+                          value: 'wall',
+                          child: Text('Set as wallpaper'),
+                        ),
+                        const PopupMenuItem(
+                            value: 'print', child: Text('Print')),
+                      ],
+                      onSelected: (val) {
+                        switch (val) {
+                          case 'save':
+                            saveFileToDevice(
+                                context, _currentFiles[_currentIndex]);
+                            break;
+                          case 'copy':
+                            _copyToClipboard();
+                            break;
+                          case 'wall':
+                            _setAsWallpaper();
+                            break;
+                          case 'print':
+                            _printCurrent();
+                            break;
+                        }
+                      },
+                    ),
+                  ],
                 ],
               )
             : null,
@@ -1925,6 +1999,32 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   }) {
     final fav = _currentFiles[_currentIndex].isFavorite;
     final danger = Theme.of(context).colorScheme.error;
+    // Bin mode: Restore / Info / Delete forever, nothing else.
+    if (widget.fromRecycleBin) {
+      final children = <Widget>[
+        IconButton(
+          icon: ThemeIcon('arrowCounterClockwise'),
+          onPressed: _handleRestore,
+          color: overlayColor,
+        ),
+        IconButton(
+          icon: ThemeIcon('info'),
+          onPressed: _showDetailsSheet,
+          color: overlayColor,
+        ),
+        IconButton(
+          icon: ThemeIcon('trash'),
+          onPressed: _handleDelete,
+          color: danger,
+        ),
+      ];
+      if (vertical) {
+        return Column(mainAxisSize: MainAxisSize.min, children: children);
+      }
+      return Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: children);
+    }
     // Samsung Gallery's order: favorite, edit, info, share, delete.
     final children = <Widget>[
       IconButton(
@@ -2056,10 +2156,14 @@ class _InfoSheetBody extends StatefulWidget {
   final CnestFile file;
   final ScrollController scrollController;
   final VoidCallback onEdit;
+
+  /// False in recycle-bin mode: renaming a binned file is a zombie edit.
+  final bool canEdit;
   const _InfoSheetBody({
     required this.file,
     required this.scrollController,
     required this.onEdit,
+    this.canEdit = true,
   });
 
   @override
@@ -2187,19 +2291,20 @@ class _InfoSheetBodyState extends State<_InfoSheetBody> {
             // Rename + change captured date/time. Same button on Samsung's
             // info page; we route it through the viewer so the AppBar
             // title updates in place after a rename.
-            TextButton(
-              onPressed: widget.onEdit,
-              style: TextButton.styleFrom(
-                foregroundColor: cs.primary,
-                padding: EdgeInsets.zero,
-                minimumSize: const Size(48, 24),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            if (widget.canEdit)
+              TextButton(
+                onPressed: widget.onEdit,
+                style: TextButton.styleFrom(
+                  foregroundColor: cs.primary,
+                  padding: EdgeInsets.zero,
+                  minimumSize: const Size(48, 24),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text(
+                  'Edit',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+                ),
               ),
-              child: const Text(
-                'Edit',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
-              ),
-            ),
           ],
         ),
         const SizedBox(height: 4),

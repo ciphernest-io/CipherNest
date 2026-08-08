@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../src/models/file_model.dart';
+import 'cache_manager_service.dart';
 import 'cloud/cloud_service.dart';
 import 'database_service.dart';
 
@@ -76,6 +78,29 @@ class RecycleBinService {
     }
     await db.purgeFolderEntity(folderId);
     return purged;
+  }
+
+  /// One file's permanent deletion from a UI action (bin selection bar,
+  /// bin viewer): best-effort blob + thumb deletes, the row + purgeFile op,
+  /// temp-artifact wipe, then cache invalidation through
+  /// [CacheManagerService.invalidateFile] so its ChangeNotifier fires and
+  /// the Settings cache tile updates. Returns whether the row purge landed.
+  Future<bool> purgeFilePermanently(CnestFile file) async {
+    final ok = await _purgeOneFile(
+      DatabaseService(),
+      await getTemporaryDirectory(),
+      file.id,
+      {
+        'cloud_id': file.cloudId,
+        'thumbnail_cloud_id': file.thumbnailCloudId,
+      },
+    );
+    await CacheManagerService().invalidateFile(
+      fileId: file.id,
+      cloudId: file.cloudId,
+      thumbnailCloudId: file.thumbnailCloudId,
+    );
+    return ok;
   }
 
   /// One file's permanent deletion: best-effort blob deletes, the row +

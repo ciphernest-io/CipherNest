@@ -178,7 +178,9 @@ class _FolderBinDetailScreenState extends State<FolderBinDetailScreen> {
                           onTap: () => Navigator.of(context).push(
                               MaterialPageRoute(
                                   builder: (_) => ImageViewerScreen(
-                                      files: _files, initialIndex: i))),
+                                      files: _files,
+                                      initialIndex: i,
+                                      fromRecycleBin: true))),
                           onLongPress: () => _restoreSingleFile(file),
                           child: GalleryGridItem(
                               key: ValueKey(file.id), file: file),
