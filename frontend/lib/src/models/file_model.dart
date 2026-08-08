@@ -168,6 +168,49 @@ class CnestFile {
     };
   }
 
+  /// Non-null overrides only — a null argument keeps the current value
+  /// (clearing a nullable field is not supported; no caller needs it).
+  /// Every field is enumerated in the constructor call below so an in-memory
+  /// copy can never silently drop columns the way hand-rebuilt literals did.
+  CnestFile copyWith({
+    String? filename,
+    DateTime? createdAt,
+    bool? isFavorite,
+    bool? isUploaded,
+    String? cloudId,
+    String? thumbnailCloudId,
+    String? localPath,
+    String? contentHash,
+    int? sizeBytes,
+  }) {
+    return CnestFile(
+      id: id,
+      cloudId: cloudId ?? this.cloudId,
+      thumbnailCloudId: thumbnailCloudId ?? this.thumbnailCloudId,
+      provider: provider,
+      accountId: accountId,
+      filename: filename ?? this.filename,
+      sizeBytes: sizeBytes ?? this.sizeBytes,
+      createdAt: createdAt ?? this.createdAt,
+      isUploaded: isUploaded ?? this.isUploaded,
+      localPath: localPath ?? this.localPath,
+      assetId: assetId,
+      isFavorite: isFavorite ?? this.isFavorite,
+      type: type,
+      contentHash: contentHash ?? this.contentHash,
+      width: width,
+      height: height,
+      durationMs: durationMs,
+      videoCodec: videoCodec,
+      audioCodec: audioCodec,
+      fps: fps,
+      deviceModel: deviceModel,
+      uploadStartedAt: uploadStartedAt,
+      folderId: folderId,
+      deletedByFolderId: deletedByFolderId,
+    );
+  }
+
   factory CnestFile.fromMap(Map<String, dynamic> map) {
     return CnestFile(
       id: map['id'],

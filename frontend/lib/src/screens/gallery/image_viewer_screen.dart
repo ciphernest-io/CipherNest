@@ -602,21 +602,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     final file = _currentFiles[_currentIndex];
     final next = !file.isFavorite;
     await DatabaseService().setFavorite(file.id, next);
-    final updated = CnestFile(
-      id: file.id,
-      cloudId: file.cloudId,
-      thumbnailCloudId: file.thumbnailCloudId,
-      provider: file.provider,
-      accountId: file.accountId,
-      filename: file.filename,
-      sizeBytes: file.sizeBytes,
-      createdAt: file.createdAt,
-      isUploaded: file.isUploaded,
-      localPath: file.localPath,
-      assetId: file.assetId,
-      isFavorite: next,
-      type: file.type,
-    );
+    final updated = file.copyWith(isFavorite: next);
     setState(() => _currentFiles[_currentIndex] = updated);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -640,23 +626,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       await DatabaseService().updateCreatedAt(file.id, result.captured);
     }
     // Refresh the in-viewer copy so the AppBar title + info sheet reflect
-    // the changes without a pop-and-rebuild. Live-updated fields are
-    // filename + createdAt; everything else is copied over unchanged.
-    final updated = CnestFile(
-      id: file.id,
-      cloudId: file.cloudId,
-      thumbnailCloudId: file.thumbnailCloudId,
-      provider: file.provider,
-      accountId: file.accountId,
-      filename: result.filename,
-      sizeBytes: file.sizeBytes,
-      createdAt: result.captured,
-      isUploaded: file.isUploaded,
-      localPath: file.localPath,
-      assetId: file.assetId,
-      isFavorite: file.isFavorite,
-      type: file.type,
-    );
+    // the changes without a pop-and-rebuild.
+    final updated =
+        file.copyWith(filename: result.filename, createdAt: result.captured);
     if (mounted) {
       setState(() => _currentFiles[_currentIndex] = updated);
     }
