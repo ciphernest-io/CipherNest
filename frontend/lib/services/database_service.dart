@@ -976,18 +976,64 @@ class DatabaseService extends ChangeNotifier {
     return rows.map((r) => CnestFile.fromMap(r)).toList();
   }
 
-  /// Live-file count per live folder id, one query (folder cards show it).
-  Future<Map<String, int>> getFolderFileCounts() async {
+  /// Direct live files + direct live subfolders per live folder id — the
+  /// "N items" chip. A folder IS an item (Windows/pCloud semantics): a
+  /// folder holding only a subfolder must not read "0 items".
+  Future<Map<String, int>> getFolderItemCounts() async {
     final db = await database;
     if (_currentAccountId == null) return {};
-    final rows = await db.rawQuery(
+    final counts = <String, int>{};
+    final fileRows = await db.rawQuery(
         'SELECT folder_id, COUNT(*) AS n FROM files '
         'WHERE account_id = ? AND is_deleted = 0 AND folder_id IS NOT NULL '
         'GROUP BY folder_id',
         [_currentAccountId]);
-    return {
-      for (final r in rows) r['folder_id'] as String: r['n'] as int,
-    };
+    for (final r in fileRows) {
+      counts[r['folder_id'] as String] = r['n'] as int;
+    }
+    final folderRows = await db.rawQuery(
+        'SELECT parent_id, COUNT(*) AS n FROM folders '
+        'WHERE account_id = ? AND is_deleted = 0 AND parent_id IS NOT NULL '
+        'GROUP BY parent_id',
+        [_currentAccountId]);
+    for (final r in folderRows) {
+      final id = r['parent_id'] as String;
+      counts[id] = (counts[id] ?? 0) + (r['n'] as int);
+    }
+    return counts;
+  }
+
+  /// Live subtree totals for [folderId]: descendant folders and files
+  /// anywhere in the subtree — what a cascade delete will actually bin.
+  /// The folder list is small; the subtree expands in Dart.
+  Future<({int folders, int files})> getFolderSubtreeCounts(
+      String folderId) async {
+    final db = await database;
+    if (_currentAccountId == null) return (folders: 0, files: 0);
+    final rows = await db.query('folders',
+        columns: ['id', 'parent_id'],
+        where: 'account_id = ? AND is_deleted = 0',
+        whereArgs: [_currentAccountId]);
+    final children = <String?, List<String>>{};
+    for (final r in rows) {
+      children
+          .putIfAbsent(r['parent_id'] as String?, () => [])
+          .add(r['id'] as String);
+    }
+    final subtree = <String>{folderId};
+    final queue = [folderId];
+    while (queue.isNotEmpty) {
+      for (final child in children[queue.removeLast()] ?? const <String>[]) {
+        if (subtree.add(child)) queue.add(child);
+      }
+    }
+    final placeholders = List.filled(subtree.length, '?').join(',');
+    final fileCount = Sqflite.firstIntValue(await db.rawQuery(
+            'SELECT COUNT(*) FROM files WHERE account_id = ? '
+            'AND is_deleted = 0 AND folder_id IN ($placeholders)',
+            [_currentAccountId, ...subtree])) ??
+        0;
+    return (folders: subtree.length - 1, files: fileCount);
   }
 
   /// Binned TOP-LEVEL folder entries (deleted directly, not by a cascade) —

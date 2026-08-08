@@ -79,7 +79,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   Future<void> _reload() async {
     final folders = await DatabaseService().getFolders(parentId: _folderId);
     final files = await DatabaseService().getFilesInFolder(_folderId);
-    final counts = await DatabaseService().getFolderFileCounts();
+    final counts = await DatabaseService().getFolderItemCounts();
     if (!mounted) return;
     // The folder itself may have been deleted/restored elsewhere mid-view
     // (a sync can bin the very folder being browsed) — pop rather than
@@ -176,16 +176,22 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
 
   Future<void> _deleteCurrent() async {
     final folder = widget.folder!;
-    final directCount = _counts[folder.id] ?? 0;
+    // Subtree totals, not the direct-children chip — the dialog must state
+    // what the cascade will ACTUALLY bin.
+    final sub = await DatabaseService().getFolderSubtreeCounts(folder.id);
+    if (!mounted) return;
+    final contains = <String>[
+      if (sub.folders > 0) '${sub.folders} folder${sub.folders == 1 ? '' : 's'}',
+      if (sub.files > 0) '${sub.files} file${sub.files == 1 ? '' : 's'}',
+    ].join(' and ');
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Delete "${folder.name}"?'),
         content: Text(
-            'The folder and everything inside it move to the Recycle Bin '
-            'as one entry${directCount > 0 ? ' ($directCount item'
-                '${directCount == 1 ? '' : 's'} here)' : ''}. '
-            'You can restore it for 30 days.'),
+            '${contains.isEmpty ? 'The folder moves' : 'The folder — '
+                '$contains inside — moves'} to the Recycle Bin '
+            'as one entry. You can restore it for 30 days.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
