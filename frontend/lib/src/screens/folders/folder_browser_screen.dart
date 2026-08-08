@@ -57,6 +57,10 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   int _uploadTotal = 0;
   String? _openingFileId;
 
+  /// Fresh row for the folder being viewed (widget.folder goes stale the
+  /// moment a rename/hide lands elsewhere). Null at root.
+  CnestFolder? _self;
+
   String? get _folderId => widget.folder?.id;
 
   @override
@@ -79,19 +83,24 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     if (!mounted) return;
     // The folder itself may have been deleted/restored elsewhere mid-view
     // (a sync can bin the very folder being browsed) — pop rather than
-    // showing a ghost.
+    // showing a ghost. The fresh self row also keeps the hide toggle's
+    // label live (widget.folder is a stale snapshot).
+    CnestFolder? self;
     if (_folderId != null) {
-      final self = await DatabaseService().getFolderPathSegments(_folderId!);
+      final segments =
+          await DatabaseService().getFolderPathSegments(_folderId!);
       if (!mounted) return;
-      if (self.isEmpty || self.last.isDeleted) {
+      if (segments.isEmpty || segments.last.isDeleted) {
         Navigator.of(context).pop();
         return;
       }
+      self = segments.last;
     }
     setState(() {
       _folders = folders;
       _files = files;
       _counts = counts;
+      _self = self;
       _loading = false;
     });
   }
@@ -250,13 +259,20 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
               onSelected: (v) => switch (v) {
                 'rename' => _renameCurrent(),
                 'move' => _moveCurrent(),
+                'hide' => DatabaseService().setFolderHidden(
+                    _folderId!, !((_self ?? widget.folder!).isHidden)),
                 'delete' => _deleteCurrent(),
                 _ => null,
               },
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: 'rename', child: Text('Rename')),
-                PopupMenuItem(value: 'move', child: Text('Move')),
-                PopupMenuItem(value: 'delete', child: Text('Delete')),
+              itemBuilder: (_) => [
+                const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                const PopupMenuItem(value: 'move', child: Text('Move')),
+                PopupMenuItem(
+                    value: 'hide',
+                    child: Text((_self ?? widget.folder!).isHidden
+                        ? 'Unhide'
+                        : 'Hide from Photos & other views')),
+                const PopupMenuItem(value: 'delete', child: Text('Delete')),
               ],
             ),
         ],
@@ -579,15 +595,31 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   Widget _folderRow(ColorScheme cs, CnestFolder f) {
     final n = _counts[f.id] ?? 0;
     final countLabel = '$n item${n == 1 ? '' : 's'}';
+    final hidden = f.isHidden || f.hiddenEffective;
+    var subtitle = f.isSystem ? 'Auto-synced media · $countLabel' : countLabel;
+    if (hidden) subtitle = '$subtitle · Hidden from views';
     return ListTile(
       leading: ThemeIcon(f.isSystem ? 'smartphone' : 'folder',
-          color: f.isSystem ? cs.onSurface.withAlpha(160) : cs.primary,
+          color: f.isSystem || hidden ? cs.onSurface.withAlpha(160) : cs.primary,
           size: 28),
       title: Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text(
-          f.isSystem ? 'Auto-synced media · $countLabel' : countLabel,
+      subtitle: Text(subtitle,
           style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 12)),
-      trailing: const ThemeIcon('caretRight', size: 16),
+      trailing: PopupMenuButton<String>(
+        icon: ThemeIcon('dotsThreeVertical',
+            color: cs.onSurface.withAlpha(120), size: 20),
+        itemBuilder: (_) => [
+          PopupMenuItem(
+              value: 'hide',
+              child: Text(f.isHidden
+                  ? 'Unhide'
+                  : 'Hide from Photos & other views')),
+        ],
+        onSelected: (v) => switch (v) {
+          'hide' => DatabaseService().setFolderHidden(f.id, !f.isHidden),
+          _ => null,
+        },
+      ),
       onTap: () => Navigator.of(context).push(MaterialPageRoute(
           builder: (_) => FolderBrowserScreen(folder: f))),
     );

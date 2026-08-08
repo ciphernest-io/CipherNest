@@ -161,10 +161,12 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
         setState(() => _statusMsg = 'Checking for backup...');
         final snapshots = await DatabaseBackupService().listSnapshots();
         if (snapshots.isNotEmpty) {
-          final localImages =
-              await DatabaseService().getFilesByType(CnestFileType.image);
-          final localDocs =
-              await DatabaseService().getFilesByType(CnestFileType.document);
+          // includeHidden: an "is the vault empty?" check — a vault whose
+          // only photos sit in hidden folders is NOT empty.
+          final localImages = await DatabaseService()
+              .getFilesByType(CnestFileType.image, includeHidden: true);
+          final localDocs = await DatabaseService()
+              .getFilesByType(CnestFileType.document, includeHidden: true);
           final localIsEmpty = localImages.isEmpty && localDocs.isEmpty;
 
           bool shouldRestore = localIsEmpty;

@@ -19,6 +19,14 @@ class CnestFolder {
   /// converges with the id itself.
   final bool isSystem;
 
+  /// The folder's OWN "hide from specialized views" flag (synced,
+  /// setFolderHidden op). The menu toggle reads this.
+  final bool isHidden;
+
+  /// Own flag OR any ancestor's — the materialized subtree flag the
+  /// specialized-view queries filter on. Display cues read this.
+  final bool hiddenEffective;
+
   const CnestFolder({
     required this.id,
     required this.name,
@@ -28,6 +36,8 @@ class CnestFolder {
     this.deletedByFolderId,
     this.createdAt,
     this.isSystem = false,
+    this.isHidden = false,
+    this.hiddenEffective = false,
   });
 
   factory CnestFolder.fromMap(Map<String, dynamic> map) => CnestFolder(
@@ -43,5 +53,7 @@ class CnestFolder {
             ? null
             : DateTime.fromMillisecondsSinceEpoch(map['created_at'] as int),
         isSystem: (map['is_system'] as int? ?? 0) == 1,
+        isHidden: (map['is_hidden'] as int? ?? 0) == 1,
+        hiddenEffective: (map['hidden_effective'] as int? ?? 0) == 1,
       );
 }

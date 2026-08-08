@@ -1187,7 +1187,8 @@ class DatabaseService extends ChangeNotifier {
     if (_currentAccountId == null) return [];
     final maps = await db.query(
       'files',
-      where: 'is_favorite = 1 AND account_id = ? AND is_deleted = 0',
+      where: 'is_favorite = 1 AND account_id = ? AND is_deleted = 0'
+          '${hiddenExclusion()}',
       whereArgs: [_currentAccountId],
       orderBy: 'created_at DESC',
     );
@@ -1269,15 +1270,29 @@ class DatabaseService extends ChangeNotifier {
     );
   }
 
-  Future<List<CnestFile>> getFilesByType(CnestFileType type) async {
+  /// SQL fragment excluding files that live under a view-hidden folder
+  /// subtree (folders.hidden_effective, materialized by applyMergedState).
+  /// SPECIALIZED views only — typed tabs, gallery, stories, albums, covers,
+  /// pickers. NEVER the Files browser and NEVER the Recycle Bin: the tree
+  /// itself and the bin always show everything.
+  static String hiddenExclusion([String prefix = '']) =>
+      ' AND (${prefix}folder_id IS NULL OR ${prefix}folder_id NOT IN '
+      '(SELECT id FROM folders WHERE hidden_effective = 1))';
+
+  /// [includeHidden] is for MACHINERY callers only (migration dedup, the
+  /// "is the vault empty?" check) — anything user-facing must keep the
+  /// default so hidden folders stay hidden.
+  Future<List<CnestFile>> getFilesByType(CnestFileType type,
+      {bool includeHidden = false}) async {
     final db = await database;
     if (_currentAccountId == null) return [];
 
     // One-tree model: typed views cover the whole corpus — folder placement
-    // is invisible here.
+    // is invisible here; only a hidden ancestor excludes a file.
     final List<Map<String, dynamic>> maps = await db.query(
       'files',
-      where: 'type = ? AND account_id = ? AND is_deleted = 0',
+      where: 'type = ? AND account_id = ? AND is_deleted = 0'
+          '${includeHidden ? '' : hiddenExclusion()}',
       whereArgs: [type.index, _currentAccountId],
       orderBy: 'created_at DESC',
     );
@@ -1614,7 +1629,8 @@ class DatabaseService extends ChangeNotifier {
         CASE WHEN a.is_smart = 1 THEN 0
         ELSE (SELECT COUNT(*) FROM album_files af
               INNER JOIN files f ON f.id = af.file_id
-              WHERE af.album_id = a.id AND f.is_deleted = 0)
+              WHERE af.album_id = a.id AND f.is_deleted = 0
+              ${hiddenExclusion('f.')})
         END as file_count
       FROM albums a
       WHERE a.kind = ?
@@ -1722,6 +1738,7 @@ class DatabaseService extends ChangeNotifier {
       SELECT f.* FROM files f
       INNER JOIN album_files af ON af.file_id = f.id
       WHERE af.album_id = ? AND f.account_id = ? AND f.is_deleted = 0
+      ${hiddenExclusion('f.')}
       ORDER BY f.created_at DESC
     ''', [album.id, _currentAccountId]);
     return maps.map((m) => CnestFile.fromMap(m)).toList();
@@ -1736,7 +1753,7 @@ class DatabaseService extends ChangeNotifier {
     // recent non-deleted file" path below.
     if (album.coverFileId != null) {
       final rows = await db.query('files',
-          where: 'id = ? AND is_deleted = 0',
+          where: 'id = ? AND is_deleted = 0${hiddenExclusion()}',
           whereArgs: [album.coverFileId],
           limit: 1);
       if (rows.isNotEmpty) return CnestFile.fromMap(rows.first);
@@ -1752,6 +1769,7 @@ class DatabaseService extends ChangeNotifier {
       SELECT f.* FROM files f
       INNER JOIN album_files af ON af.file_id = f.id
       WHERE af.album_id = ? AND f.account_id = ? AND f.is_deleted = 0
+      ${hiddenExclusion('f.')}
       ORDER BY f.created_at DESC LIMIT 1
     ''', [album.id, _currentAccountId]);
     return maps.isNotEmpty ? CnestFile.fromMap(maps.first) : null;
@@ -1764,7 +1782,8 @@ class DatabaseService extends ChangeNotifier {
     if (where == null) return [];
     final limitClause = limit != null ? ' LIMIT $limit' : '';
     final maps = await db.rawQuery(
-      'SELECT * FROM files WHERE $where AND account_id = ? ORDER BY created_at DESC$limitClause',
+      'SELECT * FROM files WHERE $where AND account_id = ?'
+      '${hiddenExclusion()} ORDER BY created_at DESC$limitClause',
       [_currentAccountId],
     );
     return maps.map((m) => CnestFile.fromMap(m)).toList();
@@ -1774,7 +1793,8 @@ class DatabaseService extends ChangeNotifier {
     final where = _smartAlbumWhere(query);
     if (where == null) return 0;
     final result = await db.rawQuery(
-      'SELECT COUNT(*) as cnt FROM files WHERE $where AND account_id = ?',
+      'SELECT COUNT(*) as cnt FROM files WHERE $where AND account_id = ?'
+      '${hiddenExclusion()}',
       [_currentAccountId],
     );
     return Sqflite.firstIntValue(result) ?? 0;
@@ -1843,7 +1863,7 @@ class DatabaseService extends ChangeNotifier {
     final maps = await db.query(
       'files',
       where: 'type = 0 AND account_id = ? AND is_deleted = 0 '
-          'AND created_at BETWEEN ? AND ?',
+          'AND created_at BETWEEN ? AND ?${hiddenExclusion()}',
       whereArgs: [_currentAccountId, minMs, maxMs],
       orderBy: 'created_at DESC',
     );

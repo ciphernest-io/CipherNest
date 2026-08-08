@@ -96,8 +96,12 @@ class MigrationService {
     // A candidate is skipped iff EITHER key hits.
     final existingAssetIds = <String>{};
     final existingFallbackKeys = <String>{};
-    final images = await DatabaseService().getFilesByType(CnestFileType.image);
-    final docs = await DatabaseService().getFilesByType(CnestFileType.document);
+    // includeHidden: this is a DEDUP index, not a view — a photo filed in a
+    // hidden folder must still be recognized or migration re-imports it.
+    final images = await DatabaseService()
+        .getFilesByType(CnestFileType.image, includeHidden: true);
+    final docs = await DatabaseService()
+        .getFilesByType(CnestFileType.document, includeHidden: true);
     for (final f in [...images, ...docs]) {
       final aid = f.assetId;
       if (aid != null && aid.isNotEmpty) existingAssetIds.add(aid);
