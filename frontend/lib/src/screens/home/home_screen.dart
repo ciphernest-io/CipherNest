@@ -16,6 +16,7 @@ import '../../../services/cloud/account_registry.dart';
 import '../../../services/sync_service.dart';
 import '../../../services/sync/sync_coordinator.dart';
 import '../../../services/upload_pipeline.dart';
+import '../../widgets/folder_picker_sheet.dart';
 import '../../widgets/friendly_error_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -130,7 +131,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _handleUpload({required UploadCategory category}) async {
+  Future<void> _handleUpload(
+      {required UploadCategory category, String? folderId}) async {
     // "Other" deliberately opens the unrestricted system picker so users
     // can bring in zips, code files, ipynbs — anything they want vaulted.
     List<String>? exts;
@@ -158,11 +160,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _uploadTotal = result.files.length;
     });
     try {
-      // Home uploads target the vault ROOT — folder-targeted uploads live
-      // in the Files browser's "upload here".
+      // Destination comes from the upload sheet's "To:" row — vault root
+      // unless the user picked a folder there.
       final outcomes = await UploadPipeline.uploadBatch(
         result.files,
         category: category,
+        folderId: folderId,
         onProgress: (done, total) {
           if (mounted) setState(() => _uploadDone = done);
         },
@@ -338,49 +341,80 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _showUploadSheet(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    // Sheet-local destination — resets to the vault root every time the
+    // sheet opens (predictable; no sticky last-used surprise).
+    var dest = const FolderPickResult(folderId: null, label: 'My Vault');
     showModalBottomSheet(
       context: context,
       backgroundColor: cs.surface,
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: ThemeIcon('imageSquare', color: cs.primary),
-              title: Text('Upload Photo or Video', style: TextStyle(color: cs.onSurface)),
-              onTap: () {
-                Navigator.pop(ctx);
-                _handleUpload(category: UploadCategory.media);
-              },
-            ),
-            ListTile(
-              leading: ThemeIcon('fileText', color: cs.primary),
-              title: Text('Upload Document', style: TextStyle(color: cs.onSurface)),
-              onTap: () {
-                Navigator.pop(ctx);
-                _handleUpload(category: UploadCategory.document);
-              },
-            ),
-            ListTile(
-              leading: ThemeIcon('musicNote', color: cs.primary),
-              title: Text('Upload Audio', style: TextStyle(color: cs.onSurface)),
-              onTap: () {
-                Navigator.pop(ctx);
-                _handleUpload(category: UploadCategory.audio);
-              },
-            ),
-            ListTile(
-              leading: ThemeIcon('folder', color: cs.primary),
-              title: Text('Upload Other File', style: TextStyle(color: cs.onSurface)),
-              subtitle: Text('zip, ipynb, py, anything',
-                  style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 11)),
-              onTap: () {
-                Navigator.pop(ctx);
-                _handleUpload(category: UploadCategory.other);
-              },
-            ),
-          ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: ThemeIcon('folderOpen', color: cs.primary),
+                title: Text('To: ${dest.label}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: cs.onSurface)),
+                subtitle: Text('Tap to choose a folder',
+                    style: TextStyle(
+                        color: cs.onSurface.withAlpha(140), fontSize: 11)),
+                trailing: ThemeIcon('caretRight',
+                    size: 16, color: cs.onSurface.withAlpha(140)),
+                onTap: () async {
+                  final pick =
+                      await showFolderPicker(ctx, title: 'Upload to');
+                  if (pick != null) setSheetState(() => dest = pick);
+                },
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: ThemeIcon('imageSquare', color: cs.primary),
+                title: Text('Upload Photo or Video', style: TextStyle(color: cs.onSurface)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _handleUpload(
+                      category: UploadCategory.media,
+                      folderId: dest.folderId);
+                },
+              ),
+              ListTile(
+                leading: ThemeIcon('fileText', color: cs.primary),
+                title: Text('Upload Document', style: TextStyle(color: cs.onSurface)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _handleUpload(
+                      category: UploadCategory.document,
+                      folderId: dest.folderId);
+                },
+              ),
+              ListTile(
+                leading: ThemeIcon('musicNote', color: cs.primary),
+                title: Text('Upload Audio', style: TextStyle(color: cs.onSurface)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _handleUpload(
+                      category: UploadCategory.audio,
+                      folderId: dest.folderId);
+                },
+              ),
+              ListTile(
+                leading: ThemeIcon('folder', color: cs.primary),
+                title: Text('Upload Other File', style: TextStyle(color: cs.onSurface)),
+                subtitle: Text('zip, ipynb, py, anything',
+                    style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 11)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _handleUpload(
+                      category: UploadCategory.other,
+                      folderId: dest.folderId);
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );

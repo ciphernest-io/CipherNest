@@ -321,7 +321,9 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
               leading: ThemeIcon('uploadSimple', color: cs.primary),
               title: Text('Upload files',
                   style: TextStyle(color: cs.onSurface)),
-              subtitle: Text('Into this folder',
+              subtitle: Text('Into "${widget.folder?.name ?? 'My Vault'}"',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                       color: cs.onSurface.withAlpha(140), fontSize: 11)),
               onTap: () {
