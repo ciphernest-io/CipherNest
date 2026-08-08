@@ -10,11 +10,11 @@ Two devices = S (phone) and V (tablet/second phone), same account. Sync = pull-t
 
 ## 1. Basics (single device)
 
-- [ ] `[UI]` Home shows a "Folders" card FIRST in the grid; opens the browser at root.
+- [ ] `[UI]` Home shows the "Folders" card SECOND (after Photos & Videos, before Documents/Music/Other Files); opens the browser at root.
 - [ ] `[UI]` + creates a folder; appears instantly (no sync needed). Same-name sibling is refused with a snackbar.
 - [ ] `[UI]` Nested create: open folder → + → child appears with correct count chips.
 - [ ] `[UI]` Rename / Move / Delete via the ⋮ menu. Move picker indents the tree and HIDES the folder's own subtree.
-- [ ] `[UI]` Gallery → hold-to-select photos → folder icon in toolbar → move to a folder → snackbar; files appear in the folder browser; Photos tab STILL shows them (lens ON default).
+- [ ] `[UI]` Gallery → hold-to-select photos → folder icon in toolbar → move to a folder → snackbar; files appear in the folder browser; Photos tab STILL shows them (gallery always shows all media — the global lens toggle is retired).
 - [ ] `[UI]` Non-media file tapped in the browser shows the "opens from its category tab" notice (known v1 limitation — in-folder upload + open lands with Phase D).
 
 ## 2. Two-device tree sync `[LOG → pixels unverified]`
@@ -48,9 +48,8 @@ Two devices = S (phone) and V (tablet/second phone), same account. Sync = pull-t
 - [ ] `[DB]` **Cycle race:** S moves X into Y; V (offline) moves Y into X; sync both. Tree converges identically (X under Y). **V** gets the one-time snackbar "Your move of folder "Y" was undone — it conflicted with a folder move on \<S's name\>". S gets nothing. The notice does NOT repeat on later syncs.
 - [ ] `[DB]` **Folder edit-vs-delete:** V renames a folder while offline; S deletes it; V syncs → V sees "You edited folder … it's in the Recycle Bin."
 
-## 6. Lens + albums `[UI]`
+## 6. Albums `[UI]`
 
-- [ ] Settings → "Category tabs show foldered files" default ON. Turn OFF → Photos/Documents/Music/Other show only unfiled items; folder browser unchanged. Turn back ON → everything reappears.
 - [ ] Albums tab shows the "On this device — albums don't sync yet" line (and in the empty state).
 
 ## 7. Phase C — system folders + Files-tab media presentation

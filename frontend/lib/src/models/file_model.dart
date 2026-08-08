@@ -102,8 +102,8 @@ class CnestFile {
 
   /// Virtual-tree location (v15): the live folder containing this file,
   /// null = root. Op-owned — applyMergedState keeps it normalized
-  /// (live-or-root); typed tabs ignore it (lens ON) unless the user turns
-  /// folder scoping on.
+  /// (live-or-root). Typed views ignore placement (one-tree model); only a
+  /// hidden ancestor folder excludes a file from them.
   final String? folderId;
 
   /// Cascade cause (v15): the deleted folder whose delete binned this file;

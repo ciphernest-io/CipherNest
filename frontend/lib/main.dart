@@ -11,7 +11,6 @@ import 'package:material_symbols_icons/symbols_map.dart';
 import 'src/app.dart';
 import 'src/utils/byte_format.dart';
 import 'services/cache_manager_service.dart';
-import 'services/database_service.dart';
 import 'services/auto_sync_worker.dart';
 
 Future<void> main() async {
@@ -25,8 +24,6 @@ Future<void> main() async {
   Workmanager().initialize(callbackDispatcher, isInDebugMode: false);
   // Size-unit preference (1000 vs 1024) — cached before any UI formats.
   await ByteFormat.init();
-  // Folder-lens preference — cached before any list query runs.
-  await DatabaseService.initFolderLens();
   CacheManagerService().enforceCacheLimit();
   // Sweep file_picker's cache-copy directory on cold start. Per-attempt
   // cleanup happens in the upload flows' finally blocks; this catches

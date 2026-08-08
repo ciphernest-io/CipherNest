@@ -44,25 +44,6 @@ class DatabaseService extends ChangeNotifier {
   Database? _database;
   String? _currentAccountId;
 
-  /// The folder-lens setting: ON (default) = category tabs are lenses over
-  /// the WHOLE corpus regardless of folder placement; OFF = they show only
-  /// root files and folders own the rest. Cached statically so list queries
-  /// stay sync; Settings flips it via [setFolderLensAll].
-  static bool folderLensAll = true;
-  static const String kFolderLensPref = 'folder_lens_all_v1';
-
-  static Future<void> initFolderLens() async {
-    final prefs = await SharedPreferences.getInstance();
-    folderLensAll = prefs.getBool(kFolderLensPref) ?? true;
-  }
-
-  Future<void> setFolderLensAll(bool value) async {
-    folderLensAll = value;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(kFolderLensPref, value);
-    notifyListeners();
-  }
-
   void setCurrentAccount(String email) {
     _currentAccountId = email;
     notifyListeners();
@@ -1271,13 +1252,11 @@ class DatabaseService extends ChangeNotifier {
     final db = await database;
     if (_currentAccountId == null) return [];
 
-    // Lens OFF: category tabs scope to root; foldered files live in the
-    // Folders browser only. Lens ON (default): folder placement is
-    // invisible here — typed views cover the whole corpus.
+    // One-tree model: typed views cover the whole corpus — folder placement
+    // is invisible here.
     final List<Map<String, dynamic>> maps = await db.query(
       'files',
-      where: 'type = ? AND account_id = ? AND is_deleted = 0'
-          '${folderLensAll ? '' : ' AND folder_id IS NULL'}',
+      where: 'type = ? AND account_id = ? AND is_deleted = 0',
       whereArgs: [type.index, _currentAccountId],
       orderBy: 'created_at DESC',
     );
