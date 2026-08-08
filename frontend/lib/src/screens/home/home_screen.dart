@@ -211,12 +211,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final cards = <Widget>[
       _DashboardCard(
-        title: 'Folders',
-        icon: 'folderOpen',
-        color: cs.primary,
-        onTap: () => Navigator.pushNamed(context, AppRoutes.folders),
-      ),
-      _DashboardCard(
         title: 'Photos & Videos',
         icon: 'images',
         color: cs.primary,
@@ -224,6 +218,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onTap: () async {
           await Navigator.pushNamed(context, AppRoutes.gallery);
         },
+      ),
+      _DashboardCard(
+        title: 'Folders',
+        icon: 'folderOpen',
+        color: cs.primary,
+        onTap: () => Navigator.pushNamed(context, AppRoutes.folders),
       ),
       _DashboardCard(
         title: 'Documents',
@@ -280,41 +280,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             const SizedBox(height: 20),
             _VaultUsageCard(stats: _vaultStats),
             const SizedBox(height: 16),
-            // Landscape: pack the four category cards into a 2x2 grid so the
-            // user doesn't have to scroll past their full vertical stack on a
-            // short canvas.
+            // Landscape: pack the category cards into a two-column grid so
+            // the user doesn't have to scroll past their full vertical stack
+            // on a short canvas. Both layouts render the WHOLE list — never
+            // index cards by hand (a prepend once silently dropped the last
+            // card for weeks).
             OrientationBuilder(
               builder: (context, orientation) {
                 if (orientation == Orientation.landscape) {
                   return Column(
                     children: [
-                      Row(
-                        children: [
-                          Expanded(child: cards[0]),
-                          const SizedBox(width: 16),
-                          Expanded(child: cards[1]),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          Expanded(child: cards[2]),
-                          const SizedBox(width: 16),
-                          Expanded(child: cards[3]),
-                        ],
-                      ),
+                      for (var i = 0; i < cards.length; i += 2) ...[
+                        if (i > 0) const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Expanded(child: cards[i]),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: i + 1 < cards.length
+                                  ? cards[i + 1]
+                                  : const SizedBox.shrink(),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   );
                 }
                 return Column(
                   children: [
-                    cards[0],
-                    const SizedBox(height: 16),
-                    cards[1],
-                    const SizedBox(height: 16),
-                    cards[2],
-                    const SizedBox(height: 16),
-                    cards[3],
+                    for (var i = 0; i < cards.length; i++) ...[
+                      if (i > 0) const SizedBox(height: 16),
+                      cards[i],
+                    ],
                   ],
                 );
               },
