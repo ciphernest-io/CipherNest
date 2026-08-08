@@ -427,6 +427,62 @@ void main() {
       expect(state.folders['A']!.name, 'Theirs',
           reason: 'later rename wins; rename after delete is dropped');
     });
+
+    test('setFolderHidden: LWW, order- and duplicate-independent', () {
+      final ops = [
+        op(SyncOpKind.createFolder, 'A', name: 'A', wall: 1),
+        op(SyncOpKind.setFolderHidden, 'A', favorite: true, wall: 2, seq: 1),
+        op(SyncOpKind.setFolderHidden, 'A',
+            favorite: false, device: 'devB', wall: 3),
+        op(SyncOpKind.setFolderHidden, 'A', favorite: true, wall: 4, seq: 2),
+      ];
+      final baseline = replayOps(ops);
+      expect(baseline.folders['A']!.hidden, isTrue,
+          reason: 'the later-HLC hide wins');
+      final rnd = Random(11);
+      for (var i = 0; i < 25; i++) {
+        final shuffled = List.of(ops)..shuffle(rnd);
+        shuffled.add(shuffled[rnd.nextInt(shuffled.length)]);
+        expect(replayOps(shuffled).folders['A']!.hidden, isTrue);
+      }
+    });
+
+    test('setFolderHidden: survives deleteFolder cascade + restoreFolder',
+        () {
+      final state = replayOps([
+        op(SyncOpKind.createFolder, 'A', name: 'A', wall: 1),
+        op(SyncOpKind.setFolderHidden, 'A', favorite: true, wall: 2, seq: 1),
+        op(SyncOpKind.deleteFolder, 'A', wall: 3, seq: 2),
+        op(SyncOpKind.restoreFolder, 'A', wall: 4, seq: 3),
+      ]);
+      final a = state.folders['A']!;
+      expect(a.deleted, isFalse);
+      expect(a.hidden, isTrue,
+          reason: 'the flag must ride through delete + restore untouched');
+    });
+
+    test('setFolderHidden: dropped on a binned folder (delete wins)', () {
+      final state = replayOps([
+        op(SyncOpKind.createFolder, 'A', name: 'A', wall: 1),
+        op(SyncOpKind.deleteFolder, 'A', wall: 2, seq: 1),
+        op(SyncOpKind.setFolderHidden, 'A', favorite: true, wall: 3, seq: 2),
+      ]);
+      expect(state.folders['A']!.hidden, isFalse,
+          reason: 'a hide of a binned folder is dropped, mirroring rename');
+    });
+
+    test('setFolderHidden: purged or unknown id is a no-op', () {
+      final state = replayOps([
+        op(SyncOpKind.createFolder, 'A', name: 'A', wall: 1),
+        op(SyncOpKind.purgeFolder, 'A', wall: 2, seq: 1),
+        op(SyncOpKind.setFolderHidden, 'A', favorite: true, wall: 3, seq: 2),
+        op(SyncOpKind.setFolderHidden, 'ghost',
+            favorite: true, wall: 4, seq: 3),
+      ]);
+      expect(state.folders.containsKey('A'), isFalse,
+          reason: 'purge is terminal; the hide must not resurrect the row');
+      expect(state.folders.containsKey('ghost'), isFalse);
+    });
   });
 
   group('sequential equivalence with the reference state machine', () {

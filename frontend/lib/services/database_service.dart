@@ -77,7 +77,7 @@ class DatabaseService extends ChangeNotifier {
 
     final db = await openDatabase(
       path,
-      version: 16,
+      version: 17,
       onCreate: (db, version) async {
         await _createSchema(db);
         await _createSyncSchema(db);
@@ -252,6 +252,17 @@ class DatabaseService extends ChangeNotifier {
               'ALTER TABLE folders ADD COLUMN is_system INTEGER NOT NULL '
               'DEFAULT 0');
         }
+        // v17: per-folder "hide from specialized views" (synced op) plus the
+        // materialized subtree flag. Guard: a <15 upgrade just created the
+        // table WITH both columns.
+        if (oldVersion < 17 && oldVersion >= 15) {
+          await db.execute(
+              'ALTER TABLE folders ADD COLUMN is_hidden INTEGER NOT NULL '
+              'DEFAULT 0');
+          await db.execute(
+              'ALTER TABLE folders ADD COLUMN hidden_effective INTEGER NOT '
+              'NULL DEFAULT 0');
+        }
   }
 
   /// The virtual folder tree (v15). Fully op-derived — every row is
@@ -269,7 +280,9 @@ class DatabaseService extends ChangeNotifier {
         deleted_at INTEGER,
         deleted_by_folder_id TEXT,
         created_at INTEGER,
-        is_system INTEGER NOT NULL DEFAULT 0
+        is_system INTEGER NOT NULL DEFAULT 0,
+        is_hidden INTEGER NOT NULL DEFAULT 0,
+        hidden_effective INTEGER NOT NULL DEFAULT 0
       )
     ''';
 
@@ -874,6 +887,14 @@ class DatabaseService extends ChangeNotifier {
 
   Future<void> renameFolder(String id, String newName) =>
       SyncCoordinator().record(SyncOpKind.renameFolder, id, name: newName);
+
+  /// Hides/unhides [id] from the specialized views (typed tabs, gallery,
+  /// albums, stories, pickers) with subtree effect. Synced — the bool
+  /// payload deliberately rides the generic `favorite` op field (see the
+  /// [SyncOpKind.setFolderHidden] doc for why no new wire field exists).
+  Future<void> setFolderHidden(String id, bool hidden) =>
+      SyncCoordinator().record(SyncOpKind.setFolderHidden, id,
+          favorite: hidden);
 
   /// Reparents [id] under [newParentId] (null = root). Returns false —
   /// recording nothing — when the destination is the folder itself or one

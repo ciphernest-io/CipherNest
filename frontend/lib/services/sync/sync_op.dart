@@ -41,6 +41,14 @@ enum SyncOpKind {
   /// condemned-blob sweep / reconcile tombstone guard / Vault Health never
   /// need to understand tree semantics.
   purgeFolder,
+
+  /// Toggles a folder's "hidden from specialized views" flag. LWW like
+  /// [renameFolder]. The bool payload rides the EXISTING generic [SyncOp.favorite]
+  /// field (wire key 'v') — NEVER add a new wire field for a new kind:
+  /// toJson/_opToRow only serialize fields this build knows, so an older
+  /// build compacting a segment would silently strip an unknown key, while
+  /// known fields round-trip verbatim.
+  setFolderHidden,
   registerDevice,
 
   /// FORWARD-COMPAT SENTINEL, never recorded locally: an op whose kind

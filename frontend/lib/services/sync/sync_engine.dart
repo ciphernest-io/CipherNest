@@ -627,6 +627,30 @@ class SyncEngine {
     final existingFolders = {
       for (final r in folderRows) r['id'] as String: r
     };
+    // Effective hidden = own flag OR any ancestor's, walked over the SAME
+    // normalized parent chain the rows store (deleted folders keep the raw
+    // pointer, live folders resolve live-or-root) — a pure function of
+    // replay state, so it converges like every other derived column.
+    final effHidden = <String, bool>{};
+    bool isEffHidden(String startId) {
+      final memo = effHidden[startId];
+      if (memo != null) return memo;
+      var result = false;
+      String? cursor = startId;
+      final seen = <String>{};
+      while (cursor != null && seen.add(cursor)) {
+        final f = state.folders[cursor];
+        if (f == null) break;
+        if (f.hidden) {
+          result = true;
+          break;
+        }
+        cursor = f.deleted ? f.parentId : liveOrRoot(f.parentId);
+      }
+      effHidden[startId] = result;
+      return result;
+    }
+
     for (final e in state.folders.entries) {
       final id = e.key;
       final f = e.value;
@@ -640,6 +664,8 @@ class SyncEngine {
         'created_at': _folderCreateWall(opRows, id),
         // Pure function of the (synced) id — converges by construction.
         'is_system': SystemFolders.isSystemId(id) ? 1 : 0,
+        'is_hidden': f.hidden ? 1 : 0,
+        'hidden_effective': isEffHidden(id) ? 1 : 0,
       };
       final row = existingFolders[id];
       if (row == null) {
@@ -689,7 +715,7 @@ class SyncEngine {
 
     // Items this device has a pending edit on.
     const editKinds = {'renameFile', 'moveFile', 'setFavorite', 'restoreFile'};
-    const folderEditKinds = {'renameFolder', 'moveFolder'};
+    const folderEditKinds = {'renameFolder', 'moveFolder', 'setFolderHidden'};
     final pendingEdits = await db.query('sync_ops',
         where: 'account_id = ? AND pending = 1 AND device_id = ?',
         whereArgs: [accountId, thisDevice]);

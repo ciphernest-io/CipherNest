@@ -87,6 +87,12 @@ class FolderState {
   final String? parentId;
   final bool deleted;
 
+  /// Hidden from the specialized views (typed tabs, gallery, albums,
+  /// stories, pickers). OWN flag only — subtree inheritance is computed at
+  /// materialization (folders.hidden_effective). The Files browser and the
+  /// Recycle Bin ignore it entirely.
+  final bool hidden;
+
   /// Cascade cause, mirroring [FileState.deletedByFolderId]: null on the
   /// TARGETED folder (it is the bin entry), the targeted root's id on
   /// cascade-deleted descendants.
@@ -99,6 +105,7 @@ class FolderState {
     required this.name,
     required this.parentId,
     required this.deleted,
+    this.hidden = false,
     this.deletedByFolderId,
     this.tombstoneWall,
   });
@@ -107,6 +114,7 @@ class FolderState {
     String? name,
     String? Function()? parentId,
     bool? deleted,
+    bool? hidden,
     String? Function()? deletedByFolderId,
     int? Function()? tombstoneWall,
   }) =>
@@ -114,6 +122,7 @@ class FolderState {
         name: name ?? this.name,
         parentId: parentId != null ? parentId() : this.parentId,
         deleted: deleted ?? this.deleted,
+        hidden: hidden ?? this.hidden,
         deletedByFolderId: deletedByFolderId != null
             ? deletedByFolderId()
             : this.deletedByFolderId,
@@ -314,6 +323,15 @@ VaultState replayOps(Iterable<SyncOp> ops) {
         final folder = folders[op.targetId];
         if (folder != null && !folder.deleted && op.name != null) {
           folders[op.targetId] = folder.copyWith(name: op.name);
+        }
+      case SyncOpKind.setFolderHidden:
+        // LWW by fold order; delete wins (a hide of a binned folder is
+        // dropped); purged/unknown id is a no-op — mirrors renameFolder.
+        // The flag rides copyWith untouched through deleteFolder cascades,
+        // restoreFolder and moveFolder, and dies with the row on purgeFolder.
+        final folder = folders[op.targetId];
+        if (folder != null && !folder.deleted && op.favorite != null) {
+          folders[op.targetId] = folder.copyWith(hidden: op.favorite);
         }
       case SyncOpKind.deleteFolder:
         final subtree = liveSubtreeOf(op.targetId);

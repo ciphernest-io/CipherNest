@@ -105,7 +105,9 @@ Future<Database> newDeviceDb() async {
       deleted_at INTEGER,
       deleted_by_folder_id TEXT,
       created_at INTEGER,
-      is_system INTEGER NOT NULL DEFAULT 0
+      is_system INTEGER NOT NULL DEFAULT 0,
+      is_hidden INTEGER NOT NULL DEFAULT 0,
+      hidden_effective INTEGER NOT NULL DEFAULT 0
     )
   ''');
   return db;
@@ -848,6 +850,50 @@ void main() {
       // First-create-wins: the duplicate creates folded, no ghost rows.
       final all = await db.query('folders');
       expect(all.length, 3);
+    }
+    await expectConvergedMaterialization(dbA, dbB);
+  });
+
+  test(
+      'setFolderHidden: hide on A + concurrent move on B converge; '
+      'hidden_effective materializes subtree inheritance', () async {
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFolder, targetId: 'P', name: 'Parent'));
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFolder,
+        targetId: 'C',
+        name: 'Escapes',
+        folderId: 'P'));
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFolder,
+        targetId: 'C2',
+        name: 'Stays',
+        folderId: 'P'));
+    await a.syncCycle();
+    await b.syncCycle();
+
+    // Concurrent: A hides the parent while B moves C out from under it.
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.setFolderHidden, targetId: 'P', favorite: true));
+    await b.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.moveFolder, targetId: 'C', folderId: null));
+    await a.syncCycle();
+    await b.syncCycle();
+    await a.syncCycle();
+
+    for (final db in [dbA, dbB]) {
+      final p = (await folderRow(db, 'P'))!;
+      expect(p['is_hidden'], 1);
+      expect(p['hidden_effective'], 1);
+      final c = (await folderRow(db, 'C'))!;
+      expect(c['parent_id'], isNull, reason: 'moved to root');
+      expect(c['is_hidden'], 0);
+      expect(c['hidden_effective'], 0,
+          reason: 'escaped the hidden subtree by moving out');
+      final c2 = (await folderRow(db, 'C2'))!;
+      expect(c2['is_hidden'], 0);
+      expect(c2['hidden_effective'], 1,
+          reason: 'still under the hidden parent — inherited');
     }
     await expectConvergedMaterialization(dbA, dbB);
   });
