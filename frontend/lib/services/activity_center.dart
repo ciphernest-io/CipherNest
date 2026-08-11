@@ -1,6 +1,7 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:uuid/uuid.dart';
 
 import 'notify.dart';
@@ -278,6 +279,10 @@ class ActivityCenter extends ChangeNotifier {
     _recent.insert(0, task);
     if (_recent.length > _recentCap) _recent.removeLast();
 
+    if (task.visibility == ActivityVisibility.normal) {
+      _maybeNotifyBackgroundTerminal(task);
+    }
+
     if (task.visibility == ActivityVisibility.quiet) {
       // Quiet success is silent (sheet history only); quiet failure must
       // still reach the user.
@@ -313,11 +318,60 @@ class ActivityCenter extends ChangeNotifier {
     _terminalTask = null;
   }
 
-  /// Wired up across later commits: notification mirror, lifecycle watcher,
-  /// background-sync bridge. Kept idempotent.
-  Future<void> init() async {}
+  // ---- Backgrounded-completion notifications ----------------------------
+  // A task finishing while the app is paused/hidden posts a one-shot
+  // notification so "leave mid-upload" ends in a visible receipt, not
+  // silence. Channel 'activity_done' (id 42) is separate from the FGS pin
+  // (41) and the bg worker (0) so users can silence completion pings
+  // without silencing progress.
+
+  FlutterLocalNotificationsPlugin? _notifications;
+  bool _inited = false;
+
+  /// Idempotent. Foreground-isolate plugin init (the bg worker initializes
+  /// its OWN instance in its own isolate) + lifecycle watcher.
+  Future<void> init() async {
+    if (_inited) return;
+    _inited = true;
+    final plugin = FlutterLocalNotificationsPlugin();
+    try {
+      await plugin.initialize(const InitializationSettings(
+          android: AndroidInitializationSettings('@mipmap/ic_launcher')));
+      _notifications = plugin;
+    } catch (e) {
+      debugPrint('ActivityCenter: notification init failed: $e');
+    }
+    WidgetsBinding.instance.addObserver(_LifecycleWatcher(this));
+    await consumePendingBgSummary();
+  }
+
+  void _maybeNotifyBackgroundTerminal(ActivityTask task) {
+    final plugin = _notifications;
+    if (plugin == null) return;
+    if (WidgetsBinding.instance.lifecycleState ==
+        AppLifecycleState.resumed) {
+      return;
+    }
+    unawaited(plugin.show(
+      42,
+      'CipherNest',
+      task.resultMessage ?? task.label,
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'activity_done',
+          'Completed activities',
+          channelDescription:
+              'Finished uploads, syncs and other activities',
+          importance: Importance.defaultImportance,
+          priority: Priority.defaultPriority,
+          autoCancel: true,
+        ),
+      ),
+    ));
+  }
 
   /// "N photos secured while you were away" — consumed on init/resume.
+  /// Wired to the background-sync bridge.
   Future<void> consumePendingBgSummary() async {}
 
   @visibleForTesting
@@ -330,5 +384,19 @@ class ActivityCenter extends ChangeNotifier {
     _fgsTrailing?.cancel();
     _fgsTrailing = null;
     _lastFgsPush = null;
+  }
+}
+
+/// The center isn't a widget — this small observer feeds it lifecycle
+/// transitions (resume → consume the background-sync away-summary).
+class _LifecycleWatcher with WidgetsBindingObserver {
+  final ActivityCenter _center;
+  _LifecycleWatcher(this._center);
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_center.consumePendingBgSummary());
+    }
   }
 }
