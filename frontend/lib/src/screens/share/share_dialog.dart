@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 import '../../config/routes.dart';
 import '../../models/file_model.dart';
 import '../../models/share_model.dart';
+import '../../../services/notify.dart';
 import '../../../services/share_service.dart';
 import '../../../services/subscription_service.dart';
 
@@ -313,11 +314,7 @@ class _ShareDialogState extends State<ShareDialog> {
             child: OutlinedButton.icon(
               onPressed: () async {
                 await Clipboard.setData(ClipboardData(text: url));
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Link copied')),
-                  );
-                }
+                Notify.info('Link copied');
               },
               icon: ThemeIcon('copy'),
               label: const Text('Copy'),

@@ -192,10 +192,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       report = await VaultHealthService().scan(accountId: account.id);
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Vault Health scan failed: $e')));
-      }
+      Notify.error('Vault Health scan failed: $e');
     }
     if (!mounted) return;
     setState(() {
@@ -211,12 +208,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _runMetadataMigration() async {
-    final messenger = ScaffoldMessenger.of(context);
     final count = await MetadataMigrationService().scanLegacyCount();
     if (!mounted) return;
     if (count == 0) {
-      messenger.showSnackBar(const SnackBar(
-          content: Text('All cloud metadata is already encrypted')));
+      Notify.info('All cloud metadata is already encrypted');
       return;
     }
     final go = await showDialog<bool>(
@@ -241,12 +236,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     if (go != true) return;
     final result = await MetadataMigrationService().run();
-    if (!mounted) return;
-    messenger.showSnackBar(SnackBar(
-      content: Text(result.failed == 0
-          ? 'Cloud metadata encrypted (${result.done} files)'
-          : 'Encrypted ${result.done}, ${result.failed} failed — re-run to retry'),
-    ));
+    if (result.failed == 0) {
+      Notify.info('Cloud metadata encrypted (${result.done} files)');
+    } else {
+      Notify.error(
+          'Encrypted ${result.done}, ${result.failed} failed — re-run to retry');
+    }
   }
 
   Future<void> _toggleBiometric(bool v) async {
@@ -266,9 +261,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final ok = await KeyManagerService().enableBiometric(password);
       if (!mounted) return;
       if (!ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Incorrect password')),
-        );
+        Notify.error('Incorrect password');
         return;
       }
       setState(() {
@@ -276,12 +269,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _bioSubtitleOverride = null;
       });
     } on BiometricUnlockException catch (e) {
-      if (!mounted || e.code == BiometricUnlockError.userCanceled) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content:
-                Text('Could not enable fingerprint unlock (${e.code.name})')),
-      );
+      if (e.code == BiometricUnlockError.userCanceled) return;
+      Notify.error('Could not enable fingerprint unlock (${e.code.name})');
     }
   }
 
@@ -299,7 +288,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _originalLimitGB = _cacheLimitGB; // Sync them, so button disables
         _isLoading = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cache limit saved & applied')));
+      Notify.info('Cache limit saved & applied');
       _loadStats(); // Reload stats to show freed space
     }
   }
@@ -419,7 +408,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await tempDir.create();
     }
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cache cleared')));
+      Notify.info('Cache cleared');
       _loadStats();
     }
   }
@@ -506,11 +495,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         (s) => s.isGranted || s.isLimited,
       );
       if (!allGranted) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Media permissions are required for auto-sync')),
-          );
-        }
+        Notify.error('Media permissions are required for auto-sync');
         return;
       }
       // Notifications: non-fatal if denied — the upload foreground service

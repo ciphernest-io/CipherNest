@@ -28,6 +28,7 @@ import '../../../services/recycle_bin_service.dart';
 import '../../../services/auto_sync_service.dart';
 import '../../../services/file_metadata_service.dart';
 import '../../../services/image_edit_service.dart';
+import '../../../services/notify.dart';
 import '../../../services/video_streaming_server.dart';
 import '../../widgets/activity_pill.dart';
 import '../../widgets/file_actions.dart';
@@ -608,14 +609,12 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       // The row purge didn't land (db closed mid-purge, disk full) — the
       // file still exists, so it must not vanish from the pager or claim
       // success.
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Couldn\'t delete — please try again')));
+      Notify.error('Couldn\'t delete — please try again');
       return;
     }
     _removeCurrentFromList();
     if (_currentFiles.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Permanently deleted')));
+      Notify.info('Permanently deleted');
     }
   }
 
@@ -627,8 +626,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     if (!mounted) return;
     _removeCurrentFromList();
     if (_currentFiles.isNotEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Restored')));
+      Notify.info('Restored');
     }
   }
 
@@ -673,16 +671,10 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       _removeCurrentFromList();
 
       if (_currentFiles.isNotEmpty) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Moved to Recycle Bin')));
+        Notify.info('Moved to Recycle Bin');
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
-      }
+      Notify.error('Delete failed: $e');
     }
   }
 
@@ -693,11 +685,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     await DatabaseService().setFavorite(file.id, next);
     final updated = file.copyWith(isFavorite: next);
     setState(() => _currentFiles[_currentIndex] = updated);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(next ? 'Added to favorites' : 'Removed from favorites')),
-      );
-    }
+    Notify.info(next ? 'Added to favorites' : 'Removed from favorites');
   }
 
   /// Opens the info-sheet's Edit dialog: rename + change captured date/time
@@ -739,13 +727,10 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   Future<void> _openEditor() async {
     if (_currentFiles.isEmpty) return;
     final source = _currentFiles[_currentIndex];
-    final messenger = ScaffoldMessenger.of(context);
 
     final loaded = await _currentImageBytes();
     if (loaded == null) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Could not load image to edit')),
-      );
+      Notify.error('Could not load image to edit');
       return;
     }
 
@@ -813,16 +798,12 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         }
         _hasDeleted = true; // re-using the gallery-refresh flag
       });
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            mode == _SaveMode.replace ? 'Photo replaced' : 'Edited copy saved',
-          ),
-        ),
+      Notify.info(
+        mode == _SaveMode.replace ? 'Photo replaced' : 'Edited copy saved',
       );
     } catch (e) {
       if (mounted) Navigator.of(context).pop(); // dismiss progress
-      messenger.showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      Notify.error('Save failed: $e');
     }
   }
 
@@ -955,7 +936,6 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   Future<void> _copyToClipboard() async {
     if (_currentFiles.isEmpty) return;
     final file = _currentFiles[_currentIndex];
-    final messenger = ScaffoldMessenger.of(context);
     final isImage = file.type == CnestFileType.image &&
         !['mp4', 'mov', 'avi', 'mkv']
             .contains(file.filename.split('.').last.toLowerCase());
@@ -964,29 +944,22 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         final bytes = await _currentImageBytes();
         if (bytes == null) throw Exception('Could not load image');
         await Pasteboard.writeImage(bytes);
-        messenger.showSnackBar(
-          const SnackBar(content: Text('Image copied to clipboard')),
-        );
+        Notify.info('Image copied to clipboard');
       } else {
         await Clipboard.setData(ClipboardData(text: file.filename));
-        messenger.showSnackBar(
-          const SnackBar(content: Text('Filename copied to clipboard')),
-        );
+        Notify.info('Filename copied to clipboard');
       }
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Copy failed: $e')));
+      Notify.error('Copy failed: $e');
     }
   }
 
   Future<void> _printCurrent() async {
     if (_currentFiles.isEmpty) return;
-    final messenger = ScaffoldMessenger.of(context);
     // Video bytes can't be laid out as a PDF image — same "Invalid image
     // data" failure as the thumbnail path.
     if (_currentIsVideo) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text("Videos can't be printed")),
-      );
+      Notify.error("Videos can't be printed");
       return;
     }
     try {
@@ -1006,7 +979,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         },
       );
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Print failed: $e')));
+      Notify.error('Print failed: $e');
     }
   }
 
@@ -1017,13 +990,10 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   Future<void> _setAsWallpaper() async {
     if (_currentFiles.isEmpty) return;
     final file = _currentFiles[_currentIndex];
-    final messenger = ScaffoldMessenger.of(context);
 
     final ext = file.filename.split('.').last.toLowerCase();
     if (const {'mp4', 'mov', 'avi', 'mkv'}.contains(ext)) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text("Videos can't be set as wallpaper")),
-      );
+      Notify.error("Videos can't be set as wallpaper");
       return;
     }
 
@@ -1039,12 +1009,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       await tempFile.writeAsBytes(bytes);
 
       await AsyncWallpaper.setWallpaperFromFile(tempFile.path, location);
-      if (!mounted) return;
-      messenger.showSnackBar(const SnackBar(content: Text('Wallpaper set')));
+      Notify.info('Wallpaper set');
     } catch (e) {
-      if (mounted) {
-        messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
-      }
+      Notify.error('Failed: $e');
     } finally {
       try {
         if (tempFile != null && await tempFile.exists()) {
@@ -1657,7 +1624,6 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   Future<void> _captureVideoFrame() async {
     final file = _currentFiles[_currentIndex];
     final controller = _activeVideo;
-    final messenger = ScaffoldMessenger.of(context);
     try {
       String? source;
       if (file.localPath != null && File(file.localPath!).existsSync()) {
@@ -1689,11 +1655,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         _currentFiles.insert(insertAt, saved);
         _hasDeleted = true; // reuse the gallery-refresh flag
       });
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Frame saved to vault')),
-      );
+      Notify.info('Frame saved to vault');
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Capture failed: $e')));
+      Notify.error('Capture failed: $e');
     }
   }
 
@@ -3240,12 +3204,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
         final short = e.toString().length > 100
             ? '${e.toString().substring(0, 100)}…'
             : e.toString();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("Couldn't play this video: $short"),
-            duration: const Duration(seconds: 4),
-          ),
-        );
+        Notify.error("Couldn't play this video: $short");
       }
     }
   }

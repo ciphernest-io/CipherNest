@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../services/database_service.dart';
+import '../../../services/notify.dart';
 import '../../../services/recycle_bin_service.dart';
 import '../../models/file_model.dart';
 import '../../models/folder_model.dart';
@@ -97,9 +98,7 @@ class _FolderBinDetailScreenState extends State<FolderBinDetailScreen> {
     );
     if (ok != true) return;
     await DatabaseService().restoreFile(file.id);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('"${file.filename}" restored')));
+    Notify.info('"${file.filename}" restored');
   }
 
   @override

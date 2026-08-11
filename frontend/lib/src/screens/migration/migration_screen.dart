@@ -8,6 +8,7 @@ import '../../config/routes.dart';
 
 import '../../../services/activity_center.dart';
 import '../../../services/migration_service.dart';
+import '../../../services/notify.dart';
 
 enum _MigrationPhase { choosing, selectingAlbums, scanning, ready, migrating, paused, complete }
 
@@ -81,12 +82,8 @@ class _MigrationScreenState extends State<MigrationScreen> {
     setState(() => _phase = _MigrationPhase.scanning);
     final permission = await PhotoManager.requestPermissionExtend();
     if (!permission.isAuth) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Media permissions required')),
-        );
-        setState(() => _phase = _MigrationPhase.choosing);
-      }
+      Notify.error('Media permissions required');
+      if (mounted) setState(() => _phase = _MigrationPhase.choosing);
       return;
     }
 
@@ -178,16 +175,12 @@ class _MigrationScreenState extends State<MigrationScreen> {
         });
       }
     } catch (e) {
-      // Most common: cloud reconnect needed. Surface as a snackbar and
-      // drop back to the choosing phase so the user can bail cleanly.
+      // Most common: cloud reconnect needed. The task terminal is the
+      // surface (pill flash + sheet history); drop back to the choosing
+      // phase so the user can bail cleanly.
       task.fail(e.toString().replaceFirst('Bad state: ', ''));
       if (!mounted) return;
       setState(() => _phase = _MigrationPhase.choosing);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(e.toString().replaceFirst('Bad state: ', '')),
-        ),
-      );
     } finally {
       _task = null;
     }

@@ -4,6 +4,7 @@ import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 
 import '../../models/share_model.dart';
+import '../../../services/notify.dart';
 import '../../../services/share_service.dart';
 
 class ActiveSharesScreen extends StatefulWidget {
@@ -52,11 +53,7 @@ class _ActiveSharesScreenState extends State<ActiveSharesScreen> {
       await ShareService().revokeShare(share.id);
       _refresh();
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Revoke failed: $e')),
-        );
-      }
+      Notify.error('Revoke failed: $e');
     }
   }
 
@@ -163,13 +160,9 @@ class _ActiveSharesScreenState extends State<ActiveSharesScreen> {
                           icon: ThemeIcon('copy', size: 14),
                           label: const Text('Copy'),
                           onPressed: () async {
-                            final messenger = ScaffoldMessenger.of(context);
                             await Clipboard.setData(
                                 ClipboardData(text: share.shareUrl));
-                            messenger.showSnackBar(
-                              const SnackBar(
-                                  content: Text('Link copied')),
-                            );
+                            Notify.info('Link copied');
                           },
                         ),
                         const Spacer(),

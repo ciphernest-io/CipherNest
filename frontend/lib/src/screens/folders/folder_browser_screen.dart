@@ -16,7 +16,6 @@ import '../../../services/encryption_service.dart';
 import '../../../services/saf_folder_import.dart';
 import '../../../services/upload_foreground_guard.dart';
 import '../../../services/upload_pipeline.dart';
-import '../../config/theme_controller.dart';
 import '../../models/file_model.dart';
 import '../../models/folder_model.dart';
 import '../../utils/bulk_ops.dart';
@@ -122,10 +121,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       return false;
     }
     if (siblings.contains(name.toLowerCase())) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('A folder named "$name" already exists here')));
-      }
+      Notify.error('A folder named "$name" already exists here');
       return true;
     }
     return false;
@@ -169,9 +165,8 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
         title: 'Move "${folder.name}" to', excludeSubtreeOf: folder.id);
     if (pick == null) return;
     final moved = await DatabaseService().moveFolder(folder.id, pick.folderId);
-    if (!moved && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('A folder can\'t be moved into itself')));
+    if (!moved) {
+      Notify.error('A folder can\'t be moved into itself');
     }
   }
 
@@ -223,9 +218,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     final pick = await showFolderPicker(context);
     if (pick == null) return;
     await DatabaseService().moveFileToFolder(file.id, pick.folderId);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Moved to "${pick.label}"')));
+    Notify.info('Moved to "${pick.label}"');
   }
 
   Future<void> _moveSelectedFiles() async {
@@ -381,17 +374,13 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     try {
       tree = await SafFolderImport.pickTree();
     } on PlatformException {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text(
-              'Couldn\'t read that folder — try "Upload files" instead.')));
+      Notify.error('Couldn\'t read that folder — try "Upload files" instead.');
       return;
     }
     if (tree == null || !mounted) return; // cancelled
     final picked = tree;
     if (picked.entries.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('That folder has no files.')));
+      Notify.error('That folder has no files.');
       return;
     }
 
@@ -755,10 +744,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
         await AudioPlayerService().playQueue([file],
             startIndex: 0, sourceName: widget.folder?.name ?? 'Folders');
       } catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Could not play: $e'),
-            backgroundColor: ThemeController().tokens.danger));
+        Notify.error('Could not play: $e');
       }
       return;
     }
@@ -779,11 +765,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       final result = await OpenFile.open(tempFile.path);
       if (result.type != ResultType.done) throw Exception(result.message);
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Could not open file: $e'),
-            backgroundColor: ThemeController().tokens.danger));
-      }
+      Notify.error('Could not open file: $e');
     } finally {
       if (mounted) setState(() => _openingFileId = null);
     }

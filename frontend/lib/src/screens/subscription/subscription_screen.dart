@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../services/notify.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
@@ -50,13 +51,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   }
 
   void _restorePurchase() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Purchase restore lands with billing in v1.1.',
-        ),
-      ),
-    );
+    Notify.info('Purchase restore lands with billing in v1.1.');
   }
 
   @override

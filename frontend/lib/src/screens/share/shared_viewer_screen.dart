@@ -16,6 +16,7 @@ import 'package:video_player/video_player.dart';
 
 import '../../../crypto/aes_gcm.dart';
 import '../../../services/encryption_service.dart';
+import '../../../services/notify.dart';
 
 /// Receives a CipherNest magic link (either via the `ciphernest://` custom
 /// scheme or an `https://<AppConstants.shareHost>/s/...` App Link) and
@@ -596,10 +597,8 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
               label: const Text('Open with…'),
               onPressed: () async {
                 final r = await OpenFile.open(f.path);
-                if (r.type != ResultType.done && mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Cannot open: ${r.message}')),
-                  );
+                if (r.type != ResultType.done) {
+                  Notify.error('Cannot open: ${r.message}');
                 }
               },
             ),
@@ -609,11 +608,7 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
               label: const Text('Copy file path'),
               onPressed: () async {
                 await Clipboard.setData(ClipboardData(text: f.path));
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Path copied')),
-                  );
-                }
+                Notify.info('Path copied');
               },
             ),
           ],

@@ -215,9 +215,7 @@ class _FoldersBinTabState extends State<_FoldersBinTab> {
   Future<void> _restore(CnestFolder folder) async {
     if (!await confirmRestoreFolder(context, folder)) return;
     await DatabaseService().restoreFolder(folder.id);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text('"${folder.name}" restored')));
+    Notify.info('"${folder.name}" restored');
   }
 
   Future<void> _purge(CnestFolder folder) async {
@@ -225,10 +223,8 @@ class _FoldersBinTabState extends State<_FoldersBinTab> {
     if (!await confirmPurgeFolder(context, folder, count)) return;
     final purged =
         await RecycleBinService().purgeFolderPermanently(folder.id);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('"${folder.name}" and $purged item'
-            '${purged == 1 ? '' : 's'} permanently deleted')));
+    Notify.info('"${folder.name}" and $purged item'
+        '${purged == 1 ? '' : 's'} permanently deleted');
   }
 
   @override
@@ -643,10 +639,7 @@ class _BinSearchResultTile extends StatelessWidget {
           : TextButton(
               onPressed: () async {
                 await DatabaseService().restoreFile(file.id);
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                      content: Text('"${file.filename}" restored')));
-                }
+                Notify.info('"${file.filename}" restored');
               },
               child: const Text('Restore'),
             ),
@@ -683,10 +676,7 @@ class _RestoreFolderCta extends StatelessWidget {
           onPressed: () async {
             if (!await confirmRestoreFolder(context, folder)) return;
             await DatabaseService().restoreFolder(folder.id);
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                  content: Text('"${folder.name}" restored')));
-            }
+            Notify.info('"${folder.name}" restored');
           },
           child: Text('Restore "${folder.name}"',
               maxLines: 1, overflow: TextOverflow.ellipsis),

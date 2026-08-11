@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../services/key_manager_service.dart';
+import '../../../services/notify.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
 import '../../utils/wordlists.dart';
@@ -191,10 +192,7 @@ class _DisplayStage extends StatelessWidget {
     );
     if (proceed == true) {
       await Clipboard.setData(ClipboardData(text: phrase));
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Copied. Wipe your clipboard soon.')),
-      );
+      Notify.info('Copied. Wipe your clipboard soon.');
     }
   }
 }

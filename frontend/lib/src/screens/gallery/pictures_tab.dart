@@ -425,7 +425,6 @@ class PicturesTabState extends State<PicturesTab> {
 
   Future<void> handleSync() async {
     await SyncService().syncNow(force: true);
-    if (!mounted) return;
     // Honest outcome: an offline cycle or failed uploads must never read
     // as "Sync complete".
     final String msg;
@@ -442,7 +441,9 @@ class PicturesTabState extends State<PicturesTab> {
         msg = 'Sync complete';
       }
     }
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    final bool syncFailed = !SyncService().lastCycleOffline &&
+        (SyncService().lastAutoSyncResult?.failed ?? 0) > 0;
+    syncFailed ? Notify.error(msg) : Notify.info(msg);
   }
 
 

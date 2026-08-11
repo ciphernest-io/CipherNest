@@ -13,6 +13,7 @@ import '../../../services/cloud/cloud_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/encryption_service.dart';
+import '../../../services/notify.dart';
 import '../../../services/sync_service.dart';
 import '../../widgets/file_actions.dart';
 import '../share/share_dialog.dart';
@@ -74,12 +75,7 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
       final result = await OpenFile.open(tempFile.path);
       if (result.type != ResultType.done) throw Exception(result.message);
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not open file: $e'),
-              backgroundColor: ThemeController().tokens.danger),
-        );
-      }
+      Notify.error('Could not open file: $e');
     } finally {
       if (mounted) setState(() => _openingFileId = null);
     }

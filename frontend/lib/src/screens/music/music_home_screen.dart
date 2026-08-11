@@ -7,6 +7,7 @@ import '../../../services/audio_player_service.dart';
 import '../../../services/auto_sync_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/database_service.dart';
+import '../../../services/notify.dart';
 import '../../../services/sync_service.dart';
 import '../../config/theme_controller.dart';
 import '../../models/album_model.dart';
@@ -284,13 +285,7 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
               sourceName: sourceName,
             );
           } catch (e) {
-            if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Could not play: $e'),
-                backgroundColor: ThemeController().tokens.danger,
-              ),
-            );
+            Notify.error('Could not play: $e');
           }
         },
         menuBuilder: _trackMenu,

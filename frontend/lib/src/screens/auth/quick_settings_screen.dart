@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../services/auto_sync_worker.dart';
 import '../../../services/biometric_unlock_service.dart';
 import '../../../services/key_manager_service.dart';
+import '../../../services/notify.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/password_confirm_dialog.dart';
@@ -66,19 +67,13 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
       final ok = await KeyManagerService().enableBiometric(password);
       if (!mounted) return;
       if (!ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Incorrect password')),
-        );
+        Notify.error('Incorrect password');
         return;
       }
       setState(() => _bioOn = true);
     } on BiometricUnlockException catch (e) {
-      if (!mounted || e.code == BiometricUnlockError.userCanceled) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content:
-                Text('Could not enable fingerprint unlock (${e.code.name})')),
-      );
+      if (e.code == BiometricUnlockError.userCanceled) return;
+      Notify.error('Could not enable fingerprint unlock (${e.code.name})');
     }
   }
 

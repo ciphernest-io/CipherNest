@@ -7,6 +7,7 @@ import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/auto_sync_service.dart';
 import '../../../services/sync_service.dart';
+import '../../../services/notify.dart';
 import 'pictures_tab.dart';
 import 'image_viewer_screen.dart';
 
@@ -58,11 +59,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         allFiles.where((f) => !existingIds.contains(f.id)).toList();
 
     if (available.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('All photos are already in this album')),
-        );
-      }
+      Notify.info('All photos are already in this album');
       return;
     }
 
@@ -86,11 +83,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   Future<void> _removeFromAlbum(CnestFile file) async {
     await DatabaseService().removeFileFromAlbum(widget.album.id, file.id);
     _reload();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Removed from album')),
-      );
-    }
+    Notify.info('Removed from album');
   }
 
   Future<void> _handleDelete(CnestFile file) async {
@@ -127,16 +120,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       DatabaseBackupService().scheduleBackup();
 
       _reload();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Moved to Recycle Bin')),
-        );
-      }
+      Notify.info('Moved to Recycle Bin');
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Delete failed: $e')));
-      }
+      Notify.error('Delete failed: $e');
     }
   }
 

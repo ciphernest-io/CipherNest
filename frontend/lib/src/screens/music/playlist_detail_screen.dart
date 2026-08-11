@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../services/audio_player_service.dart';
 import '../../../services/database_service.dart';
+import '../../../services/notify.dart';
 import '../../models/album_model.dart';
 import '../../models/file_model.dart';
 import '../../widgets/activity_pill.dart';
@@ -94,13 +95,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
         await service.toggleShuffle();
       }
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Could not play: $e'),
-          backgroundColor: Theme.of(context).colorScheme.error,
-        ),
-      );
+      Notify.error('Could not play: $e');
     }
   }
 

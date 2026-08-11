@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../services/database_service.dart';
+import '../../../services/notify.dart';
 import '../../models/album_model.dart';
 import '../../models/file_model.dart';
 import '../../widgets/theme_icon.dart';
@@ -19,13 +20,10 @@ class PlaylistPickerSheet extends StatelessWidget {
   }
 
   Future<void> _add(BuildContext context, CnestAlbum playlist) async {
-    final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
     await DatabaseService().addFileToAlbum(playlist.id, file.id);
     navigator.pop();
-    messenger.showSnackBar(
-      SnackBar(content: Text('Added to ${playlist.name}')),
-    );
+    Notify.info('Added to ${playlist.name}');
   }
 
   Future<void> _createAndAdd(BuildContext context) async {

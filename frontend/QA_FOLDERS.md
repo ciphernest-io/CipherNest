@@ -87,7 +87,22 @@ Everything in this section is `[UI]` + real-cloud plumbing — zero property-tes
 - [ ] `[DB]` **Bin viewer regression (the clock/detach bug):** open a photo INSIDE a binned folder's drill-in, tap delete, CANCEL the dialog → restoring the folder must still restore that photo (the old bug detached it via a second deleteFile op).
 - [ ] `[UI]` **Counts:** a folder holding only a subfolder reads "1 item"; Phone Backup counts its device folder. Delete confirm names subtree totals ("N folders and M files inside").
 
-## 10. Sweep (can't wait 30 days)
+## 10. Activity pill & notifications `[UI]` — all-new surface, zero prior art
+
+- [ ] **Pill placement per screen:** start an upload, then visit — gallery (pill floats ABOVE the bottom nav), Music with a queue playing (above the MiniPlayerBar) and without (low position), the photo viewer (above the action pill + filmstrip), Settings/Documents/Home (low position). Never covers tappable chrome.
+- [ ] **Toast pass-through:** while a toast is visible, tap a grid tile BESIDE it — the tap must land. Swipe the toast → gone instantly. A second toast replaces the first (no stale queue).
+- [ ] **Pill behavior:** tap → task sheet (running rows with progress bars, recent history, "Playing <track>" row when music plays → taps into Now Playing). Swipe pill away → hidden, work continues; next task event re-shows it. Multi-task: pill fronts the priority task with a "+N" chip.
+- [ ] **Upload story:** multi-file upload from home → pill counts "Encrypting 3/10…", terminal flash shows the summary ("10 files secured"), sheet's Recent keeps it. FAB just shows busy (counts live in the pill now).
+- [ ] **Backgrounded upload:** background the app mid-batch → the "Securing your file…" notification now shows LIVE text + a determinate progress bar; tap opens the app; completion while backgrounded posts a "Completed activities" notification.
+- [ ] `[DB]` **BG-sync live bridge:** with background mode on, force a worker run (adb `cmd jobscheduler run`) WHILE the app is open → pill shows "Backing up N/M" live and the gallery refreshes the moment it finishes (no more randomly-appearing photos). Kill the app, let a worker run finish, reopen → "N photos secured while you were away" entry + gallery current.
+- [ ] **Migration controls from the sheet:** start a migration, leave the screen, open the sheet → pause/resume/cancel work; reopen the migration screen → its state agrees (paused shows paused).
+- [ ] **Sync Now reentrancy:** tap Sync Now while a backup is already running → "Backup already running" toast, no duplicate run.
+- [ ] **Honest bulk counts:** bulk ops (restore/delete/move ≥5 items) run as pill tasks with real success counts — force a failure (airplane mode mid-batch on delete-forever) and check the "N failed" tail appears instead of a clean count.
+- [ ] **Quiet failures:** a failed vault-index backup or sweep surfaces as an error toast; successes stay silent (sheet history only).
+- [ ] **Share/save non-blocking:** "Send file" on a large cloud-only video → pill counts the decrypt, you can keep browsing, the system share sheet opens when done. Same for Save to device (confirm dialog first, then pill).
+- [ ] **Stability:** switch themes mid-task (pill survives, restyled); hot restart while a bg worker runs (no port crash, progress resumes); rotate mid-task.
+
+## 11. Sweep (can't wait 30 days)
 
 The folder-aware sweep is `[DB]`-tested (expiry math, folder-first ordering, orphan fallback). On-device spot check if desired: none practical without clock games — trust the tests here, or temporarily shorten the TTL in a debug build.
 

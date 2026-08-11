@@ -13,6 +13,7 @@ import '../../utils/byte_format.dart';
 import '../../../services/database_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/cloud/account_registry.dart';
+import '../../../services/notify.dart';
 import '../../../services/sync_service.dart';
 import '../../../services/sync/sync_coordinator.dart';
 import '../../../services/upload_pipeline.dart';
@@ -49,15 +50,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _showConflicts() {
     final messages = SyncCoordinator().conflicts.value;
-    if (messages.isEmpty || !mounted) return;
+    if (messages.isEmpty) return;
     final text = messages.length == 1
         ? messages.first
         : '${messages.length} files were changed on another device. '
             'Deletions won; edits are safe in the Recycle Bin.';
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(text),
-      duration: const Duration(seconds: 6),
-    ));
+    Notify.info(text);
     SyncCoordinator().clearConflicts();
   }
 
