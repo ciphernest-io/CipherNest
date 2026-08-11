@@ -102,7 +102,7 @@ class _TrackPickerScreenState extends State<TrackPickerScreen> {
                         size: 22,
                       ),
                       const SizedBox(width: 12),
-                      const TrackArt(),
+                      TrackArt(file: file),
                       const SizedBox(width: 14),
                       Expanded(
                         child: Text(

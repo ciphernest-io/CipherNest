@@ -5,6 +5,7 @@ import '../../../services/audio_player_service.dart';
 import '../../../services/database_service.dart';
 import '../../config/theme_controller.dart';
 import '../../models/file_model.dart';
+import '../../widgets/doc_thumbnail.dart';
 import '../../widgets/theme_icon.dart';
 import 'audio_details_screen.dart';
 import 'playlist_picker_sheet.dart';
@@ -121,16 +122,22 @@ class NowPlayingScreen extends StatelessWidget {
                     child: Center(
                       child: AspectRatio(
                         aspectRatio: 1,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: cs.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(t.rCardLg),
-                          ),
-                          child: Center(
-                            child: ThemeIcon(
-                              'musicNote',
-                              size: 120,
-                              color: cs.onSurface.withAlpha(160),
+                        child: DocThumbnail(
+                          key: ValueKey('now_${current.id}'),
+                          file: current,
+                          borderRadius: BorderRadius.circular(t.rCardLg),
+                          fallback: Container(
+                            decoration: BoxDecoration(
+                              color: cs.surfaceContainerHighest,
+                              borderRadius:
+                                  BorderRadius.circular(t.rCardLg),
+                            ),
+                            child: Center(
+                              child: ThemeIcon(
+                                'musicNote',
+                                size: 120,
+                                color: cs.onSurface.withAlpha(160),
+                              ),
                             ),
                           ),
                         ),

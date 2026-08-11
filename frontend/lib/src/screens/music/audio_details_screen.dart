@@ -138,7 +138,7 @@ class _AudioDetailsScreenState extends State<AudioDetailsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
-          const Center(child: TrackArt(size: 180, iconSize: 72)),
+          Center(child: TrackArt(size: 180, iconSize: 72, file: _file)),
           const SizedBox(height: 20),
           Text(
             AudioPlayerService.displayTitle(_file),

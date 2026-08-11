@@ -4,21 +4,25 @@ import 'package:just_audio/just_audio.dart';
 import '../../../../services/audio_player_service.dart';
 import '../../../config/theme_controller.dart';
 import '../../../models/file_model.dart';
+import '../../../widgets/doc_thumbnail.dart';
 import '../../../widgets/theme_icon.dart';
 import '../now_playing_screen.dart';
 
-/// Square track-art tile. Until ID3 art extraction lands, every track gets
-/// the Samsung-style note-on-grey placeholder.
+/// Square track-art tile. Renders the track's embedded cover art (uploaded
+/// as its encrypted thumbnail) when [file] carries one; the Samsung-style
+/// note-on-grey placeholder otherwise (and for legacy rows uploaded before
+/// art extraction).
 class TrackArt extends StatelessWidget {
   final double size;
   final double? iconSize;
-  const TrackArt({super.key, this.size = 48, this.iconSize});
+  final CnestFile? file;
+  const TrackArt({super.key, this.size = 48, this.iconSize, this.file});
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final t = ThemeController().tokens;
-    return Container(
+    final placeholder = Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
@@ -32,6 +36,16 @@ class TrackArt extends StatelessWidget {
           color: cs.onSurface.withAlpha(160),
         ),
       ),
+    );
+    final f = file;
+    if (f == null || f.thumbnailCloudId == null) return placeholder;
+    return DocThumbnail(
+      key: ValueKey('art_${f.id}'),
+      file: f,
+      width: size,
+      height: size,
+      borderRadius: BorderRadius.circular(t.rIc),
+      fallback: placeholder,
     );
   }
 }
@@ -65,7 +79,7 @@ class TrackRow extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
               children: [
-                const TrackArt(),
+                TrackArt(file: file),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(
@@ -141,18 +155,28 @@ class MiniPlayerBar extends StatelessWidget {
             child: Row(
               children: [
                 const SizedBox(width: 4),
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: cs.surfaceContainerHighest,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Center(
-                    child: ThemeIcon(
-                      'musicNote',
-                      size: 18,
-                      color: cs.onSurface.withAlpha(160),
+                ClipOval(
+                  child: SizedBox(
+                    width: 40,
+                    height: 40,
+                    child: DocThumbnail(
+                      key: ValueKey('mini_${current.id}'),
+                      file: current,
+                      width: 40,
+                      height: 40,
+                      fallback: Container(
+                        decoration: BoxDecoration(
+                          color: cs.surfaceContainerHighest,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Center(
+                          child: ThemeIcon(
+                            'musicNote',
+                            size: 18,
+                            color: cs.onSurface.withAlpha(160),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),

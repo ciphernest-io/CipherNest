@@ -8,6 +8,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../src/models/file_model.dart';
+import 'cloud/cloud_service.dart';
+import 'encryption_service.dart';
 import 'video_streaming_server.dart';
 
 /// App-wide music player. One instance owns the [AudioPlayer], the queue,
@@ -79,13 +81,38 @@ class AudioPlayerService extends ChangeNotifier {
     notifyListeners();
   }
 
-  MediaItem _mediaItemFor(CnestFile file) {
+  MediaItem _mediaItemFor(CnestFile file, {Uri? artUri}) {
     return MediaItem(
       id: file.id,
       title: _showTitlesOnLockScreen ? displayTitle(file) : 'CipherNest Audio',
       artist: _showTitlesOnLockScreen ? 'Unknown' : null,
       album: _showTitlesOnLockScreen ? _queueSourceName : null,
+      artUri: artUri,
     );
+  }
+
+  /// Lock-screen album art. GATED on the same privacy flag as the titles —
+  /// a picture would defeat the "generic label" setting. Reuses the SHARED
+  /// thumb cache file (`thumb_<cloudId>.jpg`, app-private temp — the exact
+  /// artifact DocThumbnail writes), so one decrypt serves the UI and the
+  /// media session and the cache GC already knows the name. Null on any
+  /// failure/offline: the placeholder is fine.
+  Future<Uri?> _artUriFor(CnestFile file) async {
+    if (!_showTitlesOnLockScreen) return null;
+    final thumbId = file.thumbnailCloudId;
+    if (thumbId == null || file.cloudId == null) return null;
+    try {
+      final dir = await getTemporaryDirectory();
+      final cacheFile = File('${dir.path}/thumb_${file.cloudId}.jpg');
+      if (!await cacheFile.exists()) {
+        final enc = await CloudService().downloadFile(thumbId);
+        final dec = await EncryptionService.decryptFile(enc);
+        await cacheFile.writeAsBytes(dec);
+      }
+      return Uri.file(cacheFile.path);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// The playable source for one track, cheapest first:
@@ -95,8 +122,11 @@ class AudioPlayerService extends ChangeNotifier {
   ///      decrypts cloud chunks on demand, so playback starts in ~a second
   ///      instead of after a full download (which is also what made the
   ///      player time out before the first byte arrived).
+  ///
+  /// Art is resolved HERE (awaited) because media-session tags are
+  /// immutable once the queue loads.
   Future<AudioSource> _sourceFor(CnestFile file) async {
-    final tag = _mediaItemFor(file);
+    final tag = _mediaItemFor(file, artUri: await _artUriFor(file));
     if (file.localPath != null) {
       final local = File(file.localPath!);
       if (await local.exists()) {
