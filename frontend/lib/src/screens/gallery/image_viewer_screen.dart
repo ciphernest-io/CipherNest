@@ -671,6 +671,23 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     }
   }
 
+  /// Hide/unhide the current file from the specialized views. The viewer
+  /// stays open (it is also the unhide surface); grids refresh via the DB
+  /// notifier, and _hasDeleted is the pop-result belt for FutureBuilder
+  /// callers.
+  Future<void> _toggleHidden() async {
+    if (_currentFiles.isEmpty) return;
+    final file = _currentFiles[_currentIndex];
+    final next = !file.isHidden;
+    await DatabaseService().setFileHidden(file.id, next);
+    if (!mounted) return;
+    setState(() {
+      _currentFiles[_currentIndex] = file.copyWith(isHidden: next);
+      _hasDeleted = true;
+    });
+    Notify.info(next ? 'Hidden from views' : 'Visible in views again');
+  }
+
   Future<void> _toggleFavorite() async {
     if (_currentFiles.isEmpty) return;
     final file = _currentFiles[_currentIndex];
@@ -1208,6 +1225,13 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                         ),
                         const PopupMenuItem(
                             value: 'print', child: Text('Print')),
+                        PopupMenuItem(
+                          value: 'hide',
+                          child: Text(
+                              _currentFiles[_currentIndex].isHidden
+                                  ? 'Unhide'
+                                  : 'Hide from views'),
+                        ),
                       ],
                       onSelected: (val) {
                         switch (val) {
@@ -1223,6 +1247,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                             break;
                           case 'print':
                             _printCurrent();
+                            break;
+                          case 'hide':
+                            _toggleHidden();
                             break;
                         }
                       },

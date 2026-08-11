@@ -399,6 +399,36 @@ class PicturesTabState extends State<PicturesTab> {
   /// Moves the selection into a picked folder (or back to root). Pure
   /// metadata — the encrypted blobs never move; the op-log carries the
   /// placement to every device.
+  /// Bulk hide from the specialized views. Always HIDES (mixed selections
+  /// resolve to hidden) — unhide is per-file in the Files browser or the
+  /// viewer, the two surfaces that still show hidden files.
+  Future<void> _hideSelected() async {
+    final ids = List<String>.from(_selectedIds);
+    if (ids.isEmpty) return;
+    final task = ids.length >= 5
+        ? ActivityCenter().start(
+            kind: ActivityKind.binOp,
+            label: 'Hiding 0/${ids.length}…',
+            total: ids.length)
+        : null;
+    final ok = await honestCount<String>(
+      ids,
+      (id) => DatabaseService().setFileHidden(id, true),
+      onEach: (d) => task?.update(d, label: 'Hiding $d/${ids.length}…'),
+    );
+    final failed = ids.length - ok;
+    final msg =
+        'Hidden from views · $ok${failed > 0 ? ' · $failed failed' : ''}';
+    if (task != null) {
+      failed > 0 ? task.fail(msg) : task.complete(msg);
+    } else {
+      failed > 0 ? Notify.error(msg) : Notify.info(msg);
+    }
+    if (!mounted) return;
+    _exitSelection();
+    _refresh();
+  }
+
   Future<void> _moveSelectedToFolder() async {
     final pick = await showFolderPicker(context);
     if (pick == null) return;
@@ -780,6 +810,11 @@ class PicturesTabState extends State<PicturesTab> {
               tooltip: 'Move to folder',
               icon: ThemeIcon('folder'),
               onPressed: () => _moveSelectedToFolder(),
+            ),
+            IconButton(
+              tooltip: 'Hide from views',
+              icon: ThemeIcon('visibility_off'),
+              onPressed: () => _hideSelected(),
             ),
             IconButton(
               icon: ThemeIcon('shareFat'),

@@ -220,6 +220,38 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     _updateSelectionClaim();
   }
 
+  /// Bulk hide from the specialized views — always HIDES; unhide is
+  /// per-row (this browser keeps showing hidden files).
+  Future<void> _hideSelectedFiles() async {
+    final ids = List<String>.from(_selectedIds);
+    if (ids.isEmpty) return;
+    final task = ids.length >= 5
+        ? ActivityCenter().start(
+            kind: ActivityKind.binOp,
+            label: 'Hiding 0/${ids.length}…',
+            total: ids.length)
+        : null;
+    final ok = await honestCount<String>(
+      ids,
+      (id) => DatabaseService().setFileHidden(id, true),
+      onEach: (d) => task?.update(d, label: 'Hiding $d/${ids.length}…'),
+    );
+    final failed = ids.length - ok;
+    final msg =
+        'Hidden from views · $ok${failed > 0 ? ' · $failed failed' : ''}';
+    if (task != null) {
+      failed > 0 ? task.fail(msg) : task.complete(msg);
+    } else {
+      failed > 0 ? Notify.error(msg) : Notify.info(msg);
+    }
+    if (!mounted) return;
+    setState(() {
+      _selectionMode = false;
+      _selectedIds.clear();
+    });
+    _updateSelectionClaim();
+  }
+
   // The in-body selection bar sits right under the AppBar — exactly where
   // the top-anchored activity pill floats. Claim clearance while it shows.
   InsetClaim? _selectionClaim;
@@ -552,6 +584,11 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
               icon: const ThemeIcon('folder'),
               onPressed: _selectedIds.isEmpty ? null : _moveSelectedFiles,
             ),
+            IconButton(
+              tooltip: 'Hide from views',
+              icon: const ThemeIcon('visibility_off'),
+              onPressed: _selectedIds.isEmpty ? null : _hideSelectedFiles,
+            ),
           ],
         ),
       ),
@@ -659,10 +696,11 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
 
   Widget _fileRow(ColorScheme cs, CnestFile file) {
     final isSelected = _selectedIds.contains(file.id);
-    final subtitle =
+    var subtitle =
         '${formatBytes(file.sizeBytes)} · ${DateFormat.yMMMd().format(file.createdAt)}';
+    if (file.isHidden) subtitle = '$subtitle · Hidden from views';
 
-    final Widget leading;
+    Widget leading;
     if (_isMedia(file)) {
       leading = ClipRRect(
         borderRadius: BorderRadius.circular(6),
@@ -707,6 +745,8 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
                 ThemeIcon(v.icon, color: v.color.withAlpha(204), size: 26)),
       );
     }
+    // Same dimmed cue hidden FOLDERS carry.
+    if (file.isHidden) leading = Opacity(opacity: 0.55, child: leading);
 
     return ListTile(
       leading: leading,
@@ -730,19 +770,28 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
               : PopupMenuButton<String>(
                   icon: ThemeIcon('dotsThreeVertical',
                       color: cs.onSurface.withAlpha(120), size: 20),
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'send', child: Text('Send file')),
-                    PopupMenuItem(
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(
+                        value: 'send', child: Text('Send file')),
+                    const PopupMenuItem(
                         value: 'save', child: Text('Save to device')),
-                    PopupMenuItem(value: 'rename', child: Text('Rename')),
-                    PopupMenuItem(
+                    const PopupMenuItem(
+                        value: 'rename', child: Text('Rename')),
+                    const PopupMenuItem(
                         value: 'move', child: Text('Move to folder')),
+                    PopupMenuItem(
+                        value: 'hide',
+                        child: Text(file.isHidden
+                            ? 'Unhide'
+                            : 'Hide from views')),
                   ],
                   onSelected: (v) => switch (v) {
                     'send' => sendFilesPlain(context, [file]),
                     'save' => saveFileToDevice(context, file),
                     'rename' => promptRenameFile(context, file),
                     'move' => _moveOneFile(file),
+                    'hide' =>
+                      DatabaseService().setFileHidden(file.id, !file.isHidden),
                     _ => null,
                   },
                 )),
