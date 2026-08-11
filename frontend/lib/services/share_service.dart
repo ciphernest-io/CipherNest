@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 import '../src/config/constants.dart';
 import '../src/models/file_model.dart';
 import '../src/models/share_model.dart';
+import 'activity_center.dart';
 import 'cloud/account_registry.dart';
 import 'cloud/cloud_service.dart';
 import 'database_service.dart';
@@ -191,12 +192,28 @@ class ShareService {
   Future<int> sweepExpired() async {
     final shares = await DatabaseService().getShares();
     int removed = 0;
-    for (final s in shares) {
-      if (s.isExpired) {
-        await revokeShare(s.id);
-        removed++;
+    // Quiet janitor: sheet-only while running, surfaces only failures.
+    final task = ActivityCenter().start(
+        kind: ActivityKind.sweep,
+        label: 'Cleaning up expired shares…',
+        visibility: ActivityVisibility.quiet);
+    try {
+      for (final s in shares) {
+        if (s.isExpired) {
+          await revokeShare(s.id);
+          removed++;
+        }
       }
+      if (removed > 0) {
+        task.complete(
+            '$removed expired share${removed == 1 ? '' : 's'} revoked');
+      } else {
+        task.discard();
+      }
+      return removed;
+    } catch (e) {
+      task.fail('Expired-share cleanup failed');
+      rethrow;
     }
-    return removed;
   }
 }

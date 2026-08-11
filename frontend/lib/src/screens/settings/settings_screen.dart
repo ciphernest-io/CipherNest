@@ -487,24 +487,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _handleBackup() async {
     setState(() => _isLoading = true);
     try {
+      // Outcome rides the backup's quiet activity task (failure toasts
+      // itself); a manual tap still deserves a positive receipt.
       await DatabaseBackupService().backupDatabase();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Vault index backed up successfully')),
-        );
-      }
+      Notify.info('Vault index backed up');
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Backup failed: $e',
-              style: TextStyle(color: Theme.of(context).colorScheme.onError),
-            ),
-            backgroundColor: Theme.of(context).colorScheme.error,
-          ),
-        );
-      }
+      Notify.error('Backup failed: $e');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }

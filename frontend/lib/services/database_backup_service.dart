@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import '../src/models/file_model.dart';
+import 'activity_center.dart';
 import 'cloud/cloud_service.dart';
 import 'database_service.dart';
 import 'device_identity_service.dart';
@@ -84,12 +85,21 @@ class DatabaseBackupService {
     if (_isBackingUp) return;
     _isBackingUp = true;
 
+    // Quiet task: debounce-triggered janitorial work — sheet history while
+    // running, surfaces ONLY a failure (as an error toast).
+    final task = ActivityCenter().start(
+        kind: ActivityKind.dbBackup,
+        label: 'Backing up vault index…',
+        visibility: ActivityVisibility.quiet);
     try {
       final dbPath = await DatabaseService().getDatabasePath();
       await DatabaseService().closeDatabase();
 
       final dbFile = File(dbPath);
-      if (!await dbFile.exists()) return;
+      if (!await dbFile.exists()) {
+        task.discard(); // nothing to back up — not a failure, not history
+        return;
+      }
       final dbBytes = await dbFile.readAsBytes();
 
       final encrypted = await EncryptionService.encryptFile(dbBytes);
@@ -115,8 +125,10 @@ class DatabaseBackupService {
       if (legacyId != null) {
         await CloudService().deleteFile(legacyId);
       }
+      task.complete('Vault index backed up');
     } catch (e) {
       debugPrint('Database backup failed: $e');
+      task.fail('Vault index backup failed');
     } finally {
       _isBackingUp = false;
     }

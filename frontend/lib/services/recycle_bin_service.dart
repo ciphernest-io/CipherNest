@@ -34,31 +34,47 @@ class RecycleBinService {
     final db = DatabaseService();
     int purged = 0;
 
-    try {
-      for (final folderId in await db.getExpiredFolderIds(ttl: ttl)) {
-        purged += await purgeFolderPermanently(folderId,
-            trackActivity: false);
-      }
-    } catch (e) {
-      debugPrint('Bin sweep: folder pass failed: $e');
-    }
+    // Quiet janitor: sheet-only while running, surfaces only failures.
+    final task = ActivityCenter().start(
+        kind: ActivityKind.sweep,
+        label: 'Cleaning up expired items…',
+        visibility: ActivityVisibility.quiet);
 
-    final List<String> expiredIds;
     try {
-      expiredIds = await db.getExpiredDeletionIds(ttl: ttl);
-    } catch (_) {
+      try {
+        for (final folderId in await db.getExpiredFolderIds(ttl: ttl)) {
+          purged += await purgeFolderPermanently(folderId,
+              trackActivity: false);
+        }
+      } catch (e) {
+        debugPrint('Bin sweep: folder pass failed: $e');
+      }
+
+      final List<String> expiredIds;
+      try {
+        expiredIds = await db.getExpiredDeletionIds(ttl: ttl);
+      } catch (_) {
+        return purged;
+      }
+      if (expiredIds.isEmpty) return purged;
+
+      final cloudIdsByFile = await _loadCloudIds(expiredIds);
+      final tempDir = await getTemporaryDirectory();
+      for (final id in expiredIds) {
+        if (await _purgeOneFile(db, tempDir, id, cloudIdsByFile[id])) {
+          purged++;
+        }
+      }
       return purged;
-    }
-    if (expiredIds.isEmpty) return purged;
-
-    final cloudIdsByFile = await _loadCloudIds(expiredIds);
-    final tempDir = await getTemporaryDirectory();
-    for (final id in expiredIds) {
-      if (await _purgeOneFile(db, tempDir, id, cloudIdsByFile[id])) {
-        purged++;
+    } finally {
+      // A no-op sweep leaves no trace; a real one leaves quiet history.
+      if (purged > 0) {
+        task.complete(
+            '$purged expired item${purged == 1 ? '' : 's'} cleaned up');
+      } else {
+        task.discard();
       }
     }
-    return purged;
   }
 
   /// Permanently deletes a binned folder: every file its cascade binned

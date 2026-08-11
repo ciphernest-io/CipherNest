@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../services/activity_center.dart';
 import '../../services/database_service.dart';
 import '../../services/file_export_service.dart';
 import '../models/file_model.dart';
@@ -9,39 +10,10 @@ import 'theme_icon.dart';
 /// The three cross-surface file actions — "send the actual file" (system
 /// share sheet), "save a decrypted copy to the device", and rename — shared
 /// by the viewer, category tabs, music menu, and the Files browser so every
-/// surface behaves identically.
-
-Future<T?> _runWithProgress<T>(
-  BuildContext context,
-  String label,
-  Future<T> Function() work,
-) async {
-  final navigator = Navigator.of(context, rootNavigator: true);
-  var dialogUp = true;
-  showDialog<void>(
-    context: context,
-    barrierDismissible: false,
-    builder: (_) => PopScope(
-      canPop: false,
-      child: AlertDialog(
-        content: Row(
-          children: [
-            const SizedBox(
-                width: 24, height: 24,
-                child: CircularProgressIndicator(strokeWidth: 2.5)),
-            const SizedBox(width: 20),
-            Expanded(child: Text(label)),
-          ],
-        ),
-      ),
-    ),
-  ).whenComplete(() => dialogUp = false);
-  try {
-    return await work();
-  } finally {
-    if (dialogUp) navigator.pop();
-  }
-}
+/// surface behaves identically. Decrypt phases run as activity-pill tasks
+/// (the old blocking "Decrypting…" modal is gone) — the user keeps
+/// browsing; the system share sheet / save dialog opens when the
+/// materialization finishes.
 
 /// Decrypts [files] into the app-private temp dir and hands them to the
 /// system share sheet (WhatsApp, Gmail, …). The receiver gets plaintext —
@@ -49,37 +21,38 @@ Future<T?> _runWithProgress<T>(
 /// by the cache GC (same artifact the documents-open flow leaves).
 Future<void> sendFilesPlain(BuildContext context, List<CnestFile> files) async {
   if (files.isEmpty) return;
-  final messenger = ScaffoldMessenger.of(context);
 
-  final xfiles = await _runWithProgress(context, 'Decrypting…', () async {
-    final out = <XFile>[];
-    for (final f in files) {
-      final plain = await FileExportService.materializePlaintext(f);
-      if (plain != null) out.add(XFile(plain.path, name: f.filename));
-    }
-    return out;
-  });
-  if (xfiles == null) return;
+  final task = ActivityCenter().start(
+      kind: ActivityKind.export,
+      label: 'Decrypting 0/${files.length}…',
+      total: files.length);
+  final out = <XFile>[];
+  var done = 0;
+  for (final f in files) {
+    final plain = await FileExportService.materializePlaintext(f);
+    if (plain != null) out.add(XFile(plain.path, name: f.filename));
+    done++;
+    task.update(done, label: 'Decrypting $done/${files.length}…');
+  }
 
-  final missing = files.length - xfiles.length;
-  if (xfiles.isEmpty) {
-    messenger.showSnackBar(const SnackBar(
-        content:
-            Text('File isn\'t downloadable yet — sync and try again.')));
+  final missing = files.length - out.length;
+  if (out.isEmpty) {
+    task.fail('File${files.length == 1 ? ' isn\'t' : 's aren\'t'} '
+        'downloadable yet — sync and try again.');
     return;
   }
-  if (missing > 0) {
-    messenger.showSnackBar(SnackBar(
-        content: Text('$missing file${missing == 1 ? ' isn\'t' : 's aren\'t'} '
-            'downloadable yet — sharing the rest.')));
-  }
-  await Share.shareXFiles(xfiles);
+  task.complete(missing > 0
+      ? '$missing file${missing == 1 ? ' isn\'t' : 's aren\'t'} '
+          'downloadable yet — sharing the rest'
+      : null);
+  // Context-free on Android (sharePositionOrigin is an iPad concern) — the
+  // sheet opens over whatever screen the user is on now.
+  await Share.shareXFiles(out);
 }
 
 /// Confirm → decrypt → save outside the vault. Media goes to the phone
 /// gallery, other types to a user-picked location.
 Future<void> saveFileToDevice(BuildContext context, CnestFile file) async {
-  final messenger = ScaffoldMessenger.of(context);
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
@@ -98,23 +71,23 @@ Future<void> saveFileToDevice(BuildContext context, CnestFile file) async {
     ),
   );
   if (confirmed != true) return;
-  if (!context.mounted) return;
 
+  final task = ActivityCenter().start(
+      kind: ActivityKind.export, label: 'Decrypting "${file.filename}"…');
   try {
-    final outcome = await _runWithProgress(
-        context, 'Decrypting…', () => FileExportService.saveToDevice(file));
-    final message = switch (outcome) {
-      SaveOutcome.savedToGallery => 'Saved to your phone\'s gallery',
-      SaveOutcome.savedToPicked => 'Saved',
-      SaveOutcome.alreadyInGallery =>
-        'This file is already in your phone\'s gallery',
-      SaveOutcome.cancelled || null => null,
-    };
-    if (message != null) {
-      messenger.showSnackBar(SnackBar(content: Text(message)));
+    final outcome = await FileExportService.saveToDevice(file);
+    switch (outcome) {
+      case SaveOutcome.savedToGallery:
+        task.complete('Saved to your phone\'s gallery');
+      case SaveOutcome.savedToPicked:
+        task.complete('Saved');
+      case SaveOutcome.alreadyInGallery:
+        task.complete('This file is already in your phone\'s gallery');
+      case SaveOutcome.cancelled:
+        task.discard();
     }
   } catch (e) {
-    messenger.showSnackBar(SnackBar(content: Text('Could not save: $e')));
+    task.fail('Could not save: $e');
   }
 }
 
