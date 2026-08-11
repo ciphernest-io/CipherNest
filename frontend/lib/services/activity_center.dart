@@ -1,10 +1,15 @@
 import 'dart:async';
+import 'dart:isolate';
+import 'dart:ui' show IsolateNameServer;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
+import 'bg_activity_bridge.dart';
 import 'notify.dart';
+import 'sync_service.dart';
 import 'upload_foreground_guard.dart';
 
 /// Enum ORDER is the pill priority — when several tasks run, the pill
@@ -329,7 +334,8 @@ class ActivityCenter extends ChangeNotifier {
   bool _inited = false;
 
   /// Idempotent. Foreground-isolate plugin init (the bg worker initializes
-  /// its OWN instance in its own isolate) + lifecycle watcher.
+  /// its OWN instance in its own isolate) + lifecycle watcher + the
+  /// background-sync bridge port.
   Future<void> init() async {
     if (_inited) return;
     _inited = true;
@@ -341,15 +347,77 @@ class ActivityCenter extends ChangeNotifier {
     } catch (e) {
       debugPrint('ActivityCenter: notification init failed: $e');
     }
+    // Hot restart leaves a stale mapping pointing at a dead port — always
+    // remove before re-registering.
+    IsolateNameServer.removePortNameMapping(kBgSyncPortName);
+    _bgPort = ReceivePort();
+    IsolateNameServer.registerPortWithName(_bgPort!.sendPort, kBgSyncPortName);
+    _bgPort!.listen(_onBgSyncMessage);
     WidgetsBinding.instance.addObserver(_LifecycleWatcher(this));
     await consumePendingBgSummary();
+  }
+
+  // ---- Background-sync bridge -------------------------------------------
+  // The WorkManager isolate streams progress here (see bg_activity_bridge)
+  // so opening the app mid-run shows "Backing up 3/10" LIVE instead of
+  // photos silently materializing.
+
+  ReceivePort? _bgPort;
+  ActivityTask? _bgSyncTask;
+
+  void _onBgSyncMessage(Object? raw) {
+    final msg = BgSyncMessage.decode(raw);
+    if (msg == null) return;
+    switch (msg.type) {
+      case BgSyncMessage.typeStarted:
+      case BgSyncMessage.typeScanning:
+        _bgSyncTask ??= start(
+            kind: ActivityKind.backup, label: 'Checking for new photos…');
+      case BgSyncMessage.typeProgress:
+        _bgSyncTask ??= start(
+            kind: ActivityKind.backup, label: 'Backing up…');
+        _bgSyncTask!.update(msg.a,
+            total: msg.b, label: 'Backing up ${msg.a}/${msg.b}');
+      case BgSyncMessage.typeTerminal:
+        final task = _bgSyncTask;
+        _bgSyncTask = null;
+        // Seen live — the away-summary would be a duplicate on next open.
+        unawaited(_clearBgSummaryPref());
+        final synced = msg.a;
+        final failed = msg.b;
+        if (task != null) {
+          final message = failed > 0
+              ? '$synced backed up · $failed failed'
+              : synced > 0
+                  ? '$synced photo${synced == 1 ? '' : 's'} secured'
+                  : 'No new photos found';
+          failed > 0 ? task.fail(message) : task.complete(message);
+        }
+        // The worker isolate's own notifier bump never crosses isolates —
+        // THIS is what makes bg-synced photos appear in the gallery live.
+        if (synced > 0) SyncService().syncNotifier.value++;
+    }
+  }
+
+  Future<void> _clearBgSummaryPref() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(kBgSyncSummaryPref);
+    } catch (_) {
+      // Best-effort — worst case the summary shows once redundantly.
+    }
   }
 
   void _maybeNotifyBackgroundTerminal(ActivityTask task) {
     final plugin = _notifications;
     if (plugin == null) return;
-    if (WidgetsBinding.instance.lifecycleState ==
-        AppLifecycleState.resumed) {
+    final state = WidgetsBinding.instance.lifecycleState;
+    // null (cold start, before the first frame) and inactive (mid
+    // transition, e.g. the share sheet is up) both count as "visible
+    // enough" — only a genuinely hidden/paused app gets the ping.
+    if (state == null ||
+        state == AppLifecycleState.resumed ||
+        state == AppLifecycleState.inactive) {
       return;
     }
     unawaited(plugin.show(
@@ -370,9 +438,31 @@ class ActivityCenter extends ChangeNotifier {
     ));
   }
 
-  /// "N photos secured while you were away" — consumed on init/resume.
-  /// Wired to the background-sync bridge.
-  Future<void> consumePendingBgSummary() async {}
+  /// "N photos secured while you were away" — a background run that ended
+  /// while the app was dead stamped a summary pref; surface it once as a
+  /// pre-completed entry (recent row + terminal pill flash), then clear.
+  Future<void> consumePendingBgSummary() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(kBgSyncSummaryPref);
+      if (raw == null) return;
+      await prefs.remove(kBgSyncSummaryPref);
+      final summary = decodeBgSummary(raw);
+      if (summary == null) return;
+      if (summary.synced == 0 && summary.failed == 0) return;
+      final message = summary.failed > 0
+          ? '${summary.synced} secured · ${summary.failed} failed while '
+              'you were away'
+          : '${summary.synced} photo${summary.synced == 1 ? '' : 's'} '
+              'secured while you were away';
+      final task =
+          start(kind: ActivityKind.backup, label: 'Background backup');
+      summary.failed > 0 ? task.fail(message) : task.complete(message);
+      if (summary.synced > 0) SyncService().syncNotifier.value++;
+    } catch (e) {
+      debugPrint('ActivityCenter: bg summary consume failed: $e');
+    }
+  }
 
   @visibleForTesting
   void debugReset() {

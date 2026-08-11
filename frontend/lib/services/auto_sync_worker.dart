@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:ui' show IsolateNameServer;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -7,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
 
 import 'auto_sync_service.dart';
+import 'bg_activity_bridge.dart';
 
 const String autoSyncTaskName = 'autoSyncTask';
 
@@ -199,6 +202,10 @@ void callbackDispatcher() {
 
     await AutoSyncScheduler._log('worker fired');
 
+    // Live bridge to the UI isolate's ActivityCenter — null when the app
+    // isn't running (or hasn't registered yet); every send is best-effort.
+    final port = IsolateNameServer.lookupPortByName(kBgSyncPortName);
+
     try {
       final notifications = FlutterLocalNotificationsPlugin();
       await notifications.initialize(
@@ -214,8 +221,30 @@ void callbackDispatcher() {
         body: 'Scanning for new photos...',
         ongoing: true,
       );
+      port?.send(BgSyncMessage.scanning());
 
-      final result = await AutoSyncService().runFullSync();
+      // Live per-asset progress: to the UI isolate AND into this worker's
+      // own notification (determinate bar). Cleared in the finally below —
+      // the AutoSyncService singleton is isolate-local but a stale closure
+      // must not outlive the run.
+      AutoSyncService().onProgress = (done, total) {
+        port?.send(BgSyncMessage.progress(done, total));
+        unawaited(_showNotification(
+          notifications,
+          title: 'CipherNest',
+          body: 'Backing up $done/$total',
+          ongoing: true,
+          progress: done,
+          max: total,
+        ));
+      };
+
+      final AutoSyncResult result;
+      try {
+        result = await AutoSyncService().runFullSync();
+      } finally {
+        AutoSyncService().onProgress = null;
+      }
 
       // Proof-of-life stamp: distinct from auto_sync_last_run (which every
       // caller writes) — this one only ever moves when the BACKGROUND
@@ -229,6 +258,17 @@ void callbackDispatcher() {
 
       // Show result notification
       if (result.synced > 0 || result.failed > 0) {
+        // Away-summary for the next app open. The UI isolate clears it the
+        // moment it sees the live terminal, so it only surfaces when the
+        // app was dead for the run.
+        await prefs.setString(
+          kBgSyncSummaryPref,
+          encodeBgSummary(
+            result.synced,
+            result.failed,
+            DateTime.now().millisecondsSinceEpoch,
+          ),
+        );
         final body = result.failed > 0
             ? '${result.synced} secured, ${result.failed} failed'
             : '${result.synced} photo${result.synced == 1 ? '' : 's'} secured';
@@ -247,11 +287,13 @@ void callbackDispatcher() {
         await notifications.cancel(0);
         await AutoSyncScheduler._log('worker done: nothing to sync');
       }
+      port?.send(BgSyncMessage.terminal(result.synced, result.failed));
 
       return true;
     } catch (e) {
       debugPrint('Auto-sync worker error: $e');
       await AutoSyncScheduler._log('worker error: $e');
+      port?.send(BgSyncMessage.terminal(0, 1));
       return false;
     }
   });
@@ -262,6 +304,8 @@ Future<void> _showNotification(
   required String title,
   required String body,
   required bool ongoing,
+  int? progress,
+  int? max,
 }) async {
   await notifications.show(
     0,
@@ -276,6 +320,10 @@ Future<void> _showNotification(
         priority: ongoing ? Priority.low : Priority.defaultPriority,
         ongoing: ongoing,
         autoCancel: !ongoing,
+        onlyAlertOnce: true,
+        showProgress: max != null,
+        maxProgress: max ?? 0,
+        progress: progress ?? 0,
       ),
     ),
   );
