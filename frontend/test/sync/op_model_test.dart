@@ -483,6 +483,64 @@ void main() {
           reason: 'purge is terminal; the hide must not resurrect the row');
       expect(state.folders.containsKey('ghost'), isFalse);
     });
+
+    test('setFileHidden: LWW, order-independent, and NEVER clobbers '
+        'setFavorite (shared payload field, distinct kinds)', () {
+      final ops = [
+        op(SyncOpKind.createFile, 'x', name: 'x.jpg', wall: 1),
+        op(SyncOpKind.setFileHidden, 'x', favorite: true, wall: 2, seq: 1),
+        op(SyncOpKind.setFavorite, 'x', favorite: true, wall: 3, seq: 2),
+        op(SyncOpKind.setFileHidden, 'x',
+            favorite: false, device: 'devB', wall: 4),
+        op(SyncOpKind.setFileHidden, 'x', favorite: true, wall: 5, seq: 3),
+      ];
+      final baseline = replayOps(ops);
+      expect(baseline.files['x']!.hidden, isTrue);
+      expect(baseline.files['x']!.favorite, isTrue,
+          reason: 'the hide ops must not touch the favorite flag');
+      final rnd = Random(13);
+      for (var i = 0; i < 25; i++) {
+        final shuffled = List.of(ops)..shuffle(rnd);
+        final s = replayOps(shuffled);
+        expect(s.files['x']!.hidden, isTrue);
+        expect(s.files['x']!.favorite, isTrue);
+      }
+    });
+
+    test('setFileHidden: survives deleteFile + restoreFile untouched', () {
+      final state = replayOps([
+        op(SyncOpKind.createFile, 'x', name: 'x.jpg', wall: 1),
+        op(SyncOpKind.setFileHidden, 'x', favorite: true, wall: 2, seq: 1),
+        op(SyncOpKind.deleteFile, 'x', wall: 3, seq: 2),
+        op(SyncOpKind.restoreFile, 'x', wall: 4, seq: 3),
+      ]);
+      final x = state.files['x']!;
+      expect(x.deleted, isFalse);
+      expect(x.hidden, isTrue);
+    });
+
+    test('setFileHidden: dropped on a binned file (delete wins)', () {
+      final state = replayOps([
+        op(SyncOpKind.createFile, 'x', name: 'x.jpg', wall: 1),
+        op(SyncOpKind.deleteFile, 'x', wall: 2, seq: 1),
+        op(SyncOpKind.setFileHidden, 'x', favorite: true, wall: 3, seq: 2),
+      ]);
+      expect(state.files['x']!.hidden, isFalse);
+    });
+
+    test('setFileHidden: purged or unknown id is a no-op', () {
+      final state = replayOps([
+        op(SyncOpKind.createFile, 'x', name: 'x.jpg', wall: 1),
+        op(SyncOpKind.deleteFile, 'x', wall: 2, seq: 1),
+        op(SyncOpKind.purgeFile, 'x', wall: 3, seq: 2),
+        op(SyncOpKind.setFileHidden, 'x', favorite: true, wall: 4, seq: 3),
+        op(SyncOpKind.setFileHidden, 'ghost',
+            favorite: true, wall: 5, seq: 4),
+      ]);
+      expect(state.files.containsKey('x'), isFalse,
+          reason: 'purge is terminal; the hide must not resurrect the row');
+      expect(state.files.containsKey('ghost'), isFalse);
+    });
   });
 
   group('sequential equivalence with the reference state machine', () {

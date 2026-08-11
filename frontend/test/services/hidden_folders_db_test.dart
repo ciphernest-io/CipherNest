@@ -114,6 +114,44 @@ void main() {
     expect(favIds, {'root', 'inU'});
   });
 
+  test('per-FILE hide: own flag in a VISIBLE folder excludes from '
+      'specialized views; browser and bin still see it', () async {
+    await db.insert('files', {
+      'id': 'ownHidden',
+      'account_id': _acct,
+      'filename': 'ownHidden.jpg',
+      'size_bytes': 123,
+      'created_at': 1700000000000,
+      'is_uploaded': 1,
+      'is_deleted': 0,
+      'folder_id': 'U',
+      'type': CnestFileType.image.index,
+      'is_hidden': 1,
+      'is_favorite': 1,
+    });
+    final typed =
+        (await DatabaseService().getFilesByType(CnestFileType.image))
+            .map((f) => f.id)
+            .toSet();
+    expect(typed, isNot(contains('ownHidden')));
+
+    final favs =
+        (await DatabaseService().getFavorites()).map((f) => f.id).toSet();
+    expect(favs, isNot(contains('ownHidden')));
+
+    final everything = (await DatabaseService()
+            .getFilesByType(CnestFileType.image, includeHidden: true))
+        .map((f) => f.id)
+        .toSet();
+    expect(everything, contains('ownHidden'));
+
+    final inFolder = (await DatabaseService().getFilesInFolder('U'))
+        .map((f) => f.id)
+        .toSet();
+    expect(inFolder, contains('ownHidden'),
+        reason: 'the Files browser always shows hidden files');
+  });
+
   test('ANOTHER account\'s hidden folder never filters this account\'s '
       'files (account-correlated subquery)', () async {
     // System-folder ids are deterministic and account-agnostic, so a second

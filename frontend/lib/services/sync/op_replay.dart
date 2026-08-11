@@ -38,6 +38,12 @@ class FileState {
   final String name;
   final String? folderId;
   final bool favorite;
+
+  /// Hidden from the specialized views (typed tabs, gallery, albums,
+  /// stories, pickers) — the file-shaped twin of [FolderState.hidden].
+  /// The Files browser and the Recycle Bin ignore it entirely.
+  final bool hidden;
+
   final bool deleted;
 
   /// Cascade cause: the TARGETED root of the deleteFolder whose cascade
@@ -57,6 +63,7 @@ class FileState {
     required this.folderId,
     required this.favorite,
     required this.deleted,
+    this.hidden = false,
     this.deletedByFolderId,
     this.tombstoneWall,
   });
@@ -65,6 +72,7 @@ class FileState {
     String? name,
     String? Function()? folderId,
     bool? favorite,
+    bool? hidden,
     bool? deleted,
     String? Function()? deletedByFolderId,
     int? Function()? tombstoneWall,
@@ -73,6 +81,7 @@ class FileState {
         name: name ?? this.name,
         folderId: folderId != null ? folderId() : this.folderId,
         favorite: favorite ?? this.favorite,
+        hidden: hidden ?? this.hidden,
         deleted: deleted ?? this.deleted,
         deletedByFolderId: deletedByFolderId != null
             ? deletedByFolderId()
@@ -293,6 +302,15 @@ VaultState replayOps(Iterable<SyncOp> ops) {
         final f = files[op.targetId];
         if (f != null && !f.deleted && op.favorite != null) {
           files[op.targetId] = f.copyWith(favorite: op.favorite);
+        }
+      case SyncOpKind.setFileHidden:
+        // LWW by fold order; delete wins (a hide of a binned file is
+        // dropped); purged/unknown id is a no-op — mirrors setFolderHidden.
+        // The flag rides copyWith untouched through delete/restore and dies
+        // with the row on purgeFile.
+        final fh = files[op.targetId];
+        if (fh != null && !fh.deleted && op.favorite != null) {
+          files[op.targetId] = fh.copyWith(hidden: op.favorite);
         }
       case SyncOpKind.createFolder:
         // Terminality guard: a straggler create for a purged folder id is

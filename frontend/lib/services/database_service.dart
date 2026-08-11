@@ -77,7 +77,7 @@ class DatabaseService extends ChangeNotifier {
 
     final db = await openDatabase(
       path,
-      version: 17,
+      version: 18,
       onCreate: (db, version) async {
         await _createSchema(db);
         await _createSyncSchema(db);
@@ -263,6 +263,14 @@ class DatabaseService extends ChangeNotifier {
               'ALTER TABLE folders ADD COLUMN hidden_effective INTEGER NOT '
               'NULL DEFAULT 0');
         }
+        // v18: per-FILE "hide from specialized views" (setFileHidden op).
+        // No lower guard needed: the <3 branch recreates via _createSchema
+        // (which carries the column) and returns early.
+        if (oldVersion < 18) {
+          await db.execute(
+              'ALTER TABLE files ADD COLUMN is_hidden INTEGER NOT NULL '
+              'DEFAULT 0');
+        }
   }
 
   /// The virtual folder tree (v15). Fully op-derived — every row is
@@ -393,7 +401,8 @@ class DatabaseService extends ChangeNotifier {
         fps INTEGER,
         device_model TEXT,
         folder_id TEXT,
-        deleted_by_folder_id TEXT
+        deleted_by_folder_id TEXT,
+        is_hidden INTEGER NOT NULL DEFAULT 0
       )
     ''');
     await db.execute(_createFoldersTableSql);
@@ -908,6 +917,12 @@ class DatabaseService extends ChangeNotifier {
       SyncCoordinator().record(SyncOpKind.setFolderHidden, id,
           favorite: hidden);
 
+  /// The file-shaped twin: hides/unhides ONE file from the specialized
+  /// views. Same wire rule — payload rides `favorite`.
+  Future<void> setFileHidden(String id, bool hidden) =>
+      SyncCoordinator().record(SyncOpKind.setFileHidden, id,
+          favorite: hidden);
+
   /// Reparents [id] under [newParentId] (null = root). Returns false —
   /// recording nothing — when the destination is the folder itself or one
   /// of its descendants (the same rule replay enforces globally).
@@ -1340,7 +1355,8 @@ class DatabaseService extends ChangeNotifier {
   /// the OTHER account's files out of its own gallery.
   static String hiddenExclusion([String prefix = '']) {
     final outer = prefix.isEmpty ? 'files.' : prefix;
-    return ' AND (${prefix}folder_id IS NULL OR ${prefix}folder_id NOT IN '
+    return ' AND ${prefix}is_hidden = 0'
+        ' AND (${prefix}folder_id IS NULL OR ${prefix}folder_id NOT IN '
         '(SELECT id FROM folders WHERE hidden_effective = 1 '
         'AND folders.account_id = ${outer}account_id))';
   }

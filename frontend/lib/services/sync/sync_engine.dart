@@ -550,6 +550,7 @@ class SyncEngine {
       final derived = <String, Object?>{
         'filename': f.name,
         'is_favorite': f.favorite ? 1 : 0,
+        'is_hidden': f.hidden ? 1 : 0,
         'is_deleted': f.deleted ? 1 : 0,
         'deleted_at': f.deleted ? f.tombstoneWall : null,
         'folder_id': f.deleted ? f.folderId : liveOrRoot(f.folderId),
@@ -714,7 +715,13 @@ class SyncEngine {
     };
 
     // Items this device has a pending edit on.
-    const editKinds = {'renameFile', 'moveFile', 'setFavorite', 'restoreFile'};
+    const editKinds = {
+      'renameFile',
+      'moveFile',
+      'setFavorite',
+      'setFileHidden',
+      'restoreFile'
+    };
     const folderEditKinds = {'renameFolder', 'moveFolder', 'setFolderHidden'};
     final pendingEdits = await db.query('sync_ops',
         where: 'account_id = ? AND pending = 1 AND device_id = ?',

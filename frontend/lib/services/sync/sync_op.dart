@@ -49,6 +49,11 @@ enum SyncOpKind {
   /// build compacting a segment would silently strip an unknown key, while
   /// known fields round-trip verbatim.
   setFolderHidden,
+
+  /// The file-shaped twin of [setFolderHidden]: hides ONE file from the
+  /// specialized views. Same wire rule — payload rides [SyncOp.favorite]
+  /// ('v'); the KIND disambiguates it from [setFavorite].
+  setFileHidden,
   registerDevice,
 
   /// FORWARD-COMPAT SENTINEL, never recorded locally: an op whose kind

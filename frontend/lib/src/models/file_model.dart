@@ -112,6 +112,11 @@ class CnestFile {
   /// search uses it for the `Restore '<folder>'` CTA.
   final String? deletedByFolderId;
 
+  /// Hidden from the specialized views (v18, setFileHidden op) — the
+  /// file-shaped twin of the folder flag. The Files browser and the
+  /// Recycle Bin always show hidden files.
+  final bool isHidden;
+
   CnestFile({
     required this.id,
     this.cloudId,
@@ -137,6 +142,7 @@ class CnestFile {
     this.uploadStartedAt,
     this.folderId,
     this.deletedByFolderId,
+    this.isHidden = false,
   });
 
   Map<String, dynamic> toMap() {
@@ -165,6 +171,7 @@ class CnestFile {
       'upload_started_at': uploadStartedAt,
       'folder_id': folderId,
       'deleted_by_folder_id': deletedByFolderId,
+      'is_hidden': isHidden ? 1 : 0,
     };
   }
 
@@ -176,6 +183,7 @@ class CnestFile {
     String? filename,
     DateTime? createdAt,
     bool? isFavorite,
+    bool? isHidden,
     bool? isUploaded,
     String? cloudId,
     String? thumbnailCloudId,
@@ -208,6 +216,7 @@ class CnestFile {
       uploadStartedAt: uploadStartedAt,
       folderId: folderId,
       deletedByFolderId: deletedByFolderId,
+      isHidden: isHidden ?? this.isHidden,
     );
   }
 
@@ -237,6 +246,7 @@ class CnestFile {
       uploadStartedAt: map['upload_started_at'] as int?,
       folderId: map['folder_id'] as String?,
       deletedByFolderId: map['deleted_by_folder_id'] as String?,
+      isHidden: (map['is_hidden'] as int? ?? 0) == 1,
     );
   }
 }

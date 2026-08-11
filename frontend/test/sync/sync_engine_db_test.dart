@@ -92,7 +92,8 @@ Future<Database> newDeviceDb() async {
       deleted_at INTEGER,
       type INTEGER,
       folder_id TEXT,
-      deleted_by_folder_id TEXT
+      deleted_by_folder_id TEXT,
+      is_hidden INTEGER NOT NULL DEFAULT 0
     )
   ''');
   await db.execute('''
@@ -600,6 +601,7 @@ void main() {
       'id',
       'filename',
       'is_favorite',
+      'is_hidden',
       'is_deleted',
       'deleted_at',
       'folder_id',
@@ -912,6 +914,32 @@ void main() {
       expect(c2['is_hidden'], 0);
       expect(c2['hidden_effective'], 1,
           reason: 'still under the hidden parent — inherited');
+    }
+    await expectConvergedMaterialization(dbA, dbB);
+  });
+
+  test(
+      'setFileHidden: hide on A + concurrent favorite on B converge with '
+      'both flags set', () async {
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFile, targetId: 'f1', name: 'cat.jpg'));
+    await a.syncCycle();
+    await b.syncCycle();
+
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.setFileHidden, targetId: 'f1', favorite: true));
+    await b.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.setFavorite, targetId: 'f1', favorite: true));
+    await a.syncCycle();
+    await b.syncCycle();
+    await a.syncCycle();
+
+    for (final db in [dbA, dbB]) {
+      final row = (await fileRow(db, 'f1'))!;
+      expect(row['is_hidden'], 1);
+      expect(row['is_favorite'], 1,
+          reason: 'the two kinds share the wire payload field but must '
+              'never clobber each other');
     }
     await expectConvergedMaterialization(dbA, dbB);
   });
