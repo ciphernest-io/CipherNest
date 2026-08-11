@@ -1321,9 +1321,17 @@ class DatabaseService extends ChangeNotifier {
   /// SPECIALIZED views only — typed tabs, gallery, stories, albums, covers,
   /// pickers. NEVER the Files browser and NEVER the Recycle Bin: the tree
   /// itself and the bin always show everything.
-  static String hiddenExclusion([String prefix = '']) =>
-      ' AND (${prefix}folder_id IS NULL OR ${prefix}folder_id NOT IN '
-      '(SELECT id FROM folders WHERE hidden_effective = 1))';
+  ///
+  /// The subquery is correlated on account: system-folder ids are
+  /// deterministic and account-AGNOSTIC (SystemFolders), so with two linked
+  /// accounts one account's hidden Phone Backup row would otherwise filter
+  /// the OTHER account's files out of its own gallery.
+  static String hiddenExclusion([String prefix = '']) {
+    final outer = prefix.isEmpty ? 'files.' : prefix;
+    return ' AND (${prefix}folder_id IS NULL OR ${prefix}folder_id NOT IN '
+        '(SELECT id FROM folders WHERE hidden_effective = 1 '
+        'AND folders.account_id = ${outer}account_id))';
+  }
 
   /// [includeHidden] is for MACHINERY callers only (migration dedup, the
   /// "is the vault empty?" check) — anything user-facing must keep the

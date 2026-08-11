@@ -113,4 +113,35 @@ void main() {
         .toSet();
     expect(favIds, {'root', 'inU'});
   });
+
+  test('ANOTHER account\'s hidden folder never filters this account\'s '
+      'files (account-correlated subquery)', () async {
+    // System-folder ids are deterministic and account-agnostic, so a second
+    // linked account CAN own a hidden folders row whose id equals a folder
+    // this account's files point at. That hide belongs to the other
+    // account — this account's gallery must not lose the files.
+    await db.insert('folders', {
+      'id': 'shared-sys-id',
+      'account_id': 'someone_else@example.com',
+      'name': 'Phone Backup',
+      'is_hidden': 1,
+      'hidden_effective': 1,
+    });
+    await db.insert('files', {
+      'id': 'mine',
+      'account_id': _acct,
+      'filename': 'mine.jpg',
+      'size_bytes': 123,
+      'created_at': 1700000000000,
+      'is_uploaded': 1,
+      'is_deleted': 0,
+      'folder_id': 'shared-sys-id',
+      'type': CnestFileType.image.index,
+    });
+    final ids = (await DatabaseService().getFilesByType(CnestFileType.image))
+        .map((f) => f.id)
+        .toSet();
+    expect(ids, contains('mine'),
+        reason: 'the hide is scoped to the account that owns the folder row');
+  });
 }
