@@ -24,6 +24,7 @@ import '../../utils/byte_format.dart';
 import '../../utils/file_visuals.dart';
 import '../../widgets/activity_pill.dart';
 import '../../widgets/doc_thumbnail.dart';
+import 'upload_picker_session.dart';
 import '../../widgets/file_actions.dart';
 import '../../widgets/folder_picker_sheet.dart';
 import '../../widgets/friendly_error_sheet.dart';
@@ -45,7 +46,15 @@ import '../gallery/pictures_tab.dart' show GalleryGridItem;
 class FolderBrowserScreen extends StatefulWidget {
   /// null = root ("Folders").
   final CnestFolder? folder;
-  const FolderBrowserScreen({super.key, this.folder});
+
+  /// Non-null = PICKER MODE (pick-then-place upload): the browser becomes a
+  /// destination chooser — file rows render inert/dimmed, folder rows
+  /// navigate (carrying the same session), the New-folder button stays (a
+  /// mid-flow create is the point), and a Cancel / "Upload here" footer
+  /// completes the session. All mutating affordances are suppressed.
+  final UploadPickerSession? pickerSession;
+
+  const FolderBrowserScreen({super.key, this.folder, this.pickerSession});
 
   @override
   State<FolderBrowserScreen> createState() => _FolderBrowserScreenState();
@@ -66,6 +75,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   CnestFolder? _self;
 
   String? get _folderId => widget.folder?.id;
+  bool get _isPicker => widget.pickerSession != null;
 
   @override
   void initState() {
@@ -309,7 +319,8 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final title = widget.folder?.name ?? 'Folders';
+    final title =
+        _isPicker ? 'Choose a folder' : (widget.folder?.name ?? 'Folders');
 
     return Scaffold(
       appBar: AppBar(
@@ -320,7 +331,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
             icon: const ThemeIcon('plus'),
             onPressed: _createFolder,
           ),
-          if (widget.folder != null)
+          if (widget.folder != null && !_isPicker)
             PopupMenuButton<String>(
               icon: const ThemeIcon('dotsThreeVertical'),
               onSelected: (v) => switch (v) {
@@ -348,11 +359,12 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
-                if (_selectionMode) _buildSelectionBar(),
+                if (_selectionMode && !_isPicker) _buildSelectionBar(),
                 Expanded(child: _buildBody(cs)),
               ],
             ),
-      floatingActionButton: _selectionMode
+      bottomNavigationBar: _isPicker ? _buildPickerFooter(cs) : null,
+      floatingActionButton: _selectionMode || _isPicker
           ? null
           : FloatingActionButton.extended(
               onPressed: _isUploading ? null : _showBrowserUploadSheet,
@@ -369,6 +381,64 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
               label: Text(_isUploading ? 'Encrypting...' : 'Upload'),
             ),
     );
+  }
+
+  // ---- Picker mode (pick-then-place upload) -----------------------------
+
+  Widget _buildPickerFooter(ColorScheme cs) {
+    final session = widget.pickerSession!;
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        decoration: BoxDecoration(
+          color: cs.surfaceContainerHigh,
+          border: Border(top: BorderSide(color: cs.outline.withAlpha(90))),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${session.label} → ${_self?.name ?? 'My Vault'}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  color: cs.onSurface.withAlpha(160), fontSize: 12),
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                TextButton(
+                  onPressed: () => _finishPicker(null),
+                  child: const Text('Cancel'),
+                ),
+                const Spacer(),
+                FilledButton(
+                  onPressed: () => _finishPicker(FolderPickResult(
+                      folderId: _folderId,
+                      label: _self?.name ?? 'My Vault')),
+                  child: const Text('Upload here'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Completes the session (once) and pops the WHOLE picker stack in one
+  /// motion — every picker route carries [kUploadPickerRouteName]. A user
+  /// backing out level-by-level instead resolves via the caller's
+  /// complete(null) fallback.
+  void _finishPicker(FolderPickResult? result) {
+    final session = widget.pickerSession!;
+    if (!session.destination.isCompleted) {
+      session.destination.complete(result);
+    }
+    Navigator.of(context)
+        .popUntil((r) => r.settings.name != kUploadPickerRouteName);
   }
 
   void _showBrowserUploadSheet() {
@@ -661,23 +731,32 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       title: Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text(subtitle,
           style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 12)),
-      trailing: PopupMenuButton<String>(
-        icon: ThemeIcon('dotsThreeVertical',
-            color: cs.onSurface.withAlpha(120), size: 20),
-        itemBuilder: (_) => [
-          PopupMenuItem(
-              value: 'hide',
-              child: Text(f.isHidden
-                  ? 'Unhide'
-                  : 'Hide from Photos & other views')),
-        ],
-        onSelected: (v) => switch (v) {
-          'hide' => DatabaseService().setFolderHidden(f.id, !f.isHidden),
-          _ => null,
-        },
-      ),
+      trailing: _isPicker
+          ? const ThemeIcon('caretRight', size: 16)
+          : PopupMenuButton<String>(
+              icon: ThemeIcon('dotsThreeVertical',
+                  color: cs.onSurface.withAlpha(120), size: 20),
+              itemBuilder: (_) => [
+                PopupMenuItem(
+                    value: 'hide',
+                    child: Text(f.isHidden
+                        ? 'Unhide'
+                        : 'Hide from Photos & other views')),
+              ],
+              onSelected: (v) => switch (v) {
+                'hide' =>
+                  DatabaseService().setFolderHidden(f.id, !f.isHidden),
+                _ => null,
+              },
+            ),
       onTap: () => Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => FolderBrowserScreen(folder: f))),
+          // Picker routes carry a name so 'Upload here' at any depth can
+          // popUntil past the whole stack in one motion.
+          settings: _isPicker
+              ? const RouteSettings(name: kUploadPickerRouteName)
+              : null,
+          builder: (_) => FolderBrowserScreen(
+              folder: f, pickerSession: widget.pickerSession))),
     );
   }
 
@@ -747,6 +826,25 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     }
     // Same dimmed cue hidden FOLDERS carry.
     if (file.isHidden) leading = Opacity(opacity: 0.55, child: leading);
+
+    // Picker mode: files are context, not targets — visible (so the user
+    // sees what already lives here) but inert and dimmed.
+    if (_isPicker) {
+      return Opacity(
+        opacity: 0.45,
+        child: ListTile(
+          leading: leading,
+          title: Text(file.filename,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 14)),
+          subtitle: Text(subtitle,
+              style: TextStyle(
+                  color: cs.onSurface.withAlpha(140), fontSize: 12)),
+          enabled: false,
+        ),
+      );
+    }
 
     return ListTile(
       leading: leading,
