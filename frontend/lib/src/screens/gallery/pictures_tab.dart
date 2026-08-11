@@ -425,25 +425,18 @@ class PicturesTabState extends State<PicturesTab> {
 
   Future<void> handleSync() async {
     await SyncService().syncNow(force: true);
-    // Honest outcome: an offline cycle or failed uploads must never read
-    // as "Sync complete".
-    final String msg;
+    // Honest outcome — but backup results (N secured / N failed) already
+    // flash on the activity pill via the sync cycle's backup task, so
+    // toasting them here would double-report. Only the states the pill
+    // stays silent on (offline, nothing-to-do) get a toast.
     if (SyncService().lastCycleOffline) {
-      msg = "You're offline — sync will pick up when you're back";
-    } else {
-      final r = SyncService().lastAutoSyncResult;
-      if (r != null && r.failed > 0) {
-        final base = '${r.synced} backed up · ${r.failed} failed';
-        msg = r.allFailuresOffline ? "$base — you appear to be offline" : base;
-      } else if (r != null && r.synced > 0) {
-        msg = '${r.synced} photo${r.synced == 1 ? '' : 's'} secured';
-      } else {
-        msg = 'Sync complete';
-      }
+      Notify.info("You're offline — sync will pick up when you're back");
+      return;
     }
-    final bool syncFailed = !SyncService().lastCycleOffline &&
-        (SyncService().lastAutoSyncResult?.failed ?? 0) > 0;
-    syncFailed ? Notify.error(msg) : Notify.info(msg);
+    final r = SyncService().lastAutoSyncResult;
+    if (r == null || (r.synced == 0 && r.failed == 0)) {
+      Notify.info('Sync complete');
+    }
   }
 
 

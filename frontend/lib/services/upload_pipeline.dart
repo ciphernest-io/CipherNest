@@ -116,6 +116,11 @@ class UploadPipeline {
         task?.complete(summary);
       }
       return outcomes;
+    } catch (e) {
+      // Contractually unreachable (_uploadOne never throws) — but a leaked
+      // running task would pin the pill forever, so belt-and-braces.
+      task?.fail('Upload failed');
+      rethrow;
     } finally {
       await UploadForegroundGuard().end();
     }

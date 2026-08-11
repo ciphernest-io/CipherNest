@@ -190,6 +190,11 @@ class SyncService {
         }
         try {
           lastAutoSyncResult = await AutoSyncService().runFullSync();
+        } catch (e) {
+          // runFullSync has no top-level catch — without this the lazily
+          // created task would run (and pin the pill) forever.
+          bTask?.fail('Backup failed');
+          rethrow;
         } finally {
           if (wasIdle) AutoSyncService().onProgress = null;
         }

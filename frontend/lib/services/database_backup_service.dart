@@ -81,8 +81,12 @@ class DatabaseBackupService {
   /// Encrypts the SQLite database and uploads it as THIS device's snapshot.
   /// Replaces only our own previous snapshot; other devices' snapshots are
   /// never listed for deletion, let alone touched.
-  Future<void> backupDatabase() async {
-    if (_isBackingUp) return;
+  ///
+  /// Returns whether the backup LANDED — errors are swallowed here (a
+  /// debounced janitor must never throw into its trigger), so callers that
+  /// want to report success must branch on the return, not on "no throw".
+  Future<bool> backupDatabase() async {
+    if (_isBackingUp) return false;
     _isBackingUp = true;
 
     // Quiet task: debounce-triggered janitorial work — sheet history while
@@ -98,7 +102,7 @@ class DatabaseBackupService {
       final dbFile = File(dbPath);
       if (!await dbFile.exists()) {
         task.discard(); // nothing to back up — not a failure, not history
-        return;
+        return false;
       }
       final dbBytes = await dbFile.readAsBytes();
 
@@ -126,9 +130,11 @@ class DatabaseBackupService {
         await CloudService().deleteFile(legacyId);
       }
       task.complete('Vault index backed up');
+      return true;
     } catch (e) {
       debugPrint('Database backup failed: $e');
       task.fail('Vault index backup failed');
+      return false;
     } finally {
       _isBackingUp = false;
     }

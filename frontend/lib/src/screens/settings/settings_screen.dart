@@ -476,12 +476,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _handleBackup() async {
     setState(() => _isLoading = true);
     try {
-      // Outcome rides the backup's quiet activity task (failure toasts
-      // itself); a manual tap still deserves a positive receipt.
-      await DatabaseBackupService().backupDatabase();
-      Notify.info('Vault index backed up');
-    } catch (e) {
-      Notify.error('Backup failed: $e');
+      // backupDatabase never throws — it returns whether the snapshot
+      // landed. Failure toasts itself via the quiet task; a manual tap
+      // still deserves a positive receipt on success.
+      final ok = await DatabaseBackupService().backupDatabase();
+      if (ok) Notify.info('Vault index backed up');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }

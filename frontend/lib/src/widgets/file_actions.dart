@@ -29,8 +29,13 @@ Future<void> sendFilesPlain(BuildContext context, List<CnestFile> files) async {
   final out = <XFile>[];
   var done = 0;
   for (final f in files) {
-    final plain = await FileExportService.materializePlaintext(f);
-    if (plain != null) out.add(XFile(plain.path, name: f.filename));
+    try {
+      final plain = await FileExportService.materializePlaintext(f);
+      if (plain != null) out.add(XFile(plain.path, name: f.filename));
+    } catch (_) {
+      // Counts as missing below — one dead download must not leak the
+      // task or sink the whole share.
+    }
     done++;
     task.update(done, label: 'Decrypting $done/${files.length}…');
   }
