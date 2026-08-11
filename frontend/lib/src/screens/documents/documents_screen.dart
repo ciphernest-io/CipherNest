@@ -6,7 +6,6 @@ import '../../widgets/theme_icon.dart';
 import 'package:open_file/open_file.dart'; // Launches native PDF reader
 import 'package:path_provider/path_provider.dart'; // For temp storage
 import 'package:intl/intl.dart'; // You might need to add intl to pubspec
-import 'dart:typed_data';
 
 
 import '../../models/file_model.dart';
@@ -17,6 +16,7 @@ import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/notify.dart';
 import '../../../services/sync_service.dart';
+import '../../widgets/doc_thumbnail.dart';
 import '../../widgets/file_actions.dart';
 import '../share/share_dialog.dart';
 
@@ -204,9 +204,12 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                           borderRadius: BorderRadius.horizontal(
                               left: Radius.circular(t.rInput)),
                         ),
-                        child: _DocumentThumbnail(
+                        child: DocThumbnail(
                           key: ValueKey(file.id),
                           file: file,
+                          borderRadius: BorderRadius.horizontal(
+                              left: Radius.circular(t.rInput)),
+                          iconSize: 36,
                         ),
                       ),
 
@@ -330,111 +333,3 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
   }
 }
 
-class _DocumentThumbnail extends StatefulWidget {
-  final CnestFile file;
-  const _DocumentThumbnail({super.key, required this.file});
-
-  @override
-  State<_DocumentThumbnail> createState() => _DocumentThumbnailState();
-}
-
-class _DocumentThumbnailState extends State<_DocumentThumbnail> {
-  Uint8List? _thumbBytes;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadThumb();
-  }
-
-  Future<void> _loadThumb() async {
-    if (widget.file.thumbnailCloudId == null) return; // No thumb? Stop.
-
-    try {
-      final cacheDir = await getTemporaryDirectory();
-      final cacheFile = File('${cacheDir.path}/thumb_${widget.file.cloudId}.jpg');
-
-      if (await cacheFile.exists()) {
-        final bytes = await cacheFile.readAsBytes();
-        if (mounted) setState(() => _thumbBytes = bytes);
-        return;
-      }
-
-      // Download
-      final encBytes = await CloudService().downloadFile(widget.file.thumbnailCloudId!);
-      final decBytes = await EncryptionService.decryptFile(encBytes);
-      
-      await cacheFile.writeAsBytes(decBytes);
-      if (mounted) setState(() => _thumbBytes = decBytes);
-
-    } catch (e) {
-      // Fail silently, showing icon is fine
-    }
-  }
-
-  Widget _buildFallbackIcon() {
-    final t = ThemeController().tokens;
-    // robust extension parsing
-    final ext = widget.file.filename.split('.').last.toLowerCase().trim();
-
-    String icon;
-    Color color;
-
-    switch (ext) {
-      case 'pdf':
-        icon = 'filePdf';
-        color = t.danger;
-        break;
-      case 'doc':
-      case 'docx':
-        icon = 'fileText';
-        color = t.info;
-        break;
-      case 'xls':
-      case 'xlsx':
-      case 'csv':
-        icon = 'table';
-        color = t.success;
-        break;
-      case 'ppt':
-      case 'pptx':
-        icon = 'presentation';
-        color = t.warning;
-        break;
-      case 'txt':
-        icon = 'textT';
-        color = t.fgMuted;
-        break;
-      case 'zip':
-      case 'rar':
-        icon = 'fileZip';
-        color = t.warning;
-        break;
-      default:
-        icon = 'file';
-        color = t.fgMuted;
-    }
-
-    return Center(
-      child: ThemeIcon(icon, color: color.withAlpha(204), size: 36),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_thumbBytes != null) {
-      return ClipRRect(
-        borderRadius: BorderRadius.horizontal(
-            left: Radius.circular(ThemeController().tokens.rInput)),
-        child: Image.memory(
-          _thumbBytes!, 
-          width: double.infinity, 
-          height: double.infinity, 
-          fit: BoxFit.cover, // Ensures it fills the 80x90 box completely
-          alignment: Alignment.topCenter, // Focus on the top of the document
-        ),
-      );
-    }
-    return _buildFallbackIcon();
-  }
-}

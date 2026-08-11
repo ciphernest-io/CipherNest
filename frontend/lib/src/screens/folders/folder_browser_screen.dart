@@ -18,9 +18,12 @@ import '../../../services/upload_foreground_guard.dart';
 import '../../../services/upload_pipeline.dart';
 import '../../models/file_model.dart';
 import '../../models/folder_model.dart';
+import '../../config/theme_controller.dart';
 import '../../utils/bulk_ops.dart';
 import '../../utils/byte_format.dart';
+import '../../utils/file_visuals.dart';
 import '../../widgets/activity_pill.dart';
+import '../../widgets/doc_thumbnail.dart';
 import '../../widgets/file_actions.dart';
 import '../../widgets/folder_picker_sheet.dart';
 import '../../widgets/friendly_error_sheet.dart';
@@ -653,11 +656,6 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     return _videoExts.contains(f.filename.substring(dot + 1).toLowerCase());
   }
 
-  String _typeIcon(CnestFile f) => switch (f.type) {
-        CnestFileType.audio => 'musicNote',
-        CnestFileType.document => 'fileText',
-        _ => 'file',
-      };
 
   Widget _fileRow(ColorScheme cs, CnestFile file) {
     final isSelected = _selectedIds.contains(file.id);
@@ -687,12 +685,26 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
           ),
         ),
       );
+    } else if (file.thumbnailCloudId != null) {
+      // PDFs (and audio with embedded art) carry a real encrypted thumb —
+      // render it, Drive-style. Never GalleryGridItem here: its loader
+      // would decrypt the WHOLE blob as a jpeg for non-media types.
+      leading = DocThumbnail(
+        key: ValueKey('doc_${file.id}'),
+        file: file,
+        width: 44,
+        height: 44,
+        borderRadius: BorderRadius.circular(6),
+        iconSize: 26,
+      );
     } else {
+      final v = fileVisual(file.filename, ThemeController().tokens);
       leading = SizedBox(
         width: 44,
         height: 44,
         child: Center(
-            child: ThemeIcon(_typeIcon(file), color: cs.primary, size: 26)),
+            child:
+                ThemeIcon(v.icon, color: v.color.withAlpha(204), size: 26)),
       );
     }
 

@@ -1,5 +1,6 @@
 import 'dart:io';
 import '../../utils/byte_format.dart';
+import '../../utils/file_visuals.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
@@ -110,40 +111,6 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
     _refresh();
   }
 
-  String _iconForExt(String filename) {
-    final dot = filename.lastIndexOf('.');
-    final ext = dot < 0 ? '' : filename.substring(dot + 1).toLowerCase();
-    switch (ext) {
-      case 'zip':
-      case 'rar':
-      case '7z':
-      case 'tar':
-      case 'gz':
-        return 'fileZip';
-      case 'py':
-      case 'js':
-      case 'ts':
-      case 'dart':
-      case 'java':
-      case 'c':
-      case 'cpp':
-      case 'rs':
-      case 'go':
-        return 'fileCode';
-      case 'ipynb':
-        return 'notebook';
-      case 'csv':
-      case 'tsv':
-        return 'fileCsv';
-      case 'db':
-      case 'sqlite':
-      case 'sqlite3':
-        return 'database';
-      default:
-        return 'file';
-    }
-  }
-
   String _humanSize(int bytes) => formatBytes(bytes);
 
   @override
@@ -229,8 +196,12 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
               width: 64,
               height: double.infinity,
               alignment: Alignment.center,
-              child: ThemeIcon(_iconForExt(file.filename),
-                  color: cs.primary, size: 30),
+              child: Builder(builder: (context) {
+                final v =
+                    fileVisual(file.filename, ThemeController().tokens);
+                return ThemeIcon(v.icon,
+                    color: v.color.withAlpha(204), size: 30);
+              }),
             ),
             Expanded(
               child: Padding(
