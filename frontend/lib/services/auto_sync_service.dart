@@ -383,9 +383,14 @@ class AutoSyncService {
   /// still ingests and shows in the gallery.
   Future<String?> _ensureSystemPath(
       {String? bucketName, String? relativePath}) async {
+    // Ids are ACCOUNT-SALTED (see SystemFolders): each linked account owns
+    // its own tree in the shared folders table. No account = nothing to
+    // salt with — file at the vault root (_syncAsset throws earlier anyway).
+    final acct = AccountRegistry().activeAccount?.id;
+    if (acct == null) return null;
     final (key, display) = await _deviceIdentity();
     final segments = pathSegments(relativePath, bucketName);
-    final memoKey = '$key|${segments.join('/')}';
+    final memoKey = '$acct|$key|${segments.join('/')}';
     final dbsForMemo = DatabaseService();
     final memo = _ensuredChain[memoKey];
     if (memo != null) {
@@ -402,10 +407,10 @@ class AutoSyncService {
     }
 
     final chain = <(String, String)>[
-      (SystemFolders.rootId, SystemFolders.rootName),
-      (SystemFolders.deviceId(key), display),
+      (SystemFolders.rootId(acct), SystemFolders.rootName),
+      (SystemFolders.deviceId(acct, key), display),
       for (var i = 0; i < segments.length; i++)
-        (SystemFolders.pathSegmentId(key, segments.sublist(0, i + 1)),
+        (SystemFolders.pathSegmentId(acct, key, segments.sublist(0, i + 1)),
             segments[i]),
     ];
 

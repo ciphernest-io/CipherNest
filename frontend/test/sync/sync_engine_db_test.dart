@@ -823,10 +823,11 @@ void main() {
     // independently (offline), then sync — exactly what one phone's two
     // installs (reinstall, model-keyed) do.
     final key = SystemFolders.deviceKey('samsung', 'SM-A556E');
-    final rootId = SystemFolders.rootId;
-    final devId = SystemFolders.deviceId(key);
-    final dcimId = SystemFolders.pathSegmentId(key, ['DCIM']);
-    final camId = SystemFolders.pathSegmentId(key, ['DCIM', 'Camera']);
+    final rootId = SystemFolders.rootId(account);
+    final devId = SystemFolders.deviceId(account, key);
+    final dcimId = SystemFolders.pathSegmentId(account, key, ['DCIM']);
+    final camId =
+        SystemFolders.pathSegmentId(account, key, ['DCIM', 'Camera']);
 
     for (final e in [a, b]) {
       await e.recordLocalOp(LocalSyncAction(
