@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../src/models/file_model.dart';
+import 'activity_center.dart';
 import 'cache_manager_service.dart';
 import 'cloud/cloud_service.dart';
 import 'database_service.dart';
@@ -35,7 +36,8 @@ class RecycleBinService {
 
     try {
       for (final folderId in await db.getExpiredFolderIds(ttl: ttl)) {
-        purged += await purgeFolderPermanently(folderId);
+        purged += await purgeFolderPermanently(folderId,
+            trackActivity: false);
       }
     } catch (e) {
       debugPrint('Bin sweep: folder pass failed: $e');
@@ -65,18 +67,38 @@ class RecycleBinService {
   /// Interruption-safe by re-tap: already-purged files are gone from the
   /// query, the folder entry remains until [purgeFolderEntity] lands, and
   /// replay treats leftover causes as individual bin entries.
-  Future<int> purgeFolderPermanently(String folderId) async {
+  ///
+  /// [trackActivity] (UI callers) pills a real batch (>= 5 files); the TTL
+  /// sweep passes false — it runs inside its own quiet task.
+  Future<int> purgeFolderPermanently(
+    String folderId, {
+    void Function(int done, int total)? onProgress,
+    bool trackActivity = true,
+  }) async {
     final db = DatabaseService();
     final fileIds = await db.getCascadeBinnedFileIds(folderId);
+    final task = trackActivity && fileIds.length >= 5
+        ? ActivityCenter().start(
+            kind: ActivityKind.binOp,
+            label: 'Emptying folder 0/${fileIds.length}…',
+            total: fileIds.length)
+        : null;
     final cloudIdsByFile = await _loadCloudIds(fileIds);
     final tempDir = await getTemporaryDirectory();
     var purged = 0;
+    var done = 0;
     for (final id in fileIds) {
       if (await _purgeOneFile(db, tempDir, id, cloudIdsByFile[id])) {
         purged++;
       }
+      done++;
+      task?.update(done, label: 'Emptying folder $done/${fileIds.length}…');
+      onProgress?.call(done, fileIds.length);
     }
     await db.purgeFolderEntity(folderId);
+    // The caller's own summary names the folder — this terminal is quiet
+    // history for the sheet.
+    task?.complete();
     return purged;
   }
 

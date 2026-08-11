@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../../services/activity_center.dart';
 import '../../../services/audio_player_service.dart';
+import '../../../services/notify.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/encryption_service.dart';
@@ -18,6 +19,7 @@ import '../../../services/upload_pipeline.dart';
 import '../../config/theme_controller.dart';
 import '../../models/file_model.dart';
 import '../../models/folder_model.dart';
+import '../../utils/bulk_ops.dart';
 import '../../utils/byte_format.dart';
 import '../../widgets/file_actions.dart';
 import '../../widgets/folder_picker_sheet.dart';
@@ -230,12 +232,28 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     final pick = await showFolderPicker(context);
     if (pick == null) return;
     final ids = List<String>.from(_selectedIds);
-    for (final id in ids) {
-      await DatabaseService().moveFileToFolder(id, pick.folderId);
+    // Per-item try/catch (one bad row must not abort the batch) + honest
+    // count — never report the requested count as the success count.
+    final task = ids.length >= 5
+        ? ActivityCenter().start(
+            kind: ActivityKind.binOp,
+            label: 'Moving 0/${ids.length}…',
+            total: ids.length)
+        : null;
+    final ok = await honestCount<String>(
+      ids,
+      (id) => DatabaseService().moveFileToFolder(id, pick.folderId),
+      onEach: (d) => task?.update(d, label: 'Moving $d/${ids.length}…'),
+    );
+    final failed = ids.length - ok;
+    final msg = '$ok moved to "${pick.label}"'
+        '${failed > 0 ? ' · $failed failed' : ''}';
+    if (task != null) {
+      failed > 0 ? task.fail(msg) : task.complete(msg);
+    } else {
+      failed > 0 ? Notify.error(msg) : Notify.info(msg);
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('${ids.length} moved to "${pick.label}"')));
     setState(() {
       _selectionMode = false;
       _selectedIds.clear();

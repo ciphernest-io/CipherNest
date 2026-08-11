@@ -19,7 +19,10 @@ import '../../../services/encryption_service.dart';
 import '../../../services/local_content_guard.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
+import '../../../services/activity_center.dart';
 import '../../../services/auto_sync_service.dart';
+import '../../../services/notify.dart';
+import '../../utils/bulk_ops.dart';
 import '../../../services/sync_service.dart';
 import '../share/share_dialog.dart';
 import 'image_viewer_screen.dart';
@@ -345,25 +348,31 @@ class PicturesTabState extends State<PicturesTab> {
     );
     if (confirm != true) return;
     // Soft-delete only — encrypted blobs stay in cloud until the sweep runs
-    // so users can restore offline.
-    for (final f in picked) {
-      try {
+    // so users can restore offline. Honest count: a partial failure must
+    // never read as full success.
+    final task = picked.length >= 5
+        ? ActivityCenter().start(
+            kind: ActivityKind.binOp,
+            label: 'Deleting 0/${picked.length}…',
+            total: picked.length)
+        : null;
+    final ok = await honestCount<CnestFile>(
+      picked,
+      (f) async {
         await DatabaseService().deleteFile(f.id);
         AutoSyncService.trackDeletion(f.filename, f.sizeBytes);
-      } catch (_) {
-        // Silent — best-effort bulk delete.
-      }
-    }
+      },
+      onEach: (d) =>
+          task?.update(d, label: 'Deleting $d/${picked.length}…'),
+    );
     DatabaseBackupService().scheduleBackup();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            '${picked.length} photo${picked.length == 1 ? '' : 's'} '
-            'moved to Recycle Bin',
-          ),
-        ),
-      );
+    final failed = picked.length - ok;
+    final msg = '$ok photo${ok == 1 ? '' : 's'} moved to Recycle Bin'
+        '${failed > 0 ? ' · $failed failed' : ''}';
+    if (task != null) {
+      failed > 0 ? task.fail(msg) : task.complete(msg);
+    } else {
+      failed > 0 ? Notify.error(msg) : Notify.info(msg);
     }
     _exitSelection();
     _refresh();
@@ -376,16 +385,26 @@ class PicturesTabState extends State<PicturesTab> {
     final pick = await showFolderPicker(context);
     if (pick == null) return;
     final ids = List<String>.from(_selectedIds);
-    for (final id in ids) {
-      try {
-        await DatabaseService().moveFileToFolder(id, pick.folderId);
-      } catch (_) {
-        // Best-effort bulk move.
-      }
+    final task = ids.length >= 5
+        ? ActivityCenter().start(
+            kind: ActivityKind.binOp,
+            label: 'Moving 0/${ids.length}…',
+            total: ids.length)
+        : null;
+    final ok = await honestCount<String>(
+      ids,
+      (id) => DatabaseService().moveFileToFolder(id, pick.folderId),
+      onEach: (d) => task?.update(d, label: 'Moving $d/${ids.length}…'),
+    );
+    final failed = ids.length - ok;
+    final msg = '$ok moved to "${pick.label}"'
+        '${failed > 0 ? ' · $failed failed' : ''}';
+    if (task != null) {
+      failed > 0 ? task.fail(msg) : task.complete(msg);
+    } else {
+      failed > 0 ? Notify.error(msg) : Notify.info(msg);
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('${ids.length} moved to "${pick.label}"')));
     _exitSelection();
   }
 

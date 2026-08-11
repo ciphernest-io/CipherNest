@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 
+import '../../../services/activity_center.dart';
 import '../../../services/database_service.dart';
+import '../../../services/notify.dart';
 import '../../../services/recycle_bin_service.dart';
+import '../../utils/bulk_ops.dart';
 import '../../models/file_model.dart';
 import '../../models/folder_model.dart';
 import '../gallery/image_viewer_screen.dart';
@@ -336,15 +339,27 @@ class _FilesBinTabState extends State<_FilesBinTab> {
   Future<void> _restoreSelected() async {
     if (_selectedIds.isEmpty) return;
     final ids = List<String>.from(_selectedIds);
-    for (final id in ids) {
-      try {
-        await DatabaseService().restoreFile(id);
-      } catch (_) {}
+    // Pure-SQLite op: pill task only for real batches (>= 5), toast below.
+    final task = ids.length >= 5
+        ? ActivityCenter().start(
+            kind: ActivityKind.binOp,
+            label: 'Restoring 0/${ids.length}…',
+            total: ids.length)
+        : null;
+    final ok = await honestCount<String>(
+      ids,
+      (id) => DatabaseService().restoreFile(id),
+      onEach: (d) => task?.update(d, label: 'Restoring $d/${ids.length}…'),
+    );
+    final failed = ids.length - ok;
+    final msg = '$ok ${widget.noun}${ok == 1 ? '' : 's'} restored'
+        '${failed > 0 ? ' · $failed failed' : ''}';
+    if (task != null) {
+      failed > 0 ? task.fail(msg) : task.complete(msg);
+    } else {
+      failed > 0 ? Notify.error(msg) : Notify.info(msg);
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('${ids.length} ${widget.noun}'
-            '${ids.length == 1 ? '' : 's'} restored')));
     _exitSelection();
   }
 
@@ -386,16 +401,23 @@ class _FilesBinTabState extends State<_FilesBinTab> {
     // (RecycleBinService). A failed cloud delete never blocks the purge:
     // the purge tombstone condemns the blob and the condemned-blob sweep
     // retries until it lands. A failed ROW purge is counted and reported —
-    // never claimed as deleted.
+    // never claimed as deleted. Network-bound → always a pill task.
+    final task = ActivityCenter().start(
+        kind: ActivityKind.binOp,
+        label: 'Deleting 0/${picked.length}…',
+        total: picked.length);
     var ok = 0;
+    var done = 0;
     for (final f in picked) {
       if (await RecycleBinService().purgeFilePermanently(f)) ok++;
+      done++;
+      task.update(done, label: 'Deleting $done/${picked.length}…');
     }
-    if (!mounted) return;
     final failed = picked.length - ok;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('$ok ${widget.noun}${ok == 1 ? '' : 's'} permanently '
-            'deleted${failed > 0 ? ' · $failed failed' : ''}')));
+    final msg = '$ok ${widget.noun}${ok == 1 ? '' : 's'} permanently '
+        'deleted${failed > 0 ? ' · $failed failed' : ''}';
+    failed > 0 ? task.fail(msg) : task.complete(msg);
+    if (!mounted) return;
     _exitSelection();
   }
 
