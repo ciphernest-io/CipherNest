@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
 import 'notify.dart';
+import 'upload_foreground_guard.dart';
 
 /// Enum ORDER is the pill priority — when several tasks run, the pill
 /// fronts the lowest index (migration beats an upload beats a sync).
@@ -203,6 +204,7 @@ class ActivityCenter extends ChangeNotifier {
     // terminal flash.
     _suppressed = false;
     _clearTerminal();
+    _mirrorToFgs();
     notifyListeners();
     return task;
   }
@@ -223,7 +225,52 @@ class ActivityCenter extends ChangeNotifier {
   }
 
   void _onTaskChanged() {
+    _mirrorToFgs();
     notifyListeners();
+  }
+
+  // ---- Foreground-service notification mirror ---------------------------
+  // While the upload FGS pin is held, live progress rides into the pinned
+  // "Securing your file…" notification. Throttled to 500ms with a trailing
+  // edge so the final state always lands without churning the shade.
+
+  static const Duration _fgsThrottle = Duration(milliseconds: 500);
+  static const Set<ActivityKind> _fgsKinds = {
+    ActivityKind.migration,
+    ActivityKind.folderImport,
+    ActivityKind.upload,
+    ActivityKind.backup,
+  };
+  DateTime? _lastFgsPush;
+  Timer? _fgsTrailing;
+
+  void _mirrorToFgs() {
+    if (!UploadForegroundGuard().isActive) return;
+    ActivityTask? task;
+    for (final t in _normalRunning) {
+      if (!_fgsKinds.contains(t.kind)) continue;
+      if (task == null || t.kind.index < task.kind.index) task = t;
+    }
+    if (task == null) return;
+
+    final now = DateTime.now();
+    final last = _lastFgsPush;
+    if (last != null && now.difference(last) < _fgsThrottle) {
+      _fgsTrailing ??= Timer(_fgsThrottle - now.difference(last), () {
+        _fgsTrailing = null;
+        _mirrorToFgs();
+      });
+      return;
+    }
+    _lastFgsPush = now;
+    final total = task.total;
+    unawaited(UploadForegroundGuard().updateNotification(
+      title: 'CipherNest',
+      text: task.label,
+      progress: task.done ?? 0,
+      max: total ?? 0,
+      indeterminate: total == null,
+    ));
   }
 
   void _onTaskFinished(ActivityTask task) {
@@ -280,5 +327,8 @@ class ActivityCenter extends ChangeNotifier {
     _suppressed = false;
     _sheetOpen = false;
     _clearTerminal();
+    _fgsTrailing?.cancel();
+    _fgsTrailing = null;
+    _lastFgsPush = null;
   }
 }

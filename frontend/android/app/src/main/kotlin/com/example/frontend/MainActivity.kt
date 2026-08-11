@@ -83,6 +83,41 @@ class MainActivity : AudioServiceFragmentActivity() {
                     startService(intent)
                     result.success(true)
                 }
+                "updateUploadForeground" -> {
+                    // Best-effort mirror of live progress into the pinned
+                    // notification. startForegroundService (not
+                    // startService) — a plain startService throws from a
+                    // backgrounded app, which is exactly when mirroring
+                    // matters.
+                    try {
+                        val intent = Intent(this, UploadForegroundService::class.java)
+                            .setAction(UploadForegroundService.ACTION_UPDATE)
+                            .putExtra(
+                                UploadForegroundService.EXTRA_TITLE,
+                                call.argument<String>("title") ?: "CipherNest",
+                            )
+                            .putExtra(
+                                UploadForegroundService.EXTRA_TEXT,
+                                call.argument<String>("text") ?: "",
+                            )
+                            .putExtra(
+                                UploadForegroundService.EXTRA_PROGRESS,
+                                call.argument<Int>("progress") ?: 0,
+                            )
+                            .putExtra(
+                                UploadForegroundService.EXTRA_MAX,
+                                call.argument<Int>("max") ?: 0,
+                            )
+                            .putExtra(
+                                UploadForegroundService.EXTRA_INDETERMINATE,
+                                call.argument<Boolean>("indeterminate") ?: false,
+                            )
+                        ContextCompat.startForegroundService(this, intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.success(false)
+                    }
+                }
                 "isIgnoringBatteryOptimizations" -> {
                     val pm = getSystemService(POWER_SERVICE) as PowerManager
                     result.success(pm.isIgnoringBatteryOptimizations(packageName))

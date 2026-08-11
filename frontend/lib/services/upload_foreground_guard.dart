@@ -19,6 +19,33 @@ class UploadForegroundGuard {
   static const _channel = MethodChannel('ciphernest/platform');
   int _refs = 0;
 
+  /// True while at least one flow holds the pin — the activity center only
+  /// mirrors progress into the notification while this is the case.
+  bool get isActive => _refs > 0;
+
+  /// Best-effort mirror of live progress into the pinned notification.
+  /// max == 0 && !indeterminate hides the progress bar.
+  Future<void> updateNotification({
+    required String title,
+    required String text,
+    int progress = 0,
+    int max = 0,
+    bool indeterminate = false,
+  }) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('updateUploadForeground', {
+        'title': title,
+        'text': text,
+        'progress': progress,
+        'max': max,
+        'indeterminate': indeterminate,
+      });
+    } catch (e) {
+      debugPrint('UploadForegroundGuard.updateNotification: $e');
+    }
+  }
+
   Future<void> begin() async {
     if (!Platform.isAndroid) return;
     _refs++;
