@@ -16,9 +16,12 @@ import '../../../services/cloud/account_registry.dart';
 import '../../../services/notify.dart';
 import '../../../services/sync_service.dart';
 import '../../../services/sync/sync_coordinator.dart';
+import 'package:permission_handler/permission_handler.dart';
+
 import '../../../services/upload_pipeline.dart';
 import '../../widgets/folder_picker_sheet.dart';
 import '../../widgets/friendly_error_sheet.dart';
+import '../capture/capture_screen.dart';
 import '../folders/folder_browser_screen.dart';
 import '../folders/upload_picker_session.dart';
 
@@ -349,6 +352,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
+              leading: ThemeIcon('camera', color: cs.primary),
+              title: Text('Take photo',
+                  style: TextStyle(color: cs.onSurface)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _handleCapture(video: false);
+              },
+            ),
+            ListTile(
+              leading: ThemeIcon('videoCamera', color: cs.primary),
+              title: Text('Record video',
+                  style: TextStyle(color: cs.onSurface)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _handleCapture(video: true);
+              },
+            ),
+            ListTile(
               leading: ThemeIcon('uploadSimple', color: cs.primary),
               title: Text('Upload files',
                   style: TextStyle(color: cs.onSurface)),
@@ -365,6 +386,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
       ),
     );
+  }
+
+  /// In-app capture → same place flow → upload as MEDIA (typing forced —
+  /// no extension edge cases).
+  Future<void> _handleCapture({required bool video}) async {
+    final statuses = await [
+      Permission.camera,
+      if (video) Permission.microphone,
+    ].request();
+    if (statuses.values.any((s) => !s.isGranted)) {
+      Notify.error('Camera permission is required to capture');
+      return;
+    }
+    if (!mounted) return;
+    final pick = await Navigator.of(context).push<PlatformFile>(
+      MaterialPageRoute(
+          builder: (_) => CaptureScreen(startInVideoMode: video)),
+    );
+    if (pick == null || !mounted) return;
+
+    final dest = await _pickDestination([pick], label: pick.name);
+    if (dest == null) return;
+    await _uploadPicked([pick],
+        category: UploadCategory.media, folderId: dest.folderId);
   }
 }
 

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../../services/activity_center.dart';
 import '../../../services/audio_player_service.dart';
@@ -24,6 +25,7 @@ import '../../utils/byte_format.dart';
 import '../../utils/file_visuals.dart';
 import '../../widgets/activity_pill.dart';
 import '../../widgets/doc_thumbnail.dart';
+import '../capture/capture_screen.dart';
 import 'upload_picker_session.dart';
 import '../../widgets/file_actions.dart';
 import '../../widgets/folder_picker_sheet.dart';
@@ -452,6 +454,29 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
+              leading: ThemeIcon('camera', color: cs.primary),
+              title: Text('Take photo',
+                  style: TextStyle(color: cs.onSurface)),
+              subtitle: Text('Into "${widget.folder?.name ?? 'My Vault'}"',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      color: cs.onSurface.withAlpha(140), fontSize: 11)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _captureHere(video: false);
+              },
+            ),
+            ListTile(
+              leading: ThemeIcon('videoCamera', color: cs.primary),
+              title: Text('Record video',
+                  style: TextStyle(color: cs.onSurface)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _captureHere(video: true);
+              },
+            ),
+            ListTile(
               leading: ThemeIcon('uploadSimple', color: cs.primary),
               title: Text('Upload files',
                   style: TextStyle(color: cs.onSurface)),
@@ -586,6 +611,37 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       }
     } finally {
       await guard.end();
+      if (mounted) setState(() => _isUploading = false);
+    }
+  }
+
+  /// In-app capture straight into the folder being viewed — the browser's
+  /// context IS the destination, so no place flow.
+  Future<void> _captureHere({required bool video}) async {
+    final statuses = await [
+      Permission.camera,
+      if (video) Permission.microphone,
+    ].request();
+    if (statuses.values.any((s) => !s.isGranted)) {
+      Notify.error('Camera permission is required to capture');
+      return;
+    }
+    if (!mounted) return;
+    final pick = await Navigator.of(context).push<PlatformFile>(
+      MaterialPageRoute(
+          builder: (_) => CaptureScreen(startInVideoMode: video)),
+    );
+    if (pick == null || !mounted) return;
+
+    setState(() => _isUploading = true);
+    try {
+      final outcomes = await UploadPipeline.uploadBatch(
+        [pick],
+        category: UploadCategory.media,
+        folderId: _folderId,
+      );
+      if (mounted) await _reportUploadOutcomes(outcomes);
+    } finally {
       if (mounted) setState(() => _isUploading = false);
     }
   }
