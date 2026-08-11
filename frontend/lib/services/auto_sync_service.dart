@@ -331,24 +331,25 @@ class AutoSyncService {
   Future<(String, String)> _deviceIdentity() async {
     final cached = _deviceIdentityCache;
     if (cached != null) return cached;
-    (String, String) identity;
     try {
       final info = await DeviceInfoPlugin().androidInfo;
       final manufacturer = info.manufacturer.trim();
       final model = info.model.trim();
-      identity = manufacturer.isEmpty && model.isEmpty
+      final identity = manufacturer.isEmpty && model.isEmpty
           ? ('unknown device', 'This device')
           : (
               SystemFolders.deviceKey(manufacturer, model),
               SystemFolders.deviceDisplayName(manufacturer, model),
             );
+      _deviceIdentityCache = identity;
+      return identity;
     } catch (_) {
-      // Non-Android / plugin failure: a stable generic key still yields one
-      // deterministic subtree.
-      identity = ('unknown device', 'This device');
+      // Transient plugin failure (e.g. first call in a background isolate):
+      // return the generic fallback WITHOUT caching it, so the next call
+      // retries — a cached failure would permanently split the backup into
+      // a "This device" subtree beside the real one.
+      return ('unknown device', 'This device');
     }
-    _deviceIdentityCache = identity;
-    return identity;
   }
 
   /// The asset's directory path as folder segments. MediaStore
@@ -385,7 +386,20 @@ class AutoSyncService {
     final (key, display) = await _deviceIdentity();
     final segments = pathSegments(relativePath, bucketName);
     final memoKey = '$key|${segments.join('/')}';
-    if (_ensuredChain.containsKey(memoKey)) return _ensuredChain[memoKey];
+    final dbsForMemo = DatabaseService();
+    final memo = _ensuredChain[memoKey];
+    if (memo != null) {
+      // Re-validate: the user can bin/purge the folder MID-RUN from the
+      // Files browser; a stale memo would stamp a dead folderId and the
+      // write boundary reroutes those files to the VAULT ROOT instead of
+      // the promised nearest live ancestor. One cheap lookup per asset.
+      final row = await dbsForMemo.getFolderById(memo);
+      if (row != null && !row.isDeleted) return memo;
+      _ensuredChain.remove(memoKey);
+    } else if (_ensuredChain.containsKey(memoKey)) {
+      // Memoized "vault root" stays valid — there is nothing to go stale.
+      return null;
+    }
 
     final chain = <(String, String)>[
       (SystemFolders.rootId, SystemFolders.rootName),
