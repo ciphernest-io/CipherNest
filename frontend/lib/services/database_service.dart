@@ -473,6 +473,11 @@ class DatabaseService extends ChangeNotifier {
 
   Future<void> addFile(CnestFile file) async {
     final db = await database;
+    // Hand-rebuild kept ONLY for the three forced stamps (provider,
+    // accountId, uploadStartedAt) — every other field MUST be carried.
+    // Dropping one here is exactly the silent-column-loss drift
+    // CnestFile.copyWith's doc warns about: omitting folderId made every
+    // upload flash at the vault root until op-replay re-stamped it.
     final fileWithAccount = CnestFile(
       id: file.id,
       filename: file.filename,
@@ -482,6 +487,7 @@ class DatabaseService extends ChangeNotifier {
       localPath: file.localPath,
       assetId: file.assetId,
       isUploaded: file.isUploaded,
+      isFavorite: file.isFavorite,
       cloudId: file.cloudId,
       thumbnailCloudId: file.thumbnailCloudId,
       provider: AccountRegistry().activeAccount?.providerType ?? 0,
@@ -494,6 +500,8 @@ class DatabaseService extends ChangeNotifier {
       audioCodec: file.audioCodec,
       fps: file.fps,
       deviceModel: file.deviceModel,
+      folderId: file.folderId,
+      deletedByFolderId: file.deletedByFolderId,
       // Every addFile caller is starting an upload attempt right now —
       // stamp it so heal grace measures from THIS moment, not capture time.
       uploadStartedAt: DateTime.now().millisecondsSinceEpoch,
@@ -542,6 +550,10 @@ class DatabaseService extends ChangeNotifier {
         'cloud_id': cloudId,
         'thumbnail_cloud_id': thumbId,
         if (contentHash != null) 'content_hash': contentHash,
+        // Belt: heals a row whose insert-time placement was lost (rows
+        // minted by a pre-fix build). Null callers never overwrite a
+        // concurrent move.
+        if (folderId != null) 'folder_id': folderId,
       },
       where: 'id = ?',
       whereArgs: [id],
