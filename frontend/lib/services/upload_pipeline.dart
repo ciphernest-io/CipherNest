@@ -16,6 +16,7 @@ import '../src/models/file_model.dart';
 import '../src/utils/filename_dedup.dart';
 import '../src/utils/media_store_uri.dart';
 import 'activity_center.dart';
+import 'audio_art_parser.dart';
 import 'auto_sync_service.dart';
 import 'cloud/cloud_service.dart';
 import 'cnest_errors.dart';
@@ -196,7 +197,7 @@ class UploadPipeline {
         fileBytes = await File(pickedPath).readAsBytes();
       }
 
-      // --- 3. IMAGE/PDF THUMBNAILS ---
+      // --- 3. IMAGE/PDF/ALBUM-ART THUMBNAILS ---
       if (!isVideo && fileBytes != null) {
         if (isMediaFile) {
           try {
@@ -211,6 +212,22 @@ class UploadPipeline {
           }
         } else if (filename.toLowerCase().endsWith('.pdf')) {
           thumbnailBytes = await _generatePdfThumbnail(fileBytes);
+        } else if (type == CnestFileType.audio) {
+          // Embedded cover art (ID3 APIC / m4a covr) becomes the track's
+          // thumbnail — the downstream encrypt/upload path is type-blind.
+          final art = AudioArtParser.extract(fileBytes, filename);
+          if (art != null) {
+            try {
+              thumbnailBytes = await FlutterImageCompress.compressWithList(
+                art,
+                minHeight: 300,
+                minWidth: 300,
+                quality: 60,
+              );
+            } catch (_) {
+              thumbnailBytes = art; // odd format: ship as-is
+            }
+          }
         }
       }
 
