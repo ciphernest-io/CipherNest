@@ -28,8 +28,6 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isUploading = false;
-  int _uploadDone = 0;
-  int _uploadTotal = 0;
   bool _isLoadingSession = true;
   Map<String, int>? _vaultStats;
 
@@ -154,21 +152,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
     if (result == null || result.files.isEmpty) return;
 
-    setState(() {
-      _isUploading = true;
-      _uploadDone = 0;
-      _uploadTotal = result.files.length;
-    });
+    setState(() => _isUploading = true);
     try {
       // Destination comes from the upload sheet's "To:" row — vault root
-      // unless the user picked a folder there.
+      // unless the user picked a folder there. Progress + the batch summary
+      // live in the activity pill (uploadBatch registers the task).
       final outcomes = await UploadPipeline.uploadBatch(
         result.files,
         category: category,
         folderId: folderId,
-        onProgress: (done, total) {
-          if (mounted) setState(() => _uploadDone = done);
-        },
       );
       if (mounted) await _reportUploadOutcomes(outcomes);
     } finally {
@@ -176,24 +168,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// Summary + progress ride the activity pill; only a failure's DETAIL
+  /// still needs this screen (the actionable error sheet).
   Future<void> _reportUploadOutcomes(List<UploadOutcome> outcomes) async {
-    final uploaded =
-        outcomes.where((o) => o.ok && !o.skippedDuplicate).length;
-    final dups = outcomes.where((o) => o.skippedDuplicate).length;
     final failures = outcomes.where((o) => !o.ok).toList();
-
-    final parts = <String>[];
-    if (uploaded > 0) {
-      parts.add(outcomes.length == 1
-          ? 'Secure Upload Complete'
-          : '$uploaded file${uploaded == 1 ? '' : 's'} secured');
-    }
-    if (dups > 0) parts.add('$dups already in your vault');
-    if (failures.isNotEmpty) parts.add('${failures.length} failed');
-    if (parts.isNotEmpty && mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(parts.join(' · '))));
-    }
     if (failures.isNotEmpty && mounted) {
       await showCnestError(
           context, UploadPipeline.mapUploadError(failures.first.error!));
@@ -323,18 +301,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ],
         ),
       ),
+      // Counted progress lives in the activity pill; the FAB just shows
+      // busy + disabled while a batch runs.
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _isUploading ? null : () => _showUploadSheet(context),
         backgroundColor: cs.primary,
         icon: _isUploading
           ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: cs.onPrimary, strokeWidth: 2))
           : ThemeIcon('plus', color: cs.onPrimary),
-        label: Text(_isUploading
-            ? (_uploadTotal > 1
-                ? 'Encrypting ${(_uploadDone + 1).clamp(1, _uploadTotal)}'
-                    '/$_uploadTotal...'
-                : 'Encrypting...')
-            : 'Add File'),
+        label: Text(_isUploading ? 'Encrypting...' : 'Add File'),
       ),
     );
   }

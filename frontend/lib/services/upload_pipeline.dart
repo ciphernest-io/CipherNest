@@ -15,6 +15,7 @@ import 'package:video_thumbnail/video_thumbnail.dart';
 import '../src/models/file_model.dart';
 import '../src/utils/filename_dedup.dart';
 import '../src/utils/media_store_uri.dart';
+import 'activity_center.dart';
 import 'auto_sync_service.dart';
 import 'cloud/cloud_service.dart';
 import 'cnest_errors.dart';
@@ -63,6 +64,10 @@ class UploadPipeline {
   /// [onProgress] fires after each file with (done, total). Never throws —
   /// per-file failures land in the returned outcomes.
   ///
+  /// [trackActivity] (default true) registers the batch as an ActivityCenter
+  /// task, so every caller inherits the progress pill for free. The folder
+  /// import passes false — it runs its own outer per-entry task.
+  ///
   /// [skipDuplicates] (default true) is the content-hash pre-check: bytes
   /// already live in the vault are not re-uploaded. The FOLDER IMPORT path
   /// passes false — Windows-copy semantics (Usman ruling, Aug 1): an
@@ -75,6 +80,7 @@ class UploadPipeline {
     required UploadCategory category,
     String? folderId,
     bool skipDuplicates = true,
+    bool trackActivity = true,
     void Function(int done, int total)? onProgress,
   }) async {
     if (picks.isEmpty) return const [];
@@ -85,6 +91,12 @@ class UploadPipeline {
     if (await Permission.notification.isDenied) {
       await Permission.notification.request();
     }
+    final task = trackActivity
+        ? ActivityCenter().start(
+            kind: ActivityKind.upload,
+            label: 'Encrypting 0/${picks.length}…',
+            total: picks.length)
+        : null;
     await UploadForegroundGuard().begin();
     try {
       final outcomes = <UploadOutcome>[];
@@ -93,12 +105,38 @@ class UploadPipeline {
             category: category,
             folderId: folderId,
             skipDuplicates: skipDuplicates));
+        task?.update(i + 1,
+            label: 'Encrypting ${i + 1}/${picks.length}…');
         onProgress?.call(i + 1, picks.length);
+      }
+      final summary = summarizeOutcomes(outcomes);
+      if (outcomes.any((o) => !o.ok)) {
+        task?.fail(summary);
+      } else {
+        task?.complete(summary);
       }
       return outcomes;
     } finally {
       await UploadForegroundGuard().end();
     }
+  }
+
+  /// The ' · '-joined batch summary every surface shows — extracted from
+  /// the home screen's reporter so pill terminals and callers agree.
+  static String summarizeOutcomes(List<UploadOutcome> outcomes) {
+    final uploaded =
+        outcomes.where((o) => o.ok && !o.skippedDuplicate).length;
+    final dups = outcomes.where((o) => o.skippedDuplicate).length;
+    final failures = outcomes.where((o) => !o.ok).length;
+    final parts = <String>[];
+    if (uploaded > 0) {
+      parts.add(outcomes.length == 1
+          ? 'Secure Upload Complete'
+          : '$uploaded file${uploaded == 1 ? '' : 's'} secured');
+    }
+    if (dups > 0) parts.add('$dups already in your vault');
+    if (failures > 0) parts.add('$failures failed');
+    return parts.isEmpty ? 'Nothing uploaded' : parts.join(' · ');
   }
 
   static Future<UploadOutcome> _uploadOne(

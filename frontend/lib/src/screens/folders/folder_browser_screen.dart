@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../../services/activity_center.dart';
 import '../../../services/audio_player_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/database_service.dart';
@@ -53,8 +54,6 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   bool _selectionMode = false;
   final Set<String> _selectedIds = {};
   bool _isUploading = false;
-  int _uploadDone = 0;
-  int _uploadTotal = 0;
   String? _openingFileId;
 
   /// Fresh row for the folder being viewed (widget.folder goes stale the
@@ -303,12 +302,9 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
                       child: CircularProgressIndicator(
                           color: cs.onPrimary, strokeWidth: 2))
                   : ThemeIcon('uploadSimple', color: cs.onPrimary),
-              label: Text(_isUploading
-                  ? (_uploadTotal > 1
-                      ? 'Encrypting ${(_uploadDone + 1).clamp(1, _uploadTotal)}'
-                          '/$_uploadTotal...'
-                      : 'Encrypting...')
-                  : 'Upload'),
+              // Counted progress lives in the activity pill; the FAB just
+              // shows busy + disabled.
+              label: Text(_isUploading ? 'Encrypting...' : 'Upload'),
             ),
     );
   }
@@ -381,11 +377,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       return;
     }
 
-    setState(() {
-      _isUploading = true;
-      _uploadDone = 0;
-      _uploadTotal = picked.entries.length;
-    });
+    setState(() => _isUploading = true);
     // One foreground pin across the whole import — the per-batch pins nest
     // inside it (ref-counted), so the notification doesn't flap between
     // files.
@@ -393,6 +385,10 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     await guard.begin();
     var secured = 0, failed = 0;
     String rootName = picked.name;
+    final task = ActivityCenter().start(
+        kind: ActivityKind.folderImport,
+        label: 'Importing "${picked.name}"',
+        total: picked.entries.length);
     try {
       // Import root, sibling-name deduped ("Trip" -> "Trip (1)").
       final siblings = _folders.map((f) => f.name.toLowerCase()).toSet();
@@ -433,6 +429,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
             category: UploadCategory.other,
             folderId: targetId,
             skipDuplicates: false,
+            trackActivity: false, // the outer import task counts instead
           );
           for (final o in res) {
             if (o.ok) {
@@ -442,18 +439,20 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
             }
           }
         }
-        if (mounted) setState(() => _uploadDone = i + 1);
+        task.update(i + 1,
+            label: 'Importing ${i + 1}/${picked.entries.length}',
+            detail: e.name);
       }
 
-      if (!mounted) return;
       final parts = <String>[];
       if (secured > 0) parts.add('$secured file${secured == 1 ? '' : 's'}');
       if (failed > 0) parts.add('$failed failed');
       // No silent caps: a truncated walk is said out loud.
       if (picked.truncated) parts.add('first 2000 files only');
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Imported "$rootName": ${parts.join(' · ')}')));
+      final summary = 'Imported "$rootName": ${parts.join(' · ')}';
+      failed > 0 ? task.fail(summary) : task.complete(summary);
     } catch (e) {
+      task.fail('Import of "$rootName" failed');
       if (mounted) {
         await showCnestError(context, UploadPipeline.mapUploadError(e));
       }
@@ -474,19 +473,14 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     if (result == null || result.files.isEmpty) return;
     if (!mounted) return;
 
-    setState(() {
-      _isUploading = true;
-      _uploadDone = 0;
-      _uploadTotal = result.files.length;
-    });
+    setState(() => _isUploading = true);
     try {
+      // Progress + summary ride the activity pill (uploadBatch registers
+      // the task).
       final outcomes = await UploadPipeline.uploadBatch(
         result.files,
         category: UploadCategory.other,
         folderId: _folderId,
-        onProgress: (done, total) {
-          if (mounted) setState(() => _uploadDone = done);
-        },
       );
       if (mounted) await _reportUploadOutcomes(outcomes);
     } finally {
@@ -494,22 +488,10 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     }
   }
 
+  /// Only a failure's DETAIL still needs this screen (the actionable error
+  /// sheet); everything else rides the pill.
   Future<void> _reportUploadOutcomes(List<UploadOutcome> outcomes) async {
-    final uploaded =
-        outcomes.where((o) => o.ok && !o.skippedDuplicate).length;
-    final dups = outcomes.where((o) => o.skippedDuplicate).length;
     final failures = outcomes.where((o) => !o.ok).toList();
-
-    final parts = <String>[];
-    if (uploaded > 0) {
-      parts.add('$uploaded file${uploaded == 1 ? '' : 's'} secured here');
-    }
-    if (dups > 0) parts.add('$dups already in your vault');
-    if (failures.isNotEmpty) parts.add('${failures.length} failed');
-    if (parts.isNotEmpty && mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(parts.join(' · '))));
-    }
     if (failures.isNotEmpty && mounted) {
       await showCnestError(
           context, UploadPipeline.mapUploadError(failures.first.error!));

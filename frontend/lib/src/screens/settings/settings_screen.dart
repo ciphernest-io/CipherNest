@@ -12,10 +12,12 @@ import '../../../services/database_service.dart';
 import '../../../services/upload_foreground_guard.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/cache_manager_service.dart';
+import '../../../services/activity_center.dart';
 import '../../../services/app_lock_service.dart';
 import '../../../services/audio_player_service.dart';
 import '../../../services/auto_sync_service.dart';
 import '../../../services/auto_sync_worker.dart';
+import '../../../services/notify.dart';
 import '../../../services/biometric_unlock_service.dart';
 import '../../../services/gallery_prefs.dart';
 import '../../../services/key_manager_service.dart';
@@ -588,43 +590,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _handleSyncNow() async {
+    if (AutoSyncService().isSyncing) {
+      Notify.info('Backup already running');
+      return;
+    }
     setState(() => _isLoading = true);
     // Pin foreground priority — a user who taps Sync Now and switches
     // apps expects the batch to finish.
     await UploadForegroundGuard().begin();
+    final task = ActivityCenter().start(
+        kind: ActivityKind.backup, label: 'Checking for new photos…');
+    AutoSyncService().onProgress = (done, total) =>
+        task.update(done, total: total, label: 'Backing up $done/$total');
     try {
       final result = await AutoSyncService().runFullSync();
-      if (mounted) {
-        // Honest tally — a failed batch must never read as a clean one.
-        final String msg;
-        if (result.failed > 0) {
-          final base =
-              '${result.synced} backed up · ${result.failed} failed';
-          msg = result.allFailuresOffline
-              ? "$base — you appear to be offline"
-              : base;
-        } else if (result.synced > 0) {
-          msg =
-              '${result.synced} photo${result.synced == 1 ? '' : 's'} secured';
-        } else {
-          msg = 'No new photos found';
-        }
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-        _loadPreferences();
+      // Honest tally — a failed batch must never read as a clean one.
+      final String msg;
+      if (result.failed > 0) {
+        final base = '${result.synced} backed up · ${result.failed} failed';
+        msg = result.allFailuresOffline
+            ? '$base — you appear to be offline'
+            : base;
+      } else if (result.synced > 0) {
+        msg = '${result.synced} photo${result.synced == 1 ? '' : 's'} secured';
+      } else {
+        msg = 'No new photos found';
       }
+      result.failed > 0 ? task.fail(msg) : task.complete(msg);
+      if (mounted) _loadPreferences();
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Sync failed: $e',
-              style: TextStyle(color: Theme.of(context).colorScheme.onError),
-            ),
-            backgroundColor: Theme.of(context).colorScheme.error,
-          ),
-        );
-      }
+      task.fail('Sync failed: $e');
     } finally {
+      AutoSyncService().onProgress = null;
       // Balance the begin() above — without this the ref (and the
       // "Securing your file…" notification) leaked for the process
       // lifetime.

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'activity_center.dart';
 import 'auto_sync_service.dart';
 import 'auto_sync_worker.dart';
 import 'cache_manager_service.dart';
@@ -58,6 +59,14 @@ class SyncService {
     }
 
     _isSyncing = true;
+    // QUIET task: cycles fire on every screen-open/pull-to-refresh and
+    // usually finish in seconds — a flashing pill would be noise. It shows
+    // in the expanded sheet while running; failures inside the cycle are
+    // handled per-step (offline is a state, not an error toast).
+    final task = ActivityCenter().start(
+        kind: ActivityKind.sync,
+        label: 'Syncing…',
+        visibility: ActivityVisibility.quiet);
     try {
       var again = true;
       while (again) {
@@ -66,6 +75,7 @@ class SyncService {
         again = abortedOnSwitch || _rerunRequested;
       }
     } finally {
+      task.complete('Synced');
       _isSyncing = false;
     }
   }
@@ -164,7 +174,33 @@ class SyncService {
       if (switched()) return true;
       final mode = await AutoSyncScheduler.readMode();
       if (mode != AutoSyncMode.off) {
-        lastAutoSyncResult = await AutoSyncService().runFullSync();
+        // NORMAL task, created lazily on the first per-asset callback — a
+        // pass that finds nothing never pills. Only wire the single-slot
+        // onProgress when auto-sync is idle: overwriting a running run's
+        // slot (e.g. Settings' Sync Now) would freeze ITS progress.
+        ActivityTask? bTask;
+        final wasIdle = !AutoSyncService().isSyncing;
+        if (wasIdle) {
+          AutoSyncService().onProgress = (done, total) {
+            bTask ??= ActivityCenter().start(
+                kind: ActivityKind.backup, label: 'Backing up…');
+            bTask!.update(done,
+                total: total, label: 'Backing up $done/$total');
+          };
+        }
+        try {
+          lastAutoSyncResult = await AutoSyncService().runFullSync();
+        } finally {
+          if (wasIdle) AutoSyncService().onProgress = null;
+        }
+        final r = lastAutoSyncResult;
+        final t = bTask;
+        if (t != null && r != null) {
+          final msg = r.failed > 0
+              ? '${r.synced} backed up · ${r.failed} failed'
+              : '${r.synced} photo${r.synced == 1 ? '' : 's'} secured';
+          r.failed > 0 ? t.fail(msg) : t.complete(msg);
+        }
       }
 
       // 6. Notify all subscribed screens

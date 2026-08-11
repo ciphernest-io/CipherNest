@@ -6,6 +6,7 @@ import '../../widgets/theme_icon.dart';
 import 'package:photo_manager/photo_manager.dart';
 import '../../config/routes.dart';
 
+import '../../../services/activity_center.dart';
 import '../../../services/migration_service.dart';
 
 enum _MigrationPhase { choosing, selectingAlbums, scanning, ready, migrating, paused, complete }
@@ -136,13 +137,40 @@ class _MigrationScreenState extends State<MigrationScreen> {
   Future<void> _startMigration() async {
     setState(() => _phase = _MigrationPhase.migrating);
 
+    // Activity-center task: migration survives leaving this screen, and
+    // the expanded sheet's pause/resume/cancel drive BOTH the service and
+    // (when still mounted) this screen's phase, so the two surfaces agree.
+    final task = ActivityCenter().start(
+      kind: ActivityKind.migration,
+      label: 'Migrating…',
+      total: _assets.length,
+      onPause: () {
+        MigrationService().pause();
+        if (mounted) setState(() => _phase = _MigrationPhase.paused);
+      },
+      onResume: () {
+        MigrationService().resume();
+        if (mounted) setState(() => _phase = _MigrationPhase.migrating);
+      },
+      onCancel: MigrationService().cancel,
+    );
+    _task = task;
+
     try {
       final result = await MigrationService().runMigration(
         assets: _assets,
         onProgress: (progress) {
+          task.update(progress.current,
+              total: progress.total,
+              label: 'Migrating ${progress.current}/${progress.total}',
+              detail: progress.currentFileName);
           if (mounted) setState(() => _progress = progress);
         },
       );
+      final summary = result.failed > 0
+          ? '${result.synced} migrated · ${result.failed} failed'
+          : '${result.synced} photo${result.synced == 1 ? '' : 's'} migrated';
+      result.failed > 0 ? task.fail(summary) : task.complete(summary);
       if (mounted) {
         setState(() {
           _result = result;
@@ -152,6 +180,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
     } catch (e) {
       // Most common: cloud reconnect needed. Surface as a snackbar and
       // drop back to the choosing phase so the user can bail cleanly.
+      task.fail(e.toString().replaceFirst('Bad state: ', ''));
       if (!mounted) return;
       setState(() => _phase = _MigrationPhase.choosing);
       ScaffoldMessenger.of(context).showSnackBar(
@@ -159,16 +188,22 @@ class _MigrationScreenState extends State<MigrationScreen> {
           content: Text(e.toString().replaceFirst('Bad state: ', '')),
         ),
       );
+    } finally {
+      _task = null;
     }
   }
 
+  ActivityTask? _task;
+
   void _pause() {
     MigrationService().pause();
+    _task?.setPaused(true);
     setState(() => _phase = _MigrationPhase.paused);
   }
 
   void _resume() {
     MigrationService().resume();
+    _task?.setPaused(false);
     setState(() => _phase = _MigrationPhase.migrating);
   }
 
