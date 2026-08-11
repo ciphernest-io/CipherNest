@@ -11,6 +11,7 @@ import '../../../services/sync_service.dart';
 import '../../config/theme_controller.dart';
 import '../../models/album_model.dart';
 import '../../models/file_model.dart';
+import '../../widgets/activity_pill.dart';
 import '../../widgets/file_actions.dart';
 import '../../widgets/theme_icon.dart';
 import '../share/share_dialog.dart';
@@ -43,6 +44,8 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
     super.initState();
     SyncService().syncNotifier.addListener(_onDataChanged);
     DatabaseService().addListener(_onDataChanged);
+    AudioPlayerService().addListener(_syncPillInset);
+    _syncPillInset();
     _refresh();
   }
 
@@ -50,8 +53,23 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
   void dispose() {
     SyncService().syncNotifier.removeListener(_onDataChanged);
     DatabaseService().removeListener(_onDataChanged);
+    AudioPlayerService().removeListener(_syncPillInset);
+    _pillInset?.release();
     _tracksController.dispose();
     super.dispose();
+  }
+
+  // The MiniPlayerBar occupies the bottom band only while a queue exists —
+  // the global activity pill claims clearance to match.
+  InsetClaim? _pillInset;
+  void _syncPillInset() {
+    final hasPlayer = AudioPlayerService().current != null;
+    if (hasPlayer && _pillInset == null) {
+      _pillInset = ActivityPillInset.claim(68);
+    } else if (!hasPlayer) {
+      _pillInset?.release();
+      _pillInset = null;
+    }
   }
 
   void _onDataChanged() {

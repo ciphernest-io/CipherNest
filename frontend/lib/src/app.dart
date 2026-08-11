@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 
+import '../services/activity_center.dart';
 import '../services/app_lock_service.dart';
 import '../services/audio_player_service.dart';
 import '../services/recycle_bin_service.dart';
@@ -12,9 +13,16 @@ import '../services/video_streaming_server.dart';
 import 'config/constants.dart';
 import 'config/routes.dart';
 import 'config/theme_controller.dart';
+import 'widgets/activity_pill.dart';
 
 class App extends StatefulWidget {
   const App({super.key});
+
+  /// The one app-wide navigator key. Static because the activity overlay
+  /// lives ABOVE the Navigator (MaterialApp builder) — its tap handlers
+  /// need a context/navigator without having one below them in the tree.
+  static final GlobalKey<NavigatorState> navigatorKey =
+      GlobalKey<NavigatorState>();
 
   @override
   State<App> createState() => _AppState();
@@ -22,7 +30,6 @@ class App extends StatefulWidget {
 
 class _AppState extends State<App> with WidgetsBindingObserver {
   final _themeController = ThemeController();
-  final _navigatorKey = GlobalKey<NavigatorState>();
   final _appLinks = AppLinks();
   StreamSubscription<Uri>? _linkSub;
 
@@ -34,11 +41,13 @@ class _AppState extends State<App> with WidgetsBindingObserver {
     // Warm the entitlement cache so Plus gates read correctly from the
     // first frame instead of flashing Free state.
     unawaited(SubscriptionService().init());
+    // Activity center: notification mirror + bg-sync bridge + lifecycle.
+    unawaited(ActivityCenter().init());
     _bootstrapDeepLinks();
     // Auto-lock: defers while music plays or a video streams so playback
     // never cuts mid-session.
     AppLockService().init(
-      navigatorKey: _navigatorKey,
+      navigatorKey: App.navigatorKey,
       isPlaybackActive: () =>
           AudioPlayerService().playing ||
           VideoStreamingServer().hasActiveSessions,
@@ -93,7 +102,7 @@ class _AppState extends State<App> with WidgetsBindingObserver {
 
   void _handleIncomingUri(Uri uri, {required bool isColdStart}) {
     if (!_isShareUri(uri)) return;
-    final nav = _navigatorKey.currentState;
+    final nav = App.navigatorKey.currentState;
     if (nav == null) return;
     if (isColdStart) {
       // Cold start: replace the splash entirely so its deferred
@@ -132,14 +141,16 @@ class _AppState extends State<App> with WidgetsBindingObserver {
     return MaterialApp(
       title: 'CipherNest',
       debugShowCheckedModeBanner: false,
-      navigatorKey: _navigatorKey,
+      navigatorKey: App.navigatorKey,
       theme: _themeController.themeData,
       initialRoute: AppRoutes.splash,
       onGenerateRoute: AppRoutes.generateRoute,
       // Every pointer-down resets the auto-lock countdown, then (for
       // Hackerman) the app-wide code-rain texture is painted behind the
-      // route at low opacity. Builder re-runs on ThemeController notify, so
-      // switching themes swaps the texture.
+      // route at low opacity, and the activity overlay (progress pill +
+      // toasts) floats above every route. Builder re-runs on
+      // ThemeController notify — the overlay is stateless over singletons,
+      // so those rebuilds are pure paint.
       builder: (context, child) {
         Widget content = child ?? const SizedBox.shrink();
         if (appTex != null) {
@@ -159,6 +170,12 @@ class _AppState extends State<App> with WidgetsBindingObserver {
             ],
           );
         }
+        content = Stack(
+          children: [
+            content,
+            const ActivityOverlay(),
+          ],
+        );
         return Listener(
           behavior: HitTestBehavior.translucent,
           onPointerDown: (_) => AppLockService().recordActivity(),

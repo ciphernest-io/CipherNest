@@ -208,8 +208,10 @@ class ActivityCenter extends ChangeNotifier {
   }
 
   /// Swipe-away: hides the pill until the next task event. Work continues.
+  /// Also flicks away a lingering terminal flash.
   void suppressPill() {
     _suppressed = true;
+    _clearTerminal();
     notifyListeners();
   }
 
