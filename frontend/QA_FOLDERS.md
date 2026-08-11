@@ -102,7 +102,19 @@ Everything in this section is `[UI]` + real-cloud plumbing — zero property-tes
 - [ ] **Share/save non-blocking:** "Send file" on a large cloud-only video → pill counts the decrypt, you can keep browsing, the system share sheet opens when done. Same for Save to device (confirm dialog first, then pill).
 - [ ] **Stability:** switch themes mid-task (pill survives, restyled); hot restart while a bg worker runs (no port crash, progress resumes); rotate mid-task.
 
-## 11. Sweep (can't wait 30 days)
+## 11. QA Round 5 — placement fix, top pill, pick-then-place, capture, per-file hide, visuals, album art
+
+- [ ] `[DB]` **No root flash:** upload into folder F (home place-flow AND browser upload-here) → rows visible IN F from the first frame; auto-sync photo lands in Phone Backup's tree with no flash at root. Also: a favorite toggled mid-upload survives (addFile now carries flags).
+- [ ] `[UI]` **Pill at the TOP:** below the AppBar on plain screens, below the TabBar on Music/Recycle Bin, below the selection bar when selecting in gallery/browser, over the photo in the viewer. NO yellow underline anywhere, any theme. Toast sits under the pill and never shifts it.
+- [ ] `[UI]` **Pick-then-place:** home FAB → Take photo / Record video / Upload files. Upload files → picker: files dimmed + inert, folders navigate, New-folder works mid-flow, footer shows "3 files → 〈folder〉", 'Upload here' at depth 3 returns home in ONE motion, Cancel and full back-out upload nothing. Browser's own FAB flow unchanged (uploads into the viewed folder).
+- [ ] `[UI]` **Capture:** permission denial aborts with a toast. Photo: shutter → place flow → uploads as media with thumbnail, name CNEST_yyyyMMdd_HHmmss.jpg. Video: record with timer → stop → place → plays after upload (.mp4 streamed path). From the BROWSER sheet capture lands straight in the current folder. After upload the temp dir holds NO plaintext capture (Settings cache at baseline). Background mid-recording → no crash on resume; flash cycles; lens flips; PHOTO↔VIDEO toggles.
+- [ ] `[UI]` **ZK check:** after captures, the system gallery (Google Photos/Samsung Gallery) shows NO copy of the captured photo/video.
+- [ ] `[DB]` **Per-file hide:** hide one file from the viewer overflow, a browser row ⋮, gallery multi-select, and browser multi-select → gone from Photos/Albums/Stories/Documents/Music/Other/favorites/covers; STILL in the Files browser (dimmed + "Hidden from views") and the Recycle Bin. Unhide from the browser row and the viewer. Sync → V matches. Concurrent hide + favorite on S/V → both flags land on both devices. Bulk ≥5 → pill task with an honest count.
+- [ ] `[UI]` **File visuals:** pdf rows in the browser show real page thumbnails; docx/xlsx/csv/zip/code/ipynb show the same colored icons in the browser, Documents tab, and Other Files tab (identical glyphs). (docx/xlsx real previews are impossible client-side under zero-knowledge — icons are the Drive-parity answer.)
+- [ ] `[UI]` **Album art:** upload an mp3 with embedded art and an m4a with covr → art shows in track rows, the track picker, audio details, the mini-player disc, and Now Playing; the lock-screen/media notification shows art ONLY while "show titles" is on (toggle off → generic, next queue). Art-less tracks keep the note placeholder.
+- [ ] `[UI]` **Other Files icon:** archive-box glyph on the home card + empty state, distinct from the Folders card, in every theme pack.
+
+## 12. Sweep (can't wait 30 days)
 
 The folder-aware sweep is `[DB]`-tested (expiry math, folder-first ordering, orphan fallback). On-device spot check if desired: none practical without clock games — trust the tests here, or temporarily shorten the TTL in a debug build.
 
