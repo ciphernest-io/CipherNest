@@ -16,6 +16,12 @@
          notifications on Android 13+. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- In-app capture (CaptureScreen): the camera plugin merges CAMERA
+         itself, but declaring both here keeps the surface self-documenting.
+         Captures land in app-private temp ONLY - the OEM camera app is
+         deliberately never used (it saves plaintext copies to DCIM). -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <!-- allowBackup MUST stay false: Auto Backup would copy the wrapped seed
          (seed_blob_v1), the biometric blob, and the shares DB (which holds
          magic links with raw key fragments) to the user's Google Drive.
