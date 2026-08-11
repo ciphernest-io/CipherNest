@@ -588,8 +588,16 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     );
     if (confirm != true) return;
 
-    await RecycleBinService().purgeFilePermanently(file);
+    final ok = await RecycleBinService().purgeFilePermanently(file);
     if (!mounted) return;
+    if (!ok) {
+      // The row purge didn't land (db closed mid-purge, disk full) — the
+      // file still exists, so it must not vanish from the pager or claim
+      // success.
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Couldn\'t delete — please try again')));
+      return;
+    }
     _removeCurrentFromList();
     if (_currentFiles.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1587,10 +1595,14 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       vertical: vertical,
       onPlayPause: _handlePlayPause,
     );
-    final capture = _GlassIconButton(
-      icon: 'screenshotFrame',
-      onTap: _captureVideoFrame,
-    );
+    // Frame capture mints a NEW LIVE vault file — an edit affordance, so it
+    // is hidden in bin mode (playback and mute stay: viewing, not editing).
+    final capture = widget.fromRecycleBin
+        ? null
+        : _GlassIconButton(
+            icon: 'screenshotFrame',
+            onTap: _captureVideoFrame,
+          );
     final mute = _GlassIconButton(
       icon: _videoMuted ? 'speakerSlash' : 'speakerHigh',
       onTap: _toggleMute,
@@ -1600,8 +1612,10 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           pill,
-          const SizedBox(height: 6),
-          capture,
+          if (capture != null) ...[
+            const SizedBox(height: 6),
+            capture,
+          ],
           const SizedBox(height: 6),
           mute,
         ],
@@ -1611,7 +1625,11 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
       child: Row(
         children: [
-          SizedBox(width: 44, child: Center(child: capture)),
+          // The slot stays even without the button so the pill keeps its
+          // centered layout.
+          SizedBox(
+              width: 44,
+              child: capture == null ? null : Center(child: capture)),
           Expanded(child: Center(child: pill)),
           SizedBox(width: 44, child: Center(child: mute)),
         ],

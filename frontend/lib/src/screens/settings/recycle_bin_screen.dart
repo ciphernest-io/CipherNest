@@ -385,14 +385,17 @@ class _FilesBinTabState extends State<_FilesBinTab> {
     // Cloud + DB purge + cache wipe, one shared path with the bin viewer
     // (RecycleBinService). A failed cloud delete never blocks the purge:
     // the purge tombstone condemns the blob and the condemned-blob sweep
-    // retries until it lands.
+    // retries until it lands. A failed ROW purge is counted and reported —
+    // never claimed as deleted.
+    var ok = 0;
     for (final f in picked) {
-      await RecycleBinService().purgeFilePermanently(f);
+      if (await RecycleBinService().purgeFilePermanently(f)) ok++;
     }
     if (!mounted) return;
+    final failed = picked.length - ok;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('${picked.length} ${widget.noun}'
-            '${picked.length == 1 ? '' : 's'} permanently deleted')));
+        content: Text('$ok ${widget.noun}${ok == 1 ? '' : 's'} permanently '
+            'deleted${failed > 0 ? ' · $failed failed' : ''}')));
     _exitSelection();
   }
 
