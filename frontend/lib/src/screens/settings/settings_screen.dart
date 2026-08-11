@@ -504,7 +504,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
     } finally {
-      await UploadForegroundGuard().end();
       if (mounted) setState(() => _isLoading = false);
     }
   }
@@ -626,6 +625,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
     } finally {
+      // Balance the begin() above — without this the ref (and the
+      // "Securing your file…" notification) leaked for the process
+      // lifetime.
+      await UploadForegroundGuard().end();
       if (mounted) setState(() => _isLoading = false);
     }
   }
