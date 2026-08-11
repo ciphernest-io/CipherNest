@@ -82,6 +82,7 @@ const Map<String, String> _phosphorToMaterial = {
   'arrowsClockwise': 'refresh',
   'arrowsCounterClockwise': 'refresh',
   'arrowCounterClockwise': 'undo',
+  'archiveBox': 'inventory_2',
   'arrowLeft': 'arrow_back',
   'arrowSquareOut': 'open_in_new',
   'broom': 'cleaning_services',

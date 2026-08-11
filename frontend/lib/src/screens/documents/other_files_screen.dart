@@ -190,7 +190,7 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
         Center(
           child: Column(
             children: [
-              ThemeIcon('folderOpen',
+              ThemeIcon('archiveBox',
                   size: 64, color: cs.onSurface.withAlpha(120)),
               const SizedBox(height: 16),
               Text('No other files yet',

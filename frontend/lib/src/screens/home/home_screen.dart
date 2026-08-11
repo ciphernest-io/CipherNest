@@ -218,7 +218,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       _DashboardCard(
         title: 'Other Files',
-        icon: 'folder',
+        // Archive box, not a folder — 'folder' collided with the Folders
+        // card one row up.
+        icon: 'archiveBox',
         color: cs.primary,
         onTap: () => Navigator.pushNamed(context, AppRoutes.otherFiles),
       ),
