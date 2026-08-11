@@ -7,11 +7,12 @@ import 'activity_sheet.dart';
 import 'theme_icon.dart';
 import 'toast.dart';
 
-/// Bottom-inset claim STACK for the globally mounted overlay. Screens whose
-/// bottom edge carries chrome (gallery's nav bar, music's mini player, the
-/// viewer's action pill) claim their height in initState and release in
-/// dispose; the overlay floats above `_claims.last` — route disposal is
-/// LIFO, so the last claim always belongs to the visible screen.
+/// TOP-inset claim STACK for the globally mounted overlay. The overlay
+/// floats just below a standard AppBar; screens whose top chrome is TALLER
+/// (an AppBar TabBar, an in-body selection bar) claim the extra height and
+/// release it in dispose (or when the bar hides); the overlay drops below
+/// `_claims.last` — route disposal is LIFO, so the last claim always
+/// belongs to the visible screen.
 class ActivityPillInset {
   ActivityPillInset._();
 
@@ -48,10 +49,13 @@ class InsetClaim {
   }
 }
 
-/// The global overlay layer mounted in the MaterialApp builder — toast pill
-/// stacked above the activity pill, bottom-center, clear of per-screen
-/// chrome and the keyboard. Stateless over singletons: the builder re-runs
-/// on every theme change, so rebuilds must be pure paint.
+/// The global overlay layer mounted in the MaterialApp builder — activity
+/// pill stacked above the toast, top-center, just below each screen's app
+/// bar. The Material(transparency) wrapper is LOAD-BEARING: this tree lives
+/// above the Navigator, so without it every Text renders Flutter's
+/// missing-Material error style (yellow double underline). Stateless over
+/// singletons: the builder re-runs on every theme change, so rebuilds must
+/// be pure paint.
 class ActivityOverlay extends StatelessWidget {
   const ActivityOverlay({super.key});
 
@@ -62,16 +66,22 @@ class ActivityOverlay extends StatelessWidget {
       builder: (context, inset, _) => Positioned(
         left: 0,
         right: 0,
-        bottom: 16 + inset + MediaQuery.viewInsetsOf(context).bottom,
+        top: kToolbarHeight + 10 + inset,
         child: const SafeArea(
-          top: false,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ToastPill(),
-              SizedBox(height: 8),
-              ActivityPill(),
-            ],
+          bottom: false,
+          child: Material(
+            type: MaterialType.transparency,
+            // Pill FIRST: it is the long-lived element and keeps a stable y
+            // regardless of toast lifecycle (toast-first would shove it
+            // down on every flash).
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ActivityPill(),
+                SizedBox(height: 8),
+                ToastPill(),
+              ],
+            ),
           ),
         ),
       ),

@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import '../../config/theme_controller.dart';
 import '../../config/theme_packs.dart';
+import '../../widgets/activity_pill.dart';
 import '../../widgets/file_actions.dart';
 import '../../widgets/folder_picker_sheet.dart';
 import '../../widgets/theme_icon.dart';
@@ -267,6 +268,7 @@ class PicturesTabState extends State<PicturesTab> {
   void dispose() {
     SyncService().syncNotifier.removeListener(_onSyncComplete);
     DatabaseService().removeListener(_onDatabaseChanged);
+    _selectionClaim?.release();
     super.dispose();
   }
 
@@ -300,6 +302,7 @@ class PicturesTabState extends State<PicturesTab> {
       _selectionMode = true;
       _selectedIds.add(id);
     });
+    _updateSelectionClaim();
   }
 
   void _toggleSelected(String id) {
@@ -311,6 +314,7 @@ class PicturesTabState extends State<PicturesTab> {
       }
       if (_selectedIds.isEmpty) _selectionMode = false;
     });
+    _updateSelectionClaim();
   }
 
   void _exitSelection() {
@@ -318,6 +322,20 @@ class PicturesTabState extends State<PicturesTab> {
       _selectionMode = false;
       _selectedIds.clear();
     });
+    _updateSelectionClaim();
+  }
+
+  // The selection toolbar sits right under the gallery AppBar — exactly
+  // where the top-anchored activity pill floats. Claim clearance while it
+  // shows.
+  InsetClaim? _selectionClaim;
+  void _updateSelectionClaim() {
+    if (_selectionMode && _selectionClaim == null) {
+      _selectionClaim = ActivityPillInset.claim(60);
+    } else if (!_selectionMode) {
+      _selectionClaim?.release();
+      _selectionClaim = null;
+    }
   }
 
   Future<void> _deleteSelected(List<CnestFile> all) async {

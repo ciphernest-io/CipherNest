@@ -20,6 +20,7 @@ import '../../models/file_model.dart';
 import '../../models/folder_model.dart';
 import '../../utils/bulk_ops.dart';
 import '../../utils/byte_format.dart';
+import '../../widgets/activity_pill.dart';
 import '../../widgets/file_actions.dart';
 import '../../widgets/folder_picker_sheet.dart';
 import '../../widgets/friendly_error_sheet.dart';
@@ -73,6 +74,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   @override
   void dispose() {
     DatabaseService().removeListener(_reload);
+    _selectionClaim?.release();
     super.dispose();
   }
 
@@ -212,6 +214,19 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       if (!_selectedIds.remove(id)) _selectedIds.add(id);
       if (_selectedIds.isEmpty) _selectionMode = false;
     });
+    _updateSelectionClaim();
+  }
+
+  // The in-body selection bar sits right under the AppBar — exactly where
+  // the top-anchored activity pill floats. Claim clearance while it shows.
+  InsetClaim? _selectionClaim;
+  void _updateSelectionClaim() {
+    if (_selectionMode && _selectionClaim == null) {
+      _selectionClaim = ActivityPillInset.claim(60);
+    } else if (!_selectionMode) {
+      _selectionClaim?.release();
+      _selectionClaim = null;
+    }
   }
 
   Future<void> _moveOneFile(CnestFile file) async {
@@ -251,6 +266,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       _selectionMode = false;
       _selectedIds.clear();
     });
+    _updateSelectionClaim();
   }
 
   // ---- Build ------------------------------------------------------------
@@ -516,10 +532,13 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
           children: [
             IconButton(
               icon: const ThemeIcon('x'),
-              onPressed: () => setState(() {
-                _selectionMode = false;
-                _selectedIds.clear();
-              }),
+              onPressed: () {
+                setState(() {
+                  _selectionMode = false;
+                  _selectedIds.clear();
+                });
+                _updateSelectionClaim();
+              },
             ),
             Text('${_selectedIds.length} selected',
                 style: TextStyle(
@@ -716,10 +735,13 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
                   },
                 )),
       onTap: () => _openFile(file),
-      onLongPress: () => setState(() {
-        _selectionMode = true;
-        _selectedIds.add(file.id);
-      }),
+      onLongPress: () {
+        setState(() {
+          _selectionMode = true;
+          _selectedIds.add(file.id);
+        });
+        _updateSelectionClaim();
+      },
     );
   }
 

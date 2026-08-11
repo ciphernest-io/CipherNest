@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../../widgets/activity_pill.dart';
 import '../../widgets/theme_icon.dart';
 import '../../config/routes.dart';
 import 'pictures_tab.dart';
@@ -16,21 +15,6 @@ class GalleryScreen extends StatefulWidget {
 class _GalleryScreenState extends State<GalleryScreen> {
   int _bottomNavIndex = 0;
   final _picturesKey = GlobalKey<PicturesTabState>();
-
-  // Keep the global activity pill above the bottom nav bar.
-  late final InsetClaim _pillInset;
-
-  @override
-  void initState() {
-    super.initState();
-    _pillInset = ActivityPillInset.claim(kBottomNavigationBarHeight);
-  }
-
-  @override
-  void dispose() {
-    _pillInset.release();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {

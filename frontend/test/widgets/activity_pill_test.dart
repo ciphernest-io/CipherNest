@@ -82,17 +82,20 @@ void main() {
     expect(find.text('Cleaning…'), findsNothing);
   });
 
-  testWidgets('inset claim moves the overlay up', (tester) async {
-    final claim = ActivityPillInset.claim(56);
-    addTearDown(claim.release);
+  testWidgets('top-anchored: pill sits below a standard AppBar; a top '
+      'claim pushes it further down', (tester) async {
     await tester.pumpWidget(_host());
     center.start(kind: ActivityKind.upload, label: 'Working…');
     await tester.pump();
+    final unclaimed = tester.getTopLeft(find.text('Working…')).dy;
+    expect(unclaimed, greaterThanOrEqualTo(kToolbarHeight),
+        reason: 'the pill must never overlap a plain AppBar');
 
-    final pillBottom = tester.getBottomLeft(find.text('Working…')).dy;
-    final screenBottom =
-        tester.getSize(find.byType(MaterialApp).first).height;
-    expect(screenBottom - pillBottom, greaterThan(56),
-        reason: 'the pill must clear the claimed bottom chrome');
+    final claim = ActivityPillInset.claim(48);
+    addTearDown(claim.release);
+    await tester.pump();
+    final claimed = tester.getTopLeft(find.text('Working…')).dy;
+    expect(claimed, greaterThanOrEqualTo(unclaimed + 48),
+        reason: 'a TabBar/selection-bar claim must push the pill below it');
   });
 }

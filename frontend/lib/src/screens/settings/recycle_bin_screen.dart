@@ -7,6 +7,7 @@ import '../../../services/database_service.dart';
 import '../../../services/notify.dart';
 import '../../../services/recycle_bin_service.dart';
 import '../../utils/bulk_ops.dart';
+import '../../widgets/activity_pill.dart';
 import '../../models/file_model.dart';
 import '../../models/folder_model.dart';
 import '../gallery/image_viewer_screen.dart';
@@ -131,6 +132,21 @@ class RecycleBinScreen extends StatefulWidget {
 }
 
 class _RecycleBinScreenState extends State<RecycleBinScreen> {
+  // AppBar carries a TabBar — the top-anchored activity pill drops below.
+  late final InsetClaim _pillInset;
+
+  @override
+  void initState() {
+    super.initState();
+    _pillInset = ActivityPillInset.claim(kTextTabBarHeight);
+  }
+
+  @override
+  void dispose() {
+    _pillInset.release();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(

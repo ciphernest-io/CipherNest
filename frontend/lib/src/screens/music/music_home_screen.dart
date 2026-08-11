@@ -45,8 +45,8 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
     super.initState();
     SyncService().syncNotifier.addListener(_onDataChanged);
     DatabaseService().addListener(_onDataChanged);
-    AudioPlayerService().addListener(_syncPillInset);
-    _syncPillInset();
+    // AppBar carries a TabBar — the top-anchored activity pill drops below.
+    _pillInset = ActivityPillInset.claim(kTextTabBarHeight);
     _refresh();
   }
 
@@ -54,24 +54,12 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
   void dispose() {
     SyncService().syncNotifier.removeListener(_onDataChanged);
     DatabaseService().removeListener(_onDataChanged);
-    AudioPlayerService().removeListener(_syncPillInset);
-    _pillInset?.release();
+    _pillInset.release();
     _tracksController.dispose();
     super.dispose();
   }
 
-  // The MiniPlayerBar occupies the bottom band only while a queue exists —
-  // the global activity pill claims clearance to match.
-  InsetClaim? _pillInset;
-  void _syncPillInset() {
-    final hasPlayer = AudioPlayerService().current != null;
-    if (hasPlayer && _pillInset == null) {
-      _pillInset = ActivityPillInset.claim(68);
-    } else if (!hasPlayer) {
-      _pillInset?.release();
-      _pillInset = null;
-    }
-  }
+  late final InsetClaim _pillInset;
 
   void _onDataChanged() {
     if (mounted) _refresh();

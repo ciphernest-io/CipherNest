@@ -5,7 +5,6 @@ import '../../../services/database_service.dart';
 import '../../../services/notify.dart';
 import '../../models/album_model.dart';
 import '../../models/file_model.dart';
-import '../../widgets/activity_pill.dart';
 import '../../widgets/theme_icon.dart';
 import '../share/share_dialog.dart';
 import 'audio_details_screen.dart';
@@ -30,30 +29,13 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   void initState() {
     super.initState();
     DatabaseService().addListener(_onDataChanged);
-    AudioPlayerService().addListener(_syncPillInset);
-    _syncPillInset();
     _refresh();
   }
 
   @override
   void dispose() {
     DatabaseService().removeListener(_onDataChanged);
-    AudioPlayerService().removeListener(_syncPillInset);
-    _pillInset?.release();
     super.dispose();
-  }
-
-  // The MiniPlayerBar occupies the bottom band only while a queue exists —
-  // the global activity pill claims clearance to match.
-  InsetClaim? _pillInset;
-  void _syncPillInset() {
-    final hasPlayer = AudioPlayerService().current != null;
-    if (hasPlayer && _pillInset == null) {
-      _pillInset = ActivityPillInset.claim(68);
-    } else if (!hasPlayer) {
-      _pillInset?.release();
-      _pillInset = null;
-    }
   }
 
   void _onDataChanged() {

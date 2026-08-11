@@ -30,7 +30,6 @@ import '../../../services/file_metadata_service.dart';
 import '../../../services/image_edit_service.dart';
 import '../../../services/notify.dart';
 import '../../../services/video_streaming_server.dart';
-import '../../widgets/activity_pill.dart';
 import '../../widgets/file_actions.dart';
 import '../share/share_dialog.dart';
 import 'image_editor_screen.dart';
@@ -198,9 +197,6 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     super.initState();
     _currentIndex = widget.initialIndex;
     _currentFiles = List.from(widget.files);
-    // The viewer's bottom band (action pill + filmstrip) is the densest in
-    // the app — the global activity pill floats clear of it.
-    _pillInset = ActivityPillInset.claim(120);
     _pageController = PageController(
       initialPage: widget.initialIndex,
       viewportFraction: 1.05,
@@ -211,11 +207,8 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     );
   }
 
-  late final InsetClaim _pillInset;
-
   @override
   void dispose() {
-    _pillInset.release();
     _pageController.dispose();
     _filmStripController.dispose();
     super.dispose();
