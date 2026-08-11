@@ -77,7 +77,17 @@ Everything in this section is `[UI]` + real-cloud plumbing — zero property-tes
 - [ ] **OEM picker check (the pre-authorized cut):** if ACTION_OPEN_DOCUMENT_TREE misbehaves on either phone (empty tree, crash, unreadable docs), that's the cut condition — report it and "Import a folder" gets removed in favor of multi-file only.
 - [ ] **Cache hygiene:** after any import/upload (success AND failure), Settings cache figure returns to baseline — SAF cache copies and picker copies must not linger.
 
-## 9. Sweep (can't wait 30 days)
+## 9. QA Round 3 — home fix, one-tree consistency, folder hide, bin viewer, counts
+
+- [ ] `[UI]` **Home:** five cards in order Photos & Videos / Folders / Documents / Music / **Other Files** (was silently dropped — it must be back). Rotate → landscape shows 2+2+1 rows, the odd last card at half width.
+- [ ] `[UI]` **One-tree consistency:** a photo filed in ANY folder appears in Photos & Videos, Albums, and Stories alike. The Settings toggle "Category tabs show foldered files" is GONE.
+- [ ] `[DB]` **Folder hide (synced):** hide a folder on S (folder row ⋮ or open-folder menu) → its files (and every descendant's) vanish from Photos/Stories/Albums (smart AND manual, counts AND covers)/Documents/Music/Other/track picker/add-to-album picker — but STAY in the Files browser (with "Hidden from views" cue) and the Recycle Bin. Sync → V matches. Unhide → all reappear. Hide, delete, restore → still hidden. Concurrent hide on S + move-child-out on V → child's files visible again on both.
+- [ ] `[UI]` **Home upload destination:** FAB sheet leads with "To: My Vault" → tap, pick a folder → upload lands there (check the Files browser); reopen the sheet → back to My Vault. Browser upload sheet subtitle names the folder.
+- [ ] `[UI]` **Bin viewer:** open a binned photo → only Restore / Info / Delete remain (no favourite/edit/share/save/wallpaper/print/copy; info sheet has no Edit). Delete → "Delete permanently?" → gone from bin, cloud blob deleted, converges to the other device after sync. Restore → returns to gallery, bin refreshes on pop. Deleting the last item pops the viewer. Same from the folder drill-in.
+- [ ] `[DB]` **Bin viewer regression (the clock/detach bug):** open a photo INSIDE a binned folder's drill-in, tap delete, CANCEL the dialog → restoring the folder must still restore that photo (the old bug detached it via a second deleteFile op).
+- [ ] `[UI]` **Counts:** a folder holding only a subfolder reads "1 item"; Phone Backup counts its device folder. Delete confirm names subtree totals ("N folders and M files inside").
+
+## 10. Sweep (can't wait 30 days)
 
 The folder-aware sweep is `[DB]`-tested (expiry math, folder-first ordering, orphan fallback). On-device spot check if desired: none practical without clock games — trust the tests here, or temporarily shorten the TTL in a debug build.
 
