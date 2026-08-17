@@ -27,7 +27,7 @@
          magic links with raw key fragments) to the user's Google Drive.
          Recovery story is the mnemonic, never device backup. -->
     <application
-        android:label="frontend"
+        android:label="CipherNest"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"

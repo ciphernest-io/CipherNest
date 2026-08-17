@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Theme-aware launcher icon: background color and foreground logo both
+     resolve through -night qualifiers (white bg + black logo in light mode,
+     black bg + white logo in dark mode). The monochrome layer feeds
+     Android 13+ themed icons; it is an alpha mask, so the black logo works
+     for both themes. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background"/>
+    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+    <monochrome android:drawable="@mipmap/ic_launcher_foreground"/>
+</adaptive-icon>
