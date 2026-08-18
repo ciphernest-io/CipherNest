@@ -12,6 +12,7 @@ import 'cloud/account_registry.dart';
 import 'cloud/sealed_metadata.dart';
 import 'sync/sync_coordinator.dart';
 import 'sync/sync_op.dart';
+import 'system_folders.dart';
 
 /// [DatabaseService] extends [ChangeNotifier] so screens can rebuild in-place
 /// when files are added, deleted, restored, or moved between albums. Every
@@ -435,10 +436,11 @@ class DatabaseService extends ChangeNotifier {
 
   static Future<void> _seedSmartAlbums(Database db) async {
     final now = DateTime.now().millisecondsSinceEpoch;
+    // smart_camera / smart_screenshots are RETIRED: their filename
+    // heuristics are strictly inferior to the derived device albums, which
+    // group the real Camera/Screenshots folders. v19 deletes leftover rows.
     for (final album in [
       {'id': 'smart_all_photos', 'name': 'All Photos', 'query': 'all_images'},
-      {'id': 'smart_camera', 'name': 'Camera', 'query': 'camera'},
-      {'id': 'smart_screenshots', 'name': 'Screenshots', 'query': 'screenshots'},
       {'id': 'smart_videos', 'name': 'Videos', 'query': 'videos'},
     ]) {
       await db.insert('albums', {
@@ -1860,9 +1862,21 @@ class DatabaseService extends ChangeNotifier {
   // --- SMART ALBUM HELPERS ---
 
   Future<List<CnestFile>> _smartAlbumFiles(Database db, String query, {int? limit}) async {
+    final limitClause = limit != null ? ' LIMIT $limit' : '';
+    if (query.startsWith(_deviceAlbumQueryPrefix)) {
+      final ids = await _deviceAlbumFolderIdsFor(db, query);
+      if (ids.isEmpty) return [];
+      final ph = List.filled(ids.length, '?').join(',');
+      final maps = await db.rawQuery(
+        'SELECT * FROM files WHERE folder_id IN ($ph) AND is_deleted = 0 '
+        'AND is_hidden = 0 AND account_id = ? '
+        'ORDER BY created_at DESC$limitClause',
+        [...ids, _currentAccountId],
+      );
+      return maps.map((m) => CnestFile.fromMap(m)).toList();
+    }
     final where = _smartAlbumWhere(query);
     if (where == null) return [];
-    final limitClause = limit != null ? ' LIMIT $limit' : '';
     final maps = await db.rawQuery(
       'SELECT * FROM files WHERE $where AND account_id = ?'
       '${hiddenExclusion()} ORDER BY created_at DESC$limitClause',
@@ -1872,6 +1886,17 @@ class DatabaseService extends ChangeNotifier {
   }
 
   Future<int> _smartAlbumCount(Database db, String query) async {
+    if (query.startsWith(_deviceAlbumQueryPrefix)) {
+      final ids = await _deviceAlbumFolderIdsFor(db, query);
+      if (ids.isEmpty) return 0;
+      final ph = List.filled(ids.length, '?').join(',');
+      final result = await db.rawQuery(
+        'SELECT COUNT(*) as cnt FROM files WHERE folder_id IN ($ph) '
+        'AND is_deleted = 0 AND is_hidden = 0 AND account_id = ?',
+        [...ids, _currentAccountId],
+      );
+      return Sqflite.firstIntValue(result) ?? 0;
+    }
     final where = _smartAlbumWhere(query);
     if (where == null) return 0;
     final result = await db.rawQuery(
@@ -1880,6 +1905,79 @@ class DatabaseService extends ChangeNotifier {
       [_currentAccountId],
     );
     return Sqflite.firstIntValue(result) ?? 0;
+  }
+
+  // --- DERIVED DEVICE ALBUMS ---
+  //
+  // One virtual album per distinct album-folder NAME across all device
+  // subtrees under this account's Phone Backup root: Camera on the A55 and
+  // Camera on the S22 render as ONE "Camera" album whose contents are the
+  // union of both folders. Pure view-layer derivation — no album rows, no
+  // membership, no ops. Deleting from one deletes the FILE (membership is
+  // folder location); the smart-album delete path already does exactly
+  // that with honest dialog copy.
+
+  static const String _deviceAlbumQueryPrefix = 'device:';
+
+  /// Album-level system folders (children of device folders under the
+  /// Phone Backup root), grouped by normalized display name. Hidden
+  /// subtrees are excluded — hiding a folder hides its derived album.
+  Future<Map<String, ({String display, List<String> ids})>>
+      _deviceAlbumGroups(Database db) async {
+    final acct = _currentAccountId;
+    if (acct == null) return {};
+    final rootId = SystemFolders.rootId(acct);
+    final rows = await db.rawQuery('''
+      SELECT f.id, f.name FROM folders f
+      JOIN folders d ON f.parent_id = d.id
+      WHERE d.parent_id = ? AND f.is_deleted = 0 AND d.is_deleted = 0
+        AND f.hidden_effective = 0 AND f.account_id = ?
+      ORDER BY f.name COLLATE NOCASE
+    ''', [rootId, acct]);
+    final groups = <String, ({String display, List<String> ids})>{};
+    for (final r in rows) {
+      final name = ((r['name'] as String?) ?? '').trim();
+      final key = SystemFolders.normalize(name);
+      if (key.isEmpty) continue;
+      final existing = groups[key];
+      groups[key] = (
+        display: existing?.display ?? name,
+        ids: [...?existing?.ids, r['id'] as String],
+      );
+    }
+    return groups;
+  }
+
+  Future<List<String>> _deviceAlbumFolderIdsFor(
+      Database db, String query) async {
+    final key = query.substring(_deviceAlbumQueryPrefix.length);
+    final groups = await _deviceAlbumGroups(db);
+    return groups[key]?.ids ?? const [];
+  }
+
+  /// The derived device albums, as synthesized smart [CnestAlbum]s (never
+  /// persisted) — so the existing album card/detail UI works unchanged.
+  Future<List<CnestAlbum>> getDeviceAlbums() async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final now = DateTime.now();
+    final groups = await _deviceAlbumGroups(db);
+    final albums = <CnestAlbum>[];
+    for (final e in groups.entries) {
+      final query = '$_deviceAlbumQueryPrefix${e.key}';
+      albums.add(CnestAlbum(
+        id: 'device_${e.key}',
+        name: e.value.display,
+        isSmart: true,
+        smartQuery: query,
+        createdAt: now,
+        updatedAt: now,
+        fileCount: await _smartAlbumCount(db, query),
+      ));
+    }
+    albums.sort(
+        (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return albums;
   }
 
   String? _smartAlbumWhere(String query) {
