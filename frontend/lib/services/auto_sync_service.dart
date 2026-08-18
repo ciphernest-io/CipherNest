@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../src/models/file_model.dart';
+import 'backup_backfill_runner.dart';
 import 'backup_selection_service.dart';
 import 'cloud/account_registry.dart';
 import 'cloud/cloud_service.dart';
@@ -172,6 +173,12 @@ class AutoSyncService {
 
       // Notify all subscribed screens (gallery, documents) to refresh
       SyncService().syncNotifier.value++;
+
+      // Enrolled-with-"include existing" albums whose backfill hasn't
+      // completed yet: run them now, after the incremental pass. Interrupted
+      // runs are safe to repeat — the migration dedup index skips everything
+      // already vaulted, and the pending flag only clears on a clean pass.
+      await BackupBackfillRunner().runPending();
     } catch (e) {
       debugPrint('Auto-sync error: $e');
       if (classifyNetworkError(e) != null) offlineFailures++;
@@ -361,19 +368,21 @@ class AutoSyncService {
     }
   }
 
-  /// Resolves (creating if needed) the system folder an auto-synced asset
-  /// files into: `Phone Backup / <Device> / <Album>` — FLAT, one level per
-  /// MediaStore bucket display name, never a filesystem path mirror.
-  /// Bucketless assets (aggregate-album-only) file into the device folder.
-  /// Deterministic ids (SystemFolders) make every run converge on the same
-  /// tree; replay's first-create-wins guard folds the duplicate creates.
+  /// Resolves (creating if needed) the system folder a device-gallery
+  /// asset files into: `Phone Backup / <Device> / <Album>` — FLAT, one
+  /// level per MediaStore bucket display name, never a filesystem path
+  /// mirror. Bucketless assets (aggregate-album-only) file into the device
+  /// folder. Deterministic ids (SystemFolders) make every run converge on
+  /// the same tree; replay's first-create-wins guard folds the duplicate
+  /// creates. PUBLIC because migration/backfill place through the same
+  /// chain — one placement authority, not two drifting copies.
   ///
   /// Deletion is RESPECTED per level, never fought: a binned or purged
   /// level (purge is terminal — replay drops re-creates of the id) stops
   /// the walk and files land in the NEAREST LIVE ANCESTOR — the device
   /// folder, then Phone Backup, then the vault root. Either way the file
   /// still ingests and shows in the gallery.
-  Future<String?> _ensureSystemPath({String? bucketName}) async {
+  Future<String?> ensureSystemPath({String? bucketName}) async {
     // Ids are ACCOUNT-SALTED (see SystemFolders): each linked account owns
     // its own tree in the shared folders table. No account = nothing to
     // salt with — file at the vault root (_syncAsset throws earlier anyway).
@@ -448,7 +457,7 @@ class AutoSyncService {
     // retries keep the placement the original attempt stamped on the row.
     final folderId = existingRow != null
         ? existingRow.folderId
-        : await _ensureSystemPath(bucketName: bucketName);
+        : await ensureSystemPath(bucketName: bucketName);
 
     Uint8List? thumbnailBytes;
 

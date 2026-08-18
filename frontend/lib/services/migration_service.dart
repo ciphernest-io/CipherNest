@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../src/models/file_model.dart';
+import 'auto_sync_service.dart';
 import 'cloud/cloud_service.dart';
 import 'database_backup_service.dart';
 import 'database_service.dart';
@@ -60,6 +61,10 @@ class MigrationService {
     }
 
     List<AssetEntity> allAssets;
+    // Which real bucket each asset came from (first bucket wins) — drives
+    // the Phone Backup/<Device>/<Album> placement at migrate time. Manual
+    // picks have no bucket and file into the device folder.
+    final bucketByAssetId = <String, String>{};
 
     if (manualAssets != null) {
       allAssets = manualAssets;
@@ -83,6 +88,11 @@ class MigrationService {
         final assets =
             await album.getAssetListRange(start: 0, end: count);
         allAssets.addAll(assets);
+        if (!album.isAll && album.name.trim().isNotEmpty) {
+          for (final a in assets) {
+            bucketByAssetId.putIfAbsent(a.id, () => album.name.trim());
+          }
+        }
       }
     }
 
@@ -135,7 +145,11 @@ class MigrationService {
       }
     }
 
-    return MigrationScanResult(assets: unsynced, totalBytes: totalBytes);
+    return MigrationScanResult(
+      assets: unsynced,
+      totalBytes: totalBytes,
+      bucketByAssetId: bucketByAssetId,
+    );
   }
 
   /// Runs the migration: encrypts and uploads each asset, calling [onProgress]
@@ -143,6 +157,7 @@ class MigrationService {
   Future<MigrationResult> runMigration({
     required List<AssetEntity> assets,
     required void Function(MigrationProgress progress) onProgress,
+    Map<String, String> bucketByAssetId = const {},
   }) async {
     if (_isRunning) {
       return MigrationResult(synced: 0, failed: 0, skipped: 0);
@@ -190,7 +205,8 @@ class MigrationService {
         }
 
         final fileSize = await file.length();
-        final didSync = await _migrateAsset(asset, email);
+        final didSync = await _migrateAsset(asset, email,
+            bucketName: bucketByAssetId[asset.id]);
 
         if (didSync) {
           synced++;
@@ -236,11 +252,16 @@ class MigrationService {
       DatabaseBackupService().scheduleBackup();
     }
 
+    final wasCancelled = _isCancelled;
     _isRunning = false;
     _isPaused = false;
     _isCancelled = false;
 
-    return MigrationResult(synced: synced, failed: failed, skipped: skipped);
+    return MigrationResult(
+        synced: synced,
+        failed: failed,
+        skipped: skipped,
+        cancelled: wasCancelled);
   }
 
   void pause() => _isPaused = true;
@@ -250,7 +271,8 @@ class MigrationService {
     _isPaused = false;
   }
 
-  Future<bool> _migrateAsset(AssetEntity asset, String email) async {
+  Future<bool> _migrateAsset(AssetEntity asset, String email,
+      {String? bucketName}) async {
     final file = await asset.file;
     if (file == null) return false;
 
@@ -259,6 +281,13 @@ class MigrationService {
     final isVideo = asset.type == AssetType.video;
     final isImage = asset.type == AssetType.image || isVideo;
     final fileId = const Uuid().v4();
+
+    // Same placement authority as auto-sync: Phone Backup/<Device>/<Album>
+    // (device folder when the asset has no bucket). Migrated files used to
+    // land at the vault root — a device-gallery photo belongs in the
+    // device's backup tree no matter which path vaulted it.
+    final folderId =
+        await AutoSyncService().ensureSystemPath(bucketName: bucketName);
 
     Uint8List? thumbnailBytes;
 
@@ -302,6 +331,7 @@ class MigrationService {
       type: isImage ? CnestFileType.image : CnestFileType.document,
       provider: 0,
       accountId: email,
+      folderId: folderId,
     );
     await DatabaseService().addFile(newFile);
 
@@ -353,7 +383,8 @@ class MigrationService {
         filename: filename,
         contentHash: contentHash,
         sizeBytes: fileSize,
-        capturedAt: capturedMs > 0 ? capturedMs : null);
+        capturedAt: capturedMs > 0 ? capturedMs : null,
+        folderId: folderId);
     return true;
   }
 }
@@ -370,7 +401,16 @@ class MigrationScanResult {
   final List<AssetEntity> assets;
   final int totalBytes;
 
-  MigrationScanResult({required this.assets, required this.totalBytes});
+  /// Real MediaStore bucket per asset id (first bucket wins) — feeds the
+  /// Phone Backup placement in [MigrationService.runMigration]. Empty for
+  /// manual picks.
+  final Map<String, String> bucketByAssetId;
+
+  MigrationScanResult({
+    required this.assets,
+    required this.totalBytes,
+    this.bucketByAssetId = const {},
+  });
 }
 
 class MigrationProgress {
@@ -400,9 +440,15 @@ class MigrationResult {
   final int failed;
   final int skipped;
 
+  /// True when the pass stopped early (user cancel). A cancelled pass can
+  /// report zero failures — callers deciding "was this a CLEAN, COMPLETE
+  /// pass" (the backfill runner) must check this too.
+  final bool cancelled;
+
   MigrationResult({
     required this.synced,
     required this.failed,
     required this.skipped,
+    this.cancelled = false,
   });
 }

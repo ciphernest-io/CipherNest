@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../../../services/backup_backfill_runner.dart';
 import '../../../services/backup_selection_service.dart';
 import '../../../services/migration_service.dart';
 import '../../../services/system_folders.dart';
@@ -47,6 +50,7 @@ class _BackupAlbumsScreenState extends State<BackupAlbumsScreen> {
           existingCount: album.count);
       if (backfill == null) return; // dismissed = don't enroll
       await BackupSelectionService().enroll(album.name, backfill: backfill);
+      if (backfill) unawaited(BackupBackfillRunner().runPending());
     } else {
       await BackupSelectionService().unenroll(album.name);
     }
@@ -241,6 +245,7 @@ Future<void> showBackupAlbumChoiceSheet(BuildContext context) async {
       final albums = await MigrationService().getAlbums();
       await BackupSelectionService().queueBackfills(
           albums.where((a) => !a.path.isAll).map((a) => a.name));
+      unawaited(BackupBackfillRunner().runPending());
     }
     return;
   }

@@ -29,6 +29,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
   // Scan results
   List<AssetEntity> _assets = [];
   int _totalBytes = 0;
+  Map<String, String> _bucketByAssetId = const {};
 
   // Progress
   MigrationProgress? _progress;
@@ -41,6 +42,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
     final scan = await MigrationService().scanGallery();
     if (mounted) {
       setState(() {
+        _bucketByAssetId = scan.bucketByAssetId;
         _assets = scan.assets;
         _totalBytes = scan.totalBytes;
         _phase = _MigrationPhase.ready;
@@ -70,6 +72,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
     final scan = await MigrationService().scanGallery(albumPaths: selectedPaths);
     if (mounted) {
       setState(() {
+        _bucketByAssetId = scan.bucketByAssetId;
         _assets = scan.assets;
         _totalBytes = scan.totalBytes;
         _phase = _MigrationPhase.ready;
@@ -124,6 +127,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
     final scan = await MigrationService().scanGallery(manualAssets: selected);
     if (mounted) {
       setState(() {
+        _bucketByAssetId = scan.bucketByAssetId;
         _assets = scan.assets;
         _totalBytes = scan.totalBytes;
         _phase = _MigrationPhase.ready;
@@ -156,6 +160,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
     try {
       final result = await MigrationService().runMigration(
         assets: _assets,
+        bucketByAssetId: _bucketByAssetId,
         onProgress: (progress) {
           task.update(progress.current,
               total: progress.total,
