@@ -22,8 +22,10 @@ import '../../../services/biometric_unlock_service.dart';
 import '../../../services/gallery_prefs.dart';
 import '../../../services/key_manager_service.dart';
 import '../../../services/metadata_migration_service.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import '../../../services/sync/device_registry_service.dart';
 import '../../../services/sync/sync_coordinator.dart';
+import '../../../services/system_folders.dart';
 import '../../../services/sync/vault_health_service.dart';
 import '../../widgets/password_confirm_dialog.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -178,10 +180,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
         currentName: currentName,
         onRename: (name) async {
           await DeviceRegistryService().setDeviceName(name);
+          await _renameDeviceFolder(name);
           await SyncCoordinator().pushOnly();
         },
       ),
     );
+  }
+
+  /// Keeps the Phone Backup device folder's display name in step with the
+  /// registry name. Best-effort: the folder only exists once auto-sync has
+  /// run, and a rename is an ordinary LWW renameFolder op.
+  Future<void> _renameDeviceFolder(String name) async {
+    final account = AccountRegistry().activeAccount;
+    if (account == null) return;
+    try {
+      final info = await DeviceInfoPlugin().androidInfo;
+      final key = SystemFolders.deviceKey(
+          info.manufacturer.trim(), info.model.trim());
+      final folderId = SystemFolders.deviceId(account.id, key);
+      final row = await DatabaseService().getFolderById(folderId);
+      if (row == null || row.isDeleted) return;
+      await DatabaseService().renameFolder(folderId, name);
+    } catch (_) {
+      // The registry name is the source of truth; the folder catches up on
+      // the next rename or stays as-is.
+    }
   }
 
   Future<void> _runVaultHealthScan() async {

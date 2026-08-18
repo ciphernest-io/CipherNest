@@ -2,7 +2,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:uuid/uuid.dart';
 
 import 'package:ciphernest/services/system_folders.dart';
-import 'package:ciphernest/services/auto_sync_service.dart';
 
 void main() {
   const acct = 'g_test@example.com';
@@ -11,21 +10,19 @@ void main() {
   test('ids are deterministic — same derivation, same id, every time', () {
     expect(SystemFolders.deviceId(acct, key),
         SystemFolders.deviceId(acct, key));
-    expect(SystemFolders.pathSegmentId(acct, key, ['DCIM', 'Camera']),
-        SystemFolders.pathSegmentId(acct, key, ['DCIM', 'Camera']));
+    expect(SystemFolders.albumId(acct, key, 'Camera'),
+        SystemFolders.albumId(acct, key, 'Camera'));
     expect(SystemFolders.rootId(acct), SystemFolders.rootId(acct));
   });
 
-  test('deviceKey + segments: case and whitespace variants map to ONE id',
+  test('deviceKey + album name: case and whitespace variants map to ONE id',
       () {
     expect(SystemFolders.deviceKey('Samsung', 'SM-A556E'), key);
     expect(SystemFolders.deviceKey(' samsung ', ' sm-a556e '), key);
-    final canonical =
-        SystemFolders.pathSegmentId(acct, key, ['WhatsApp Images']);
-    expect(SystemFolders.pathSegmentId(acct, key, ['whatsapp images']),
-        canonical);
-    expect(SystemFolders.pathSegmentId(acct, key, ['  WhatsApp   Images ']),
-        canonical);
+    final canonical = SystemFolders.albumId(acct, key, 'WhatsApp Images');
+    expect(SystemFolders.albumId(acct, key, 'whatsapp images'), canonical);
+    expect(
+        SystemFolders.albumId(acct, key, '  WhatsApp   Images '), canonical);
   });
 
   test('account salt: variants of the SAME account fold; DIFFERENT accounts '
@@ -41,8 +38,8 @@ void main() {
         SystemFolders.deviceId(other, key) == SystemFolders.deviceId(acct, key),
         isFalse);
     expect(
-        SystemFolders.pathSegmentId(other, key, ['DCIM']) ==
-            SystemFolders.pathSegmentId(acct, key, ['DCIM']),
+        SystemFolders.albumId(other, key, 'Camera') ==
+            SystemFolders.albumId(acct, key, 'Camera'),
         isFalse);
   });
 
@@ -53,26 +50,37 @@ void main() {
     expect(SystemFolders.deviceDisplayName('samsung', ''), 'Samsung');
   });
 
-  test('cumulative prefixes are DISTINCT folders (parent and child)', () {
+  test('root, device, and distinct album names are all DISTINCT folders', () {
     final ids = {
       SystemFolders.rootId(acct),
       SystemFolders.deviceId(acct, key),
-      SystemFolders.pathSegmentId(acct, key, ['DCIM']),
-      SystemFolders.pathSegmentId(acct, key, ['DCIM', 'Camera']),
-      SystemFolders.pathSegmentId(acct, key, ['Pictures']),
+      SystemFolders.albumId(acct, key, 'Camera'),
+      SystemFolders.albumId(acct, key, 'Screenshots'),
+      SystemFolders.albumId(acct, key, 'WhatsApp Images'),
     };
     expect(ids.length, 5);
   });
 
-  test('distinct devices get distinct subtrees for the SAME path', () {
+  test('distinct devices get distinct subtrees for the SAME album name', () {
     const other = 'google pixel 9';
     expect(
         SystemFolders.deviceId(acct, key) == SystemFolders.deviceId(acct, other),
         isFalse);
     expect(
-        SystemFolders.pathSegmentId(acct, key, ['DCIM']) ==
-            SystemFolders.pathSegmentId(acct, other, ['DCIM']),
+        SystemFolders.albumId(acct, key, 'Camera') ==
+            SystemFolders.albumId(acct, other, 'Camera'),
         isFalse);
+  });
+
+  test('album ids can never collide with legacy path-mirror ids', () {
+    // The retired scheme derived from 'path:<device>/<segments>'; the flat
+    // scheme derives from 'album:<device>/<name>'. Same visible name, two
+    // different derivation domains — a wiped-and-reused vault that still
+    // holds legacy folders can never alias a new album folder.
+    final legacyStyle = SystemFolders.idPrefix +
+        const Uuid().v5('8f6a1c2e-4b7d-4f3a-9e15-c0d2a6b83e51',
+            'acct:${SystemFolders.normalize(acct)}/path:$key/camera');
+    expect(SystemFolders.albumId(acct, key, 'Camera') == legacyStyle, isFalse);
   });
 
   test('isSystemId: sys- ids yes, user UUIDv4 ids no', () {
@@ -80,39 +88,9 @@ void main() {
     expect(
         SystemFolders.isSystemId(SystemFolders.deviceId(acct, key)), isTrue);
     expect(
-        SystemFolders.isSystemId(
-            SystemFolders.pathSegmentId(acct, key, ['DCIM', 'Camera'])),
+        SystemFolders.isSystemId(SystemFolders.albumId(acct, key, 'Camera')),
         isTrue);
     expect(SystemFolders.isSystemId(const Uuid().v4()), isFalse);
     expect(SystemFolders.isSystemId(''), isFalse);
-  });
-
-  group('AutoSyncService.pathSegments', () {
-    test('MediaStore RELATIVE_PATH splits into segments', () {
-      expect(AutoSyncService.pathSegments('DCIM/Camera/', 'Camera'),
-          ['DCIM', 'Camera']);
-      expect(AutoSyncService.pathSegments('Pictures/Screenshots/', null),
-          ['Pictures', 'Screenshots']);
-    });
-
-    test('Android <=9 absolute path: primary-storage prefix stripped', () {
-      expect(
-          AutoSyncService.pathSegments(
-              '/storage/emulated/0/DCIM/Camera', 'Camera'),
-          ['DCIM', 'Camera']);
-    });
-
-    test('unusable absolute path falls back to the bucket name', () {
-      expect(AutoSyncService.pathSegments('/sdcard/DCIM/Camera', 'Camera'),
-          ['Camera']);
-    });
-
-    test('null/blank path falls back to bucket; nothing at all -> empty', () {
-      expect(AutoSyncService.pathSegments(null, 'WhatsApp Images'),
-          ['WhatsApp Images']);
-      expect(AutoSyncService.pathSegments('  ', 'Camera'), ['Camera']);
-      expect(AutoSyncService.pathSegments(null, null), isEmpty);
-      expect(AutoSyncService.pathSegments('', '  '), isEmpty);
-    });
   });
 }

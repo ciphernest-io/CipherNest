@@ -17,6 +17,7 @@ import 'database_service.dart';
 import 'encryption_service.dart';
 import 'key_manager_service.dart';
 import 'mp4_metadata_parser.dart';
+import 'sync/device_registry_service.dart';
 import 'sync/sync_coordinator.dart';
 import 'sync_service.dart';
 import 'system_folders.dart';
@@ -30,21 +31,17 @@ class ScannedAsset {
   final int capturedMs;
 
   /// The MediaStore bucket (album) the asset lives in — "Camera",
-  /// "Screenshots", "WhatsApp Images"… Null when only the aggregate
-  /// all-photos album claimed it. Placement FALLBACK when [relativePath]
-  /// is unusable.
+  /// "Screenshots", "WhatsApp Images"… Drives the FLAT system-folder
+  /// placement (`Phone Backup / <Device> / <bucket>`). Null when only the
+  /// aggregate all-photos album claimed it; those file into the device
+  /// folder directly.
   final String? bucketName;
 
-  /// MediaStore RELATIVE_PATH ("DCIM/Camera/") on Android 10+; on ≤9 the
-  /// ABSOLUTE parent dir of DATA; null/blank when the provider has none.
-  /// Drives the real-path system-folder placement.
-  final String? relativePath;
   const ScannedAsset({
     required this.asset,
     required this.duplicate,
     required this.capturedMs,
     this.bucketName,
-    this.relativePath,
   });
 }
 
@@ -128,9 +125,8 @@ class AutoSyncService {
           continue;
         }
         try {
-          final didSync = await _syncAsset(entry.asset,
-              bucketName: entry.bucketName,
-              relativePath: entry.relativePath);
+          final didSync =
+              await _syncAsset(entry.asset, bucketName: entry.bucketName);
           if (didSync) {
             synced++;
           } else {
@@ -307,7 +303,6 @@ class AutoSyncService {
         duplicate: duplicate,
         capturedMs: asset.createDateTime.millisecondsSinceEpoch,
         bucketName: bucketByAssetId[asset.id],
-        relativePath: asset.relativePath,
       ));
     }
 
@@ -323,74 +318,58 @@ class AutoSyncService {
   /// folder id to file into (null = vault root). Cleared each runFullSync.
   final Map<String, String?> _ensuredChain = {};
 
-  /// (idKey, displayName) of THIS phone, keyed on the model string so a
+  /// This phone's subtree KEY, derived from the model string so a
   /// reinstall reuses the same subtree (accepted trade-off: two identical
-  /// handsets merge). Cached for the process lifetime.
-  static (String, String)? _deviceIdentityCache;
+  /// handsets merge). Cached for the process lifetime. The DISPLAY name is
+  /// deliberately NOT cached — it comes from the device registry (user-
+  /// editable) and is read fresh so a rename applies to the next folder
+  /// this service creates.
+  static String? _deviceKeyCache;
 
   Future<(String, String)> _deviceIdentity() async {
-    final cached = _deviceIdentityCache;
-    if (cached != null) return cached;
+    final display = await DeviceRegistryService().deviceName();
+    final cachedKey = _deviceKeyCache;
+    if (cachedKey != null) return (cachedKey, display);
     try {
       final info = await DeviceInfoPlugin().androidInfo;
       final manufacturer = info.manufacturer.trim();
       final model = info.model.trim();
-      final identity = manufacturer.isEmpty && model.isEmpty
-          ? ('unknown device', 'This device')
-          : (
-              SystemFolders.deviceKey(manufacturer, model),
-              SystemFolders.deviceDisplayName(manufacturer, model),
-            );
-      _deviceIdentityCache = identity;
-      return identity;
+      final key = manufacturer.isEmpty && model.isEmpty
+          ? 'unknown device'
+          : SystemFolders.deviceKey(manufacturer, model);
+      _deviceKeyCache = key;
+      return (key, display);
     } catch (_) {
       // Transient plugin failure (e.g. first call in a background isolate):
       // return the generic fallback WITHOUT caching it, so the next call
       // retries — a cached failure would permanently split the backup into
-      // a "This device" subtree beside the real one.
-      return ('unknown device', 'This device');
+      // an "unknown device" subtree beside the real one.
+      return ('unknown device', display);
     }
-  }
-
-  /// The asset's directory path as folder segments. MediaStore
-  /// RELATIVE_PATH ("DCIM/Camera/") splits directly; Android ≤9 gives an
-  /// ABSOLUTE parent dir — usable only after stripping the primary-storage
-  /// prefix. Anything unusable falls back to the album [bucketName] as a
-  /// single level.
-  static List<String> pathSegments(String? relativePath, String? bucketName) {
-    var rp = relativePath?.trim() ?? '';
-    if (rp.startsWith('/')) {
-      final m = RegExp(r'^/storage/emulated/\d+/').firstMatch(rp);
-      rp = m != null ? rp.substring(m.end) : '';
-    }
-    final segments =
-        rp.split('/').where((s) => s.trim().isNotEmpty).toList();
-    if (segments.isNotEmpty) return segments;
-    final bucket = bucketName?.trim();
-    return (bucket == null || bucket.isEmpty) ? const [] : [bucket];
   }
 
   /// Resolves (creating if needed) the system folder an auto-synced asset
-  /// files into: `Phone Backup / <Device> / <real path>` (pCloud-style,
-  /// e.g. Phone Backup / Samsung SM-A556E / DCIM / Camera). Deterministic
-  /// ids (SystemFolders) make every run converge on the same tree; replay's
-  /// first-create-wins guard folds the duplicate creates.
+  /// files into: `Phone Backup / <Device> / <Album>` — FLAT, one level per
+  /// MediaStore bucket display name, never a filesystem path mirror.
+  /// Bucketless assets (aggregate-album-only) file into the device folder.
+  /// Deterministic ids (SystemFolders) make every run converge on the same
+  /// tree; replay's first-create-wins guard folds the duplicate creates.
   ///
   /// Deletion is RESPECTED per level, never fought: a binned or purged
   /// level (purge is terminal — replay drops re-creates of the id) stops
   /// the walk and files land in the NEAREST LIVE ANCESTOR — the device
   /// folder, then Phone Backup, then the vault root. Either way the file
   /// still ingests and shows in the gallery.
-  Future<String?> _ensureSystemPath(
-      {String? bucketName, String? relativePath}) async {
+  Future<String?> _ensureSystemPath({String? bucketName}) async {
     // Ids are ACCOUNT-SALTED (see SystemFolders): each linked account owns
     // its own tree in the shared folders table. No account = nothing to
     // salt with — file at the vault root (_syncAsset throws earlier anyway).
     final acct = AccountRegistry().activeAccount?.id;
     if (acct == null) return null;
     final (key, display) = await _deviceIdentity();
-    final segments = pathSegments(relativePath, bucketName);
-    final memoKey = '$acct|$key|${segments.join('/')}';
+    final album = bucketName?.trim() ?? '';
+    final memoKey =
+        '$acct|$key|${album.isEmpty ? '' : SystemFolders.normalize(album)}';
     final dbsForMemo = DatabaseService();
     final memo = _ensuredChain[memoKey];
     if (memo != null) {
@@ -409,9 +388,8 @@ class AutoSyncService {
     final chain = <(String, String)>[
       (SystemFolders.rootId(acct), SystemFolders.rootName),
       (SystemFolders.deviceId(acct, key), display),
-      for (var i = 0; i < segments.length; i++)
-        (SystemFolders.pathSegmentId(acct, key, segments.sublist(0, i + 1)),
-            segments[i]),
+      if (album.isNotEmpty)
+        (SystemFolders.albumId(acct, key, album), album),
     ];
 
     final dbs = DatabaseService();
@@ -435,9 +413,7 @@ class AutoSyncService {
   /// pending row is retried IN PLACE (heal path) — no delete-then-recreate,
   /// so the gallery tile never flashes.
   Future<bool> _syncAsset(AssetEntity asset,
-      {CnestFile? existingRow,
-      String? bucketName,
-      String? relativePath}) async {
+      {CnestFile? existingRow, String? bucketName}) async {
     final account = AccountRegistry().activeAccount;
     if (account == null) {
       // Transient (sign-out mid-run). Must throw, not return false: false
@@ -459,8 +435,7 @@ class AutoSyncService {
     // retries keep the placement the original attempt stamped on the row.
     final folderId = existingRow != null
         ? existingRow.folderId
-        : await _ensureSystemPath(
-            bucketName: bucketName, relativePath: relativePath);
+        : await _ensureSystemPath(bucketName: bucketName);
 
     Uint8List? thumbnailBytes;
 

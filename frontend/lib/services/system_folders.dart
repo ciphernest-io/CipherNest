@@ -1,9 +1,11 @@
 import 'package:uuid/uuid.dart';
 
 /// Deterministic ids for the auto-sync system tree:
-/// `Phone Backup / <Device> / <real MediaStore path>` (pCloud-style, e.g.
-/// Phone Backup / Samsung SM-A556E / DCIM / Camera). Three rules make the
-/// whole feature converge with ZERO wire or replay changes:
+/// `Phone Backup / <Device> / <Album>` — FLAT: one level per MediaStore
+/// bucket display name (Camera, Screenshots, WhatsApp Images), never a
+/// filesystem path mirror (the old path-mirror scheme surfaced WhatsApp
+/// media as Android/media/com.whatsapp/... five levels deep). Three rules
+/// make the whole feature converge with ZERO wire or replay changes:
 ///
 ///  1. Ids are UUIDv5 of a normalized derivation key, so a device mints the
 ///     SAME id for the same place every run — replay's first-create-wins
@@ -65,13 +67,17 @@ class SystemFolders {
     return [cap, model.trim()].where((s) => s.isNotEmpty).join(' ');
   }
 
-  /// Deterministic id for one CUMULATIVE path prefix under one device —
-  /// ['DCIM'] and ['DCIM', 'Camera'] are two folders, parent and child.
-  static String pathSegmentId(
-          String accountId, String deviceKey, List<String> segments) =>
+  /// Deterministic id for one device ALBUM (MediaStore bucket) folder,
+  /// directly under the device level. Keyed on the bucket's display name —
+  /// same-named buckets at different filesystem paths on one device merge
+  /// into one album folder by design. (The retired path-mirror scheme used
+  /// a distinct 'path:' derivation, so legacy ids can never collide with
+  /// these.)
+  static String albumId(
+          String accountId, String deviceKey, String albumName) =>
       idPrefix +
       const Uuid().v5(_namespace,
-          '${_salt(accountId)}path:$deviceKey/${segments.map(normalize).join('/')}');
+          '${_salt(accountId)}album:$deviceKey/${normalize(albumName)}');
 
   static bool isSystemId(String id) => id.startsWith(idPrefix);
 }

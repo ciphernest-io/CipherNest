@@ -1,9 +1,11 @@
 import 'dart:io';
 
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database_service.dart';
 import '../device_identity_service.dart';
+import '../system_folders.dart';
 import 'op_replay.dart';
 import 'sync_coordinator.dart';
 import 'sync_op.dart';
@@ -30,13 +32,41 @@ class DeviceRegistryService {
   static const _kDeviceNamePref = 'device_name_v1';
   static const _kRegisteredNamePref = 'device_registered_name_v1';
 
-  /// This device's display name (prefs; defaults to a platform label).
+  /// This device's display name (prefs; defaults to a friendly model name,
+  /// e.g. "Samsung SM-A556E").
   Future<String> deviceName() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_kDeviceNamePref) ?? _defaultName();
+    return prefs.getString(_kDeviceNamePref) ?? await _defaultName();
   }
 
-  String _defaultName() {
+  /// Friendly model default, computed once per process. A plugin failure
+  /// falls back to the platform label WITHOUT caching, so a transient
+  /// error (e.g. first call in a background isolate) retries next time.
+  static String? _defaultNameCache;
+
+  Future<String> _defaultName() async {
+    final cached = _defaultNameCache;
+    if (cached != null) return cached;
+    var name = _platformLabel();
+    if (Platform.isAndroid) {
+      try {
+        final info = await DeviceInfoPlugin().androidInfo;
+        final friendly =
+            SystemFolders.deviceDisplayName(info.manufacturer, info.model);
+        if (friendly.isNotEmpty) {
+          name = friendly;
+          _defaultNameCache = name;
+        }
+      } catch (_) {
+        // Keep the platform label, uncached.
+      }
+    } else {
+      _defaultNameCache = name;
+    }
+    return name;
+  }
+
+  String _platformLabel() {
     if (Platform.isAndroid) return 'My Android phone';
     if (Platform.isIOS) return 'My iPhone';
     if (Platform.isMacOS) return 'My Mac';
@@ -57,7 +87,7 @@ class DeviceRegistryService {
   /// sync cycle so a fresh device announces itself.
   Future<void> ensureRegistered() async {
     final prefs = await SharedPreferences.getInstance();
-    final name = prefs.getString(_kDeviceNamePref) ?? _defaultName();
+    final name = prefs.getString(_kDeviceNamePref) ?? await _defaultName();
     if (prefs.getString(_kRegisteredNamePref) == name) return;
     await _register(name);
   }

@@ -818,18 +818,18 @@ void main() {
 
   test(
       'system folders: independent deterministic creates fold to ONE '
-      'device+path chain with is_system stamped; user folders stay 0',
+      'flat device+album chain with is_system stamped; user folders stay 0',
       () async {
-    // The pCloud-style chain one phone mints: Phone Backup -> Samsung
-    // SM-A556E -> DCIM -> Camera. Both sim devices run the SAME derivation
-    // independently (offline), then sync — exactly what one phone's two
-    // installs (reinstall, model-keyed) do.
+    // The FLAT chain one phone mints: Phone Backup -> Samsung SM-A556E ->
+    // {Camera, Screenshots} (one level per bucket, never a path mirror).
+    // Both sim devices run the SAME derivation independently (offline),
+    // then sync — exactly what one phone's two installs (reinstall,
+    // model-keyed) do.
     final key = SystemFolders.deviceKey('samsung', 'SM-A556E');
     final rootId = SystemFolders.rootId(account);
     final devId = SystemFolders.deviceId(account, key);
-    final dcimId = SystemFolders.pathSegmentId(account, key, ['DCIM']);
-    final camId =
-        SystemFolders.pathSegmentId(account, key, ['DCIM', 'Camera']);
+    final camId = SystemFolders.albumId(account, key, 'Camera');
+    final shotsId = SystemFolders.albumId(account, key, 'Screenshots');
 
     for (final e in [a, b]) {
       await e.recordLocalOp(LocalSyncAction(
@@ -843,14 +843,14 @@ void main() {
           folderId: rootId));
       await e.recordLocalOp(LocalSyncAction(
           kind: SyncOpKind.createFolder,
-          targetId: dcimId,
-          name: 'DCIM',
+          targetId: camId,
+          name: 'Camera',
           folderId: devId));
       await e.recordLocalOp(LocalSyncAction(
           kind: SyncOpKind.createFolder,
-          targetId: camId,
-          name: 'Camera',
-          folderId: dcimId));
+          targetId: shotsId,
+          name: 'Screenshots',
+          folderId: devId));
     }
     await a.recordLocalOp(const LocalSyncAction(
         kind: SyncOpKind.createFolder, targetId: 'U', name: 'Holiday'));
@@ -859,7 +859,7 @@ void main() {
     await a.syncCycle();
 
     for (final db in [dbA, dbB]) {
-      final chain = {rootId: null, devId: rootId, dcimId: devId, camId: dcimId};
+      final chain = {rootId: null, devId: rootId, camId: devId, shotsId: devId};
       for (final e in chain.entries) {
         final row = (await folderRow(db, e.key))!;
         expect(row['is_system'], 1);
