@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../src/models/file_model.dart';
+import 'backup_selection_service.dart';
 import 'cloud/account_registry.dart';
 import 'cloud/cloud_service.dart';
 import 'cnest_errors.dart';
@@ -248,17 +249,29 @@ class AutoSyncService {
       return GalleryScan(entries: const [], windowMaxMs: windowMaxMs);
     }
 
-    // Collect all assets from all albums. Real (non-aggregate) albums also
-    // record which bucket each asset belongs to — first bucket wins for the
-    // rare asset MediaStore lists in two.
+    // Collect assets from the albums the user chose to back up
+    // (BackupSelectionService): every album in `all` mode, only enrolled
+    // ones in `selected` mode. Real (non-aggregate) albums also record
+    // which bucket each asset belongs to — first bucket wins for the rare
+    // asset MediaStore lists in two. The aggregate all-photos album is
+    // walked only in `all` mode, purely to catch stray assets no real
+    // bucket claims; those keep a null bucket and file into the device
+    // folder.
+    final selection = await BackupSelectionService().load();
     final allAssets = <AssetEntity>[];
     final bucketByAssetId = <String, String>{};
     for (final album in albums) {
+      if (album.isAll) {
+        if (selection.mode != BackupMode.all) continue;
+      } else if (album.name.trim().isEmpty ||
+          !selection.includes(album.name)) {
+        continue;
+      }
       final count = await album.assetCountAsync;
       if (count == 0) continue;
       final assets = await album.getAssetListRange(start: 0, end: count);
       allAssets.addAll(assets);
-      if (!album.isAll && album.name.trim().isNotEmpty) {
+      if (!album.isAll) {
         for (final a in assets) {
           bucketByAssetId.putIfAbsent(a.id, () => album.name.trim());
         }

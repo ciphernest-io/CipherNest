@@ -28,6 +28,7 @@ import '../../../services/sync/sync_coordinator.dart';
 import '../../../services/system_folders.dart';
 import '../../../services/sync/vault_health_service.dart';
 import '../../widgets/password_confirm_dialog.dart';
+import 'backup_albums_screen.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../config/theme_packs.dart';
 import '../../config/theme_controller.dart';
@@ -534,13 +535,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (enabled) {
       final prefs = await SharedPreferences.getInstance();
       // Set watermark to NOW — only photos taken after this moment auto-sync.
-      // Existing gallery photos require the Migration feature instead.
+      // Per-album backfill (or Migration) pulls in older photos on demand.
       await prefs.setInt(
         'auto_sync_watermark',
         DateTime.now().millisecondsSinceEpoch,
       );
     }
     if (mounted) setState(() => _autoSyncMode = mode);
+    // Which albums? All vs a checklist, plus the include-existing shortcut.
+    if (enabled && mounted) await showBackupAlbumChoiceSheet(context);
   }
 
   /// Switches between [AutoSyncMode.background] and [AutoSyncMode.foregroundOnly]
@@ -857,6 +860,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onChanged: _toggleAutoSync,
           ),
           if (_autoSyncEnabled) ...[
+            ListTile(
+              leading: const SizedBox(width: 24),
+              title: Text('Backed-up albums',
+                  style: TextStyle(color: cs.onSurface)),
+              subtitle: Text(
+                'Choose which device albums are protected',
+                style:
+                    TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 12),
+              ),
+              trailing:
+                  ThemeIcon('caretRight', size: 16, color: cs.onSurface),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const BackupAlbumsScreen()),
+              ),
+            ),
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 4, 16, 4),
               child: Column(

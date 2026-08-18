@@ -9,6 +9,7 @@ import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/password_confirm_dialog.dart';
 import '../../widgets/theme_icon.dart';
+import '../settings/backup_albums_screen.dart';
 
 /// One-time convenience screen shown after successful signup or restore,
 /// before the home screen. Lets the user opt into background auto-sync
@@ -87,7 +88,7 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
     if (v) {
       final prefs = await SharedPreferences.getInstance();
       // Watermark = "now" so only photos taken after this moment auto-sync.
-      // Older photos need to be pulled in via the Migration screen.
+      // Per-album backfill (or Migration) pulls in older photos on demand.
       await prefs.setInt(
         _kAutoSyncWatermark,
         DateTime.now().millisecondsSinceEpoch,
@@ -95,6 +96,8 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
     }
     if (!mounted) return;
     setState(() => _autoSyncOn = v);
+    // Which albums? All vs a checklist, with the include-existing shortcut.
+    if (v) await showBackupAlbumChoiceSheet(context);
   }
 
   Future<void> _finish() async {
