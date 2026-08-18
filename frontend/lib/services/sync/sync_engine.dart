@@ -733,21 +733,50 @@ class SyncEngine {
         batch.delete('album_files', where: 'album_id = ?', whereArgs: [id]);
       }
     }
-    // Membership rows: delete-and-rewrite per synced album (pair counts are
-    // small; correctness over cleverness). added_at = the winning add's
-    // HLC wall, so in-album order is device-identical.
-    for (final e in state.albums.entries) {
-      batch.delete('album_files', where: 'album_id = ?', whereArgs: [e.key]);
-      final members = state.albumMemberships[e.key] ?? const <String, int>{};
-      for (final m in members.entries) {
-        // Only pairs whose file replay knows: album_files.file_id carries a
-        // real FK, and a pair referencing a file with no createFile op
-        // anywhere (dishonest history) must not fail the whole batch.
-        if (!state.files.containsKey(m.key)) continue;
-        batch.insert(
-            'album_files',
-            {'album_id': e.key, 'file_id': m.key, 'added_at': m.value},
-            conflictAlgorithm: ConflictAlgorithm.ignore);
+    // Membership rows: DIFFED like every other derived table — this runs on
+    // every recordLocalOp, so a blanket rewrite would churn thousands of
+    // rows on a favorite toggle. added_at = the winning add's HLC wall, so
+    // in-album order is device-identical.
+    if (state.albums.isNotEmpty || existingAlbums.isNotEmpty) {
+      final memberRows = await db.query('album_files');
+      final existingPairs = {
+        for (final r in memberRows)
+          '${r['album_id']}|${r['file_id']}': r['added_at'] as int?,
+      };
+      final wantedPairs = <String, int>{};
+      for (final e in state.albums.entries) {
+        final members =
+            state.albumMemberships[e.key] ?? const <String, int>{};
+        for (final m in members.entries) {
+          // Only pairs whose file replay knows: album_files.file_id carries
+          // a real FK, and a pair referencing a file with no createFile op
+          // anywhere (dishonest history) must not fail the whole batch.
+          if (!state.files.containsKey(m.key)) continue;
+          wantedPairs['${e.key}|${m.key}'] = m.value;
+        }
+      }
+      for (final e in wantedPairs.entries) {
+        final parts = e.key.split('|');
+        if (existingPairs[e.key] != e.value) {
+          batch.insert(
+              'album_files',
+              {'album_id': parts[0], 'file_id': parts[1], 'added_at': e.value},
+              conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+      }
+      for (final key in existingPairs.keys) {
+        if (wantedPairs.containsKey(key)) continue;
+        final parts = key.split('|');
+        // Drop pairs the log doesn't back — but ONLY for albums this
+        // account's materializer owns; legacy device-local rows (albums
+        // with no synced counterpart) are out of scope.
+        if (!state.albums.containsKey(parts[0]) &&
+            !existingAlbums.containsKey(parts[0])) {
+          continue;
+        }
+        batch.delete('album_files',
+            where: 'album_id = ? AND file_id = ?',
+            whereArgs: [parts[0], parts[1]]);
       }
     }
 
