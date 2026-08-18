@@ -690,6 +690,67 @@ class SyncEngine {
       }
     }
 
+    // ---- Albums: fully derived, SCOPED to this account's synced rows ---
+    // The materializer owns exactly `is_smart = 0 AND account_id = <this>`.
+    // Smart albums/playlists (is_smart = 1, account_id NULL) and other
+    // accounts' rows are structurally out of reach — the scoped DELETEs
+    // are the guard a shared table needs. deleteAlbum is terminal, so a
+    // deleted album simply isn't in replay state and its row (and
+    // memberships) drop everywhere.
+    final albumRows = await db.query('albums',
+        where: 'is_smart = 0 AND account_id = ?', whereArgs: [accountId]);
+    final existingAlbums = {for (final r in albumRows) r['id'] as String: r};
+    for (final e in state.albums.entries) {
+      final id = e.key;
+      final a = e.value;
+      final createWall = _albumCreateWall(opRows, id);
+      final derived = <String, Object?>{
+        'name': a.name,
+        'cover_file_id': a.coverFileId,
+        'kind': a.isAudio ? 'audio' : 'photo',
+        'is_smart': 0,
+        'smart_query': null,
+        'created_at': createWall,
+        'updated_at': createWall,
+      };
+      final row = existingAlbums[id];
+      if (row == null) {
+        batch.insert('albums', {'id': id, 'account_id': accountId, ...derived},
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      } else {
+        final update = <String, Object?>{};
+        derived.forEach((col, value) {
+          if (row[col] != value) update[col] = value;
+        });
+        if (update.isNotEmpty) {
+          batch.update('albums', update, where: 'id = ?', whereArgs: [id]);
+        }
+      }
+    }
+    for (final id in existingAlbums.keys) {
+      if (!state.albums.containsKey(id)) {
+        batch.delete('albums', where: 'id = ?', whereArgs: [id]);
+        batch.delete('album_files', where: 'album_id = ?', whereArgs: [id]);
+      }
+    }
+    // Membership rows: delete-and-rewrite per synced album (pair counts are
+    // small; correctness over cleverness). added_at = the winning add's
+    // HLC wall, so in-album order is device-identical.
+    for (final e in state.albums.entries) {
+      batch.delete('album_files', where: 'album_id = ?', whereArgs: [e.key]);
+      final members = state.albumMemberships[e.key] ?? const <String, int>{};
+      for (final m in members.entries) {
+        // Only pairs whose file replay knows: album_files.file_id carries a
+        // real FK, and a pair referencing a file with no createFile op
+        // anywhere (dishonest history) must not fail the whole batch.
+        if (!state.files.containsKey(m.key)) continue;
+        batch.insert(
+            'album_files',
+            {'album_id': e.key, 'file_id': m.key, 'added_at': m.value},
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+    }
+
     await batch.commit(noResult: true);
     DatabaseService().notifyFilesChanged();
   }
@@ -894,6 +955,15 @@ class SyncEngine {
     for (final r in opRows) {
       if (r['target_id'] == id &&
           r['kind'] == SyncOpKind.createFolder.name) {
+        return r['hlc_wall'] as int;
+      }
+    }
+    return null;
+  }
+
+  int? _albumCreateWall(List<Map<String, Object?>> opRows, String id) {
+    for (final r in opRows) {
+      if (r['target_id'] == id && r['kind'] == SyncOpKind.createAlbum.name) {
         return r['hlc_wall'] as int;
       }
     }

@@ -105,6 +105,22 @@ Future<Set<String>> _columns(Database db, String table) async {
   return rows.map((r) => r['name'] as String).toSet();
 }
 
+
+/// Albums DDL as it shipped from v8 onward (no account_id) — present in
+/// every real DB these fixtures model; the v19 step ALTERs it.
+const _legacyAlbumsDdl = '''
+  CREATE TABLE albums(
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    cover_file_id TEXT,
+    is_smart INTEGER DEFAULT 0,
+    smart_query TEXT,
+    kind TEXT NOT NULL DEFAULT 'photo',
+    created_at INTEGER,
+    updated_at INTEGER
+  )
+''';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   sqfliteFfiInit();
@@ -139,6 +155,7 @@ void main() {
       'account_id': 'acct',
       'name': 'Holiday',
     });
+    await old.execute(_legacyAlbumsDdl);
     await DatabaseService.migrateForTest(old, 16);
 
     expect(await _columns(old, 'folders'), freshFolders);
@@ -158,6 +175,7 @@ void main() {
     await old.execute(_v15FilesDdl);
     await old.execute(_v15FoldersDdl);
     await DatabaseService.createSyncSchemaForTest(old);
+    await old.execute(_legacyAlbumsDdl);
     await DatabaseService.migrateForTest(old, 15);
 
     expect(await _columns(old, 'folders'), freshFolders);
@@ -175,6 +193,7 @@ void main() {
     final old = await newDb();
     await old.execute(_v14FilesDdl);
     await DatabaseService.createSyncSchemaForTest(old);
+    await old.execute(_legacyAlbumsDdl);
     await DatabaseService.migrateForTest(old, 14);
 
     expect(await _columns(old, 'folders'), freshFolders);

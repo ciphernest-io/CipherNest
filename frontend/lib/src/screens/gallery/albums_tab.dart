@@ -144,10 +144,7 @@ class _AlbumsTabState extends State<AlbumsTab> {
           ]),
         ],
         _sectionHeader('My albums', cs,
-            // Honesty label (deliberate): curated albums are device-local
-            // in an app whose headline feature is sync — say so instead of
-            // letting it read as a bug. Folders sync; albums don't (yet).
-            subtitle: 'On this device — albums don\'t sync yet'),
+            subtitle: 'Synced across your devices'),
         _grid([
           for (final album in _albums)
             _AlbumCard(album: album, onTap: () => _openAlbum(album)),

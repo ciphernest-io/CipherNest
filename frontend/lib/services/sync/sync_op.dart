@@ -56,6 +56,32 @@ enum SyncOpKind {
   setFileHidden,
   registerDevice,
 
+  /// Curated-album ops. All payloads ride EXISTING wire fields (the
+  /// [setFolderHidden] rule — a new wire key would be silently stripped by
+  /// an older build's compaction):
+  ///
+  ///   createAlbum       t=albumId  n=name  v=isAudio (playlist vs album;
+  ///                     immutable after create — the KIND of collection
+  ///                     never changes)
+  ///   renameAlbum       t=albumId  n=name            (LWW)
+  ///   deleteAlbum       t=albumId                    (TERMINAL, like
+  ///                     purgeFile: albums have no bin; a deleted album
+  ///                     never resurrects, later membership ops no-op)
+  ///   setAlbumCover     t=albumId  f=fileId|absent   (LWW; absent clears
+  ///                     back to the automatic newest-photo cover)
+  ///   addToAlbum        t=fileId   f=albumId         (pair-LWW by fold
+  ///   removeFromAlbum   t=fileId   f=albumId          order)
+  ///
+  /// `f` (the folderId wire field) carries the COLLECTION id for the
+  /// membership/cover ops — semantically "destination collection", exactly
+  /// what it means on moveFile.
+  createAlbum,
+  renameAlbum,
+  deleteAlbum,
+  setAlbumCover,
+  addToAlbum,
+  removeFromAlbum,
+
   /// FORWARD-COMPAT SENTINEL, never recorded locally: an op whose kind
   /// string this build doesn't know (written by a newer app version). It is
   /// preserved VERBATIM — [SyncOp.rawKind] keeps the original string, so

@@ -1,6 +1,8 @@
-/// v18 migration: files.is_hidden. The files table needs no lower guard
-/// (the <3 branch recreates via _createSchema and returns), so v17 -> 18
-/// and the long jump v14 -> 18 must both equal a fresh create.
+/// v18 migration: files.is_hidden. v19: albums.account_id + retirement of
+/// the filename-heuristic smart albums. The files table needs no lower
+/// guard (the <3 branch recreates via _createSchema and returns), so
+/// v17 -> current and the long jump v14 -> current must both equal a
+/// fresh create.
 library;
 
 import 'package:flutter_test/flutter_test.dart';
@@ -87,6 +89,21 @@ const _v14FilesDdl = '''
   )
 ''';
 
+/// The `albums` DDL as every version v8 through v18 shipped it (no
+/// account_id).
+const _v17AlbumsDdl = '''
+  CREATE TABLE albums(
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    cover_file_id TEXT,
+    is_smart INTEGER DEFAULT 0,
+    smart_query TEXT,
+    kind TEXT NOT NULL DEFAULT 'photo',
+    created_at INTEGER,
+    updated_at INTEGER
+  )
+''';
+
 Future<Set<String>> _columns(Database db, String table) async {
   final rows = await db.rawQuery('PRAGMA table_info($table)');
   return rows.map((r) => r['name'] as String).toSet();
@@ -116,36 +133,53 @@ void main() {
     final old = await newDb();
     await old.execute(_v17FilesDdl);
     await old.execute(_v17FoldersDdl);
+    await old.execute(_v17AlbumsDdl);
     await DatabaseService.createSyncSchemaForTest(old);
     await old.insert('files', {
       'id': 'F',
       'account_id': 'acct',
       'filename': 'a.jpg',
     });
+    // Retired smart albums present pre-v19; a user album must survive.
+    await old.insert('albums', {
+      'id': 'smart_camera',
+      'name': 'Camera',
+      'is_smart': 1,
+      'smart_query': 'camera',
+    });
+    await old.insert('albums', {'id': 'U', 'name': 'Holiday'});
     await DatabaseService.migrateForTest(old, 17);
 
     expect(await _columns(old, 'files'), freshFiles);
+    expect(await _columns(old, 'albums'), await _columns(fresh, 'albums'));
     final row = (await old.query('files', where: "id = 'F'")).single;
     expect(row['is_hidden'], 0);
+    final albumIds =
+        (await old.query('albums')).map((r) => r['id']).toSet();
+    expect(albumIds, {'U'},
+        reason: 'v19 deletes the retired heuristic smart albums only');
 
     await fresh.close();
     await old.close();
   });
 
-  test('v14 -> v18 long jump matches fresh create', () async {
+  test('v14 -> current long jump matches fresh create', () async {
     final fresh = await newDb();
     await DatabaseService.createSchemaForTest(fresh);
     await DatabaseService.createSyncSchemaForTest(fresh);
     final freshFiles = await _columns(fresh, 'files');
     final freshFolders = await _columns(fresh, 'folders');
+    final freshAlbums = await _columns(fresh, 'albums');
 
     final old = await newDb();
     await old.execute(_v14FilesDdl);
+    await old.execute(_v17AlbumsDdl);
     await DatabaseService.createSyncSchemaForTest(old);
     await DatabaseService.migrateForTest(old, 14);
 
     expect(await _columns(old, 'files'), freshFiles);
     expect(await _columns(old, 'folders'), freshFolders);
+    expect(await _columns(old, 'albums'), freshAlbums);
 
     await fresh.close();
     await old.close();

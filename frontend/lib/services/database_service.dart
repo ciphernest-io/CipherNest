@@ -78,7 +78,7 @@ class DatabaseService extends ChangeNotifier {
 
     final db = await openDatabase(
       path,
-      version: 18,
+      version: 19,
       onCreate: (db, version) async {
         await _createSchema(db);
         await _createSyncSchema(db);
@@ -272,6 +272,15 @@ class DatabaseService extends ChangeNotifier {
               'ALTER TABLE files ADD COLUMN is_hidden INTEGER NOT NULL '
               'DEFAULT 0');
         }
+        // v19: albums become synced collections. account_id scopes the
+        // materializer's ownership (smart albums keep NULL and are never
+        // touched by it); the retired filename-heuristic smart albums give
+        // way to the derived device albums.
+        if (oldVersion < 19) {
+          await db.execute('ALTER TABLE albums ADD COLUMN account_id TEXT');
+          await db.delete('albums',
+              where: "id IN ('smart_camera', 'smart_screenshots')");
+        }
   }
 
   /// The virtual folder tree (v15). Fully op-derived — every row is
@@ -418,7 +427,8 @@ class DatabaseService extends ChangeNotifier {
         smart_query TEXT,
         kind TEXT NOT NULL DEFAULT 'photo',
         created_at INTEGER,
-        updated_at INTEGER
+        updated_at INTEGER,
+        account_id TEXT
       )
     ''');
     await db.execute('''
@@ -1717,9 +1727,9 @@ class DatabaseService extends ChangeNotifier {
               ${hiddenExclusion('f.')})
         END as file_count
       FROM albums a
-      WHERE a.kind = ?
+      WHERE a.kind = ? AND (a.is_smart = 1 OR a.account_id = ?)
       ORDER BY a.is_smart DESC, a.created_at ASC
-    ''', [kind]);
+    ''', [kind, _currentAccountId]);
     final albums = rows.map((r) => CnestAlbum.fromMap(r)).toList();
 
     // Populate smart album counts
@@ -1734,8 +1744,15 @@ class DatabaseService extends ChangeNotifier {
   /// Music playlists — same tables as photo albums, kind = 'audio'.
   Future<List<CnestAlbum>> getPlaylists() => getAlbums(kind: 'audio');
 
+  // Album CRUD is op-based (SyncCoordinator choke points, mirroring
+  // createFolder): the op is the write, applyMergedState materializes the
+  // row. Smart albums (and the synthesized device albums) are views, never
+  // op targets — the belt below refuses their ids.
+
+  static bool _isVirtualAlbumId(String id) =>
+      id.startsWith('smart_') || id.startsWith('device_');
+
   Future<CnestAlbum> createAlbum(String name, {String kind = 'photo'}) async {
-    final db = await database;
     final now = DateTime.now();
     final album = CnestAlbum(
       id: const Uuid().v4(),
@@ -1744,7 +1761,8 @@ class DatabaseService extends ChangeNotifier {
       createdAt: now,
       updatedAt: now,
     );
-    await db.insert('albums', album.toMap());
+    await SyncCoordinator().record(SyncOpKind.createAlbum, album.id,
+        name: name, favorite: kind == 'audio');
     return album;
   }
 
@@ -1752,60 +1770,38 @@ class DatabaseService extends ChangeNotifier {
       createAlbum(name, kind: 'audio');
 
   Future<void> renameAlbum(String albumId, String newName) async {
-    final db = await database;
-    await db.update(
-      'albums',
-      {'name': newName, 'updated_at': DateTime.now().millisecondsSinceEpoch},
-      where: 'id = ? AND is_smart = 0',
-      whereArgs: [albumId],
-    );
+    if (_isVirtualAlbumId(albumId)) return;
+    await SyncCoordinator()
+        .record(SyncOpKind.renameAlbum, albumId, name: newName);
   }
 
   Future<void> deleteAlbum(String albumId) async {
-    final db = await database;
-    await db.delete('albums', where: 'id = ? AND is_smart = 0', whereArgs: [albumId]);
+    if (_isVirtualAlbumId(albumId)) return;
+    await SyncCoordinator().record(SyncOpKind.deleteAlbum, albumId);
   }
 
   Future<void> setAlbumCover(String albumId, String fileId) async {
-    final db = await database;
-    await db.update(
-      'albums',
-      {'cover_file_id': fileId, 'updated_at': DateTime.now().millisecondsSinceEpoch},
-      where: 'id = ?',
-      whereArgs: [albumId],
-    );
+    if (_isVirtualAlbumId(albumId)) return;
+    await SyncCoordinator()
+        .record(SyncOpKind.setAlbumCover, albumId, folderId: fileId);
   }
 
-  Future<void> addFileToAlbum(String albumId, String fileId) async {
-    final db = await database;
-    await db.insert('album_files', {
-      'album_id': albumId,
-      'file_id': fileId,
-      'added_at': DateTime.now().millisecondsSinceEpoch,
-    }, conflictAlgorithm: ConflictAlgorithm.ignore);
-  }
+  Future<void> addFileToAlbum(String albumId, String fileId) =>
+      addFilesToAlbum(albumId, [fileId]);
 
   Future<void> addFilesToAlbum(String albumId, List<String> fileIds) async {
-    final db = await database;
-    final batch = db.batch();
-    final now = DateTime.now().millisecondsSinceEpoch;
+    if (_isVirtualAlbumId(albumId)) return;
     for (final fileId in fileIds) {
-      batch.insert('album_files', {
-        'album_id': albumId,
-        'file_id': fileId,
-        'added_at': now,
-      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      // t = the FILE, f = the collection — one pair-LWW op per membership.
+      await SyncCoordinator()
+          .record(SyncOpKind.addToAlbum, fileId, folderId: albumId);
     }
-    await batch.commit(noResult: true);
   }
 
   Future<void> removeFileFromAlbum(String albumId, String fileId) async {
-    final db = await database;
-    await db.delete(
-      'album_files',
-      where: 'album_id = ? AND file_id = ?',
-      whereArgs: [albumId, fileId],
-    );
+    if (_isVirtualAlbumId(albumId)) return;
+    await SyncCoordinator()
+        .record(SyncOpKind.removeFromAlbum, fileId, folderId: albumId);
   }
 
   Future<List<CnestFile>> getFilesForAlbum(CnestAlbum album) async {

@@ -543,6 +543,154 @@ void main() {
     });
   });
 
+  // Pre-registered album-sync invariants (written before the replay cases
+  // were implemented — the folders treatment, applied to collections):
+  //  I1. NO RESURRECTION: a deleted album never reappears, under any
+  //      permutation, whatever later-ordering ops target its id.
+  //  I2. MEMBERSHIP STABILITY: a photo added to an album stays in it unless
+  //      removed, its file purged, or the album deleted.
+  //  I3. DETERMINISM: albums + memberships (including added_at walls) are a
+  //      pure function of the op SET.
+  //  I4. ISOLATION: album ops never touch files/folders state.
+  group('album CRDT semantics', () {
+    test('create/rename LWW/delete basics; first create wins; '
+        'shuffle-stable', () {
+      final ops = [
+        op(SyncOpKind.createAlbum, 'A', name: 'Trip', wall: 1),
+        op(SyncOpKind.createAlbum, 'A',
+            name: 'Impostor', device: 'devB', wall: 2),
+        op(SyncOpKind.renameAlbum, 'A', name: 'Holiday', wall: 3, seq: 1),
+        op(SyncOpKind.renameAlbum, 'A',
+            name: 'Holiday 2024', device: 'devB', wall: 4, seq: 1),
+        op(SyncOpKind.createAlbum, 'P',
+            name: 'Gym mix', favorite: true, wall: 5, seq: 2),
+      ];
+      final baseline = replayOps(ops);
+      expect(baseline.albums['A']!.name, 'Holiday 2024');
+      expect(baseline.albums['A']!.isAudio, isFalse);
+      expect(baseline.albums['P']!.isAudio, isTrue,
+          reason: 'v=true on createAlbum = audio playlist');
+      final rnd = Random(7);
+      for (var i = 0; i < 25; i++) {
+        final s = replayOps(List.of(ops)..shuffle(rnd));
+        expect(s.albums['A']!.name, 'Holiday 2024');
+        expect(s.albums['P']!.isAudio, isTrue);
+      }
+    });
+
+    test('I1 NO RESURRECTION: later create/rename/add on a deleted album '
+        'id stays dead under every permutation', () {
+      final ops = [
+        op(SyncOpKind.createAlbum, 'A', name: 'Trip', wall: 1),
+        op(SyncOpKind.createFile, 'x', name: 'x.jpg', wall: 2, seq: 1),
+        op(SyncOpKind.deleteAlbum, 'A', wall: 3, seq: 2),
+        // All LATER in total order — none may revive the album.
+        op(SyncOpKind.createAlbum, 'A',
+            name: 'Zombie', device: 'devB', wall: 4),
+        op(SyncOpKind.renameAlbum, 'A',
+            name: 'Ghost', device: 'devB', wall: 5, seq: 1),
+        op(SyncOpKind.addToAlbum, 'x',
+            folder: 'A', device: 'devB', wall: 6, seq: 2),
+      ];
+      final rnd = Random(11);
+      for (var i = 0; i < 25; i++) {
+        final s = replayOps(List.of(ops)..shuffle(rnd));
+        expect(s.albums.containsKey('A'), isFalse);
+        expect(s.albumMemberships.containsKey('A'), isFalse);
+        expect(s.files['x']!.deleted, isFalse,
+            reason: 'I4: deleting an album never touches the files');
+      }
+    });
+
+    test('I2/I3 membership pair-LWW: last add/remove in total order wins, '
+        'added_at wall is deterministic', () {
+      final ops = [
+        op(SyncOpKind.createAlbum, 'A', name: 'Trip', wall: 1),
+        op(SyncOpKind.createFile, 'x', name: 'x.jpg', wall: 2, seq: 1),
+        op(SyncOpKind.createFile, 'y', name: 'y.jpg', wall: 3, seq: 2),
+        // x: add then remove -> out. y: remove (no-op) then add -> in.
+        op(SyncOpKind.addToAlbum, 'x', folder: 'A', wall: 4, seq: 3),
+        op(SyncOpKind.removeFromAlbum, 'x',
+            folder: 'A', device: 'devB', wall: 5),
+        op(SyncOpKind.removeFromAlbum, 'y', folder: 'A', wall: 6, seq: 4),
+        op(SyncOpKind.addToAlbum, 'y',
+            folder: 'A', device: 'devB', wall: 7, seq: 1),
+      ];
+      final rnd = Random(13);
+      for (var i = 0; i < 25; i++) {
+        final s = replayOps(List.of(ops)..shuffle(rnd));
+        final members = s.albumMemberships['A']!;
+        expect(members.containsKey('x'), isFalse);
+        expect(members['y'], 7,
+            reason: 'added_at = the winning add\'s HLC wall, everywhere');
+      }
+    });
+
+    test('membership survives file bin + restore, dies on purgeFile', () {
+      final base = [
+        op(SyncOpKind.createAlbum, 'A', name: 'Trip', wall: 1),
+        op(SyncOpKind.createFile, 'x', name: 'x.jpg', wall: 2, seq: 1),
+        op(SyncOpKind.addToAlbum, 'x', folder: 'A', wall: 3, seq: 2),
+        op(SyncOpKind.deleteFile, 'x', wall: 4, seq: 3),
+      ];
+      final binned = replayOps(base);
+      expect(binned.albumMemberships['A']!.containsKey('x'), isTrue,
+          reason: 'binned file keeps its membership (views filter deleted)');
+
+      final restored = replayOps([
+        ...base,
+        op(SyncOpKind.restoreFile, 'x', wall: 5, seq: 4),
+      ]);
+      expect(restored.albumMemberships['A']!['x'], 3);
+
+      final purgedState = replayOps([
+        ...base,
+        op(SyncOpKind.purgeFile, 'x', wall: 5, seq: 4),
+      ]);
+      expect(purgedState.albumMemberships['A']!.containsKey('x'), isFalse,
+          reason: 'purge is terminal — the pair dies with the file');
+    });
+
+    test('setAlbumCover: LWW, absent f clears, deleted album no-op', () {
+      final s = replayOps([
+        op(SyncOpKind.createAlbum, 'A', name: 'Trip', wall: 1),
+        op(SyncOpKind.setAlbumCover, 'A', folder: 'x', wall: 2, seq: 1),
+        op(SyncOpKind.setAlbumCover, 'A',
+            folder: 'y', device: 'devB', wall: 3),
+      ]);
+      expect(s.albums['A']!.coverFileId, 'y');
+
+      final cleared = replayOps([
+        op(SyncOpKind.createAlbum, 'A', name: 'Trip', wall: 1),
+        op(SyncOpKind.setAlbumCover, 'A', folder: 'x', wall: 2, seq: 1),
+        op(SyncOpKind.setAlbumCover, 'A', wall: 3, seq: 2),
+      ]);
+      expect(cleared.albums['A']!.coverFileId, isNull);
+
+      final dead = replayOps([
+        op(SyncOpKind.createAlbum, 'A', name: 'Trip', wall: 1),
+        op(SyncOpKind.deleteAlbum, 'A', wall: 2, seq: 1),
+        op(SyncOpKind.setAlbumCover, 'A',
+            folder: 'x', device: 'devB', wall: 3),
+      ]);
+      expect(dead.albums.containsKey('A'), isFalse);
+    });
+
+    test('I4 isolation: membership ops on unknown albums/files are no-ops '
+        'and never create rows', () {
+      final s = replayOps([
+        op(SyncOpKind.addToAlbum, 'ghost-file', folder: 'ghost-album',
+            wall: 1),
+        op(SyncOpKind.removeFromAlbum, 'ghost-file',
+            folder: 'ghost-album', wall: 2, seq: 1),
+      ]);
+      expect(s.albums, isEmpty);
+      expect(s.albumMemberships, isEmpty);
+      expect(s.files, isEmpty);
+      expect(s.folders, isEmpty);
+    });
+  });
+
   group('sequential equivalence with the reference state machine', () {
     test('random single-device histories: replay == StateMachine', () {
       for (var seed = 0; seed < 40; seed++) {

@@ -140,10 +140,46 @@ class FolderState {
       );
 }
 
+class AlbumState {
+  final String name;
+
+  /// Playlist ('audio') vs photo album. Immutable after create — the wire
+  /// carries it only on createAlbum.
+  final bool isAudio;
+
+  /// Explicit cover, or null = automatic (newest photo). May reference a
+  /// binned/unknown file — the cover QUERY guards that, not replay.
+  final String? coverFileId;
+
+  const AlbumState({
+    required this.name,
+    required this.isAudio,
+    this.coverFileId,
+  });
+
+  AlbumState copyWith({String? name, String? Function()? coverFileId}) =>
+      AlbumState(
+        name: name ?? this.name,
+        isAudio: isAudio,
+        coverFileId: coverFileId != null ? coverFileId() : this.coverFileId,
+      );
+}
+
 class VaultState {
   final Map<String, FileState> files;
   final Map<String, FolderState> folders;
   final Map<String, String> devices; // deviceId -> display name
+
+  /// Curated albums (photo + audio playlists). Deleted albums are ABSENT —
+  /// deleteAlbum is terminal, there is no album bin.
+  final Map<String, AlbumState> albums;
+
+  /// Membership: albumId -> fileId -> HLC wall of the WINNING addToAlbum
+  /// (materialized as album_files.added_at, so every device shows the same
+  /// in-album order). Pairs whose file was PURGED are dropped end-of-fold;
+  /// pairs whose file is merely binned survive (views filter is_deleted,
+  /// and a restore puts the photo straight back in its albums).
+  final Map<String, Map<String, int>> albumMemberships;
 
   /// Op keys of moveFolder ops the Kleppmann cycle rule skipped — same set
   /// on every device (the skip is a function of the total order). The
@@ -155,6 +191,8 @@ class VaultState {
     required this.files,
     required this.folders,
     required this.devices,
+    this.albums = const {},
+    this.albumMemberships = const {},
     this.skippedFolderMoves = const {},
   });
 }
@@ -175,6 +213,12 @@ VaultState replayOps(Iterable<SyncOp> ops) {
   final files = <String, FileState>{};
   final folders = <String, FolderState>{};
   final devices = <String, String>{};
+  final albums = <String, AlbumState>{};
+  final memberships = <String, Map<String, int>>{};
+  // Terminally deleted album ids — the album-shaped purgedFolders: removal
+  // is inline (no bin) and the set guards createAlbum so a straggler create
+  // for a deleted id stays dead.
+  final deletedAlbums = <String>{};
   // Permanently purged file ids. Purge is TERMINAL and order-independent:
   // once a file is purged (its blob physically deleted by the bin sweep) no
   // op — not even a later-ordering restore — can bring it back. Collected
@@ -437,6 +481,49 @@ VaultState replayOps(Iterable<SyncOp> ops) {
         folders.remove(op.targetId);
       case SyncOpKind.registerDevice:
         devices[op.targetId] = op.name ?? op.targetId;
+      case SyncOpKind.createAlbum:
+        // First create in total order wins; a create for a terminally
+        // deleted id is dead on arrival (no resurrection, ever).
+        if (deletedAlbums.contains(op.targetId)) break;
+        if (albums.containsKey(op.targetId)) break;
+        albums[op.targetId] = AlbumState(
+          name: op.name ?? op.targetId,
+          isAudio: op.favorite ?? false,
+        );
+        memberships[op.targetId] = {};
+      case SyncOpKind.renameAlbum:
+        // LWW by fold order; deleted album -> no-op (terminal delete wins).
+        final album = albums[op.targetId];
+        if (album != null && op.name != null) {
+          albums[op.targetId] = album.copyWith(name: op.name);
+        }
+      case SyncOpKind.deleteAlbum:
+        // TERMINAL: the collection is gone everywhere, forever. Files are
+        // untouched — an album is a view onto them, not a container.
+        deletedAlbums.add(op.targetId);
+        albums.remove(op.targetId);
+        memberships.remove(op.targetId);
+      case SyncOpKind.setAlbumCover:
+        // LWW by fold order; absent f clears back to the automatic cover.
+        // The referenced file's existence is the cover QUERY's problem.
+        final album = albums[op.targetId];
+        if (album != null) {
+          albums[op.targetId] =
+              album.copyWith(coverFileId: () => op.folderId);
+        }
+      case SyncOpKind.addToAlbum:
+        // Pair-LWW emerges from the fold order: the LAST add/remove for
+        // (album, file) wins. A deleted/unknown album no-ops (delete is
+        // terminal). The FILE need not exist yet — an honest history
+        // orders its create earlier (HLC causality), and materialization
+        // joins against real rows anyway.
+        if (op.folderId != null) {
+          memberships[op.folderId]?[op.targetId] = op.hlc.wallMs;
+        }
+      case SyncOpKind.removeFromAlbum:
+        if (op.folderId != null) {
+          memberships[op.folderId]?.remove(op.targetId);
+        }
       case SyncOpKind.unknown:
         // Forward-compat: an op from a newer app version. Preserved in the
         // log verbatim (rawKind), meaningless to this build's fold — the
@@ -448,14 +535,20 @@ VaultState replayOps(Iterable<SyncOp> ops) {
   // Terminal purge: forget purged files entirely — no row, no tombstone.
   // Every device that has the purge op reaches the same result, so the
   // 30-day bin sweep converges (no old-swept vs fresh-rebuilt divergence).
+  // Album memberships die with the purged file (a binned file's survive).
   for (final id in purged) {
     files.remove(id);
+    for (final members in memberships.values) {
+      members.remove(id);
+    }
   }
 
   return VaultState(
     files: files,
     folders: folders,
     devices: devices,
+    albums: albums,
+    albumMemberships: memberships,
     skippedFolderMoves: skippedFolderMoves,
   );
 }

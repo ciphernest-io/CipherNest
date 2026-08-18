@@ -111,6 +111,29 @@ Future<Database> newDeviceDb() async {
       hidden_effective INTEGER NOT NULL DEFAULT 0
     )
   ''');
+  await db.execute('''
+    CREATE TABLE albums(
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      cover_file_id TEXT,
+      is_smart INTEGER DEFAULT 0,
+      smart_query TEXT,
+      kind TEXT NOT NULL DEFAULT 'photo',
+      created_at INTEGER,
+      updated_at INTEGER,
+      account_id TEXT
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE album_files(
+      album_id TEXT NOT NULL,
+      file_id TEXT NOT NULL,
+      added_at INTEGER,
+      PRIMARY KEY (album_id, file_id),
+      FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE CASCADE,
+      FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+    )
+  ''');
   return db;
 }
 
@@ -617,7 +640,144 @@ void main() {
     final ox = await x.query('folders', orderBy: 'id');
     final oy = await y.query('folders', orderBy: 'id');
     expect(ox, oy, reason: 'folders materialization diverged');
+    final ax = await x.query('albums', orderBy: 'id');
+    final ay = await y.query('albums', orderBy: 'id');
+    expect(ax, ay, reason: 'albums materialization diverged');
+    final mx = await x.query('album_files', orderBy: 'album_id, file_id');
+    final my = await y.query('album_files', orderBy: 'album_id, file_id');
+    expect(mx, my, reason: 'album membership materialization diverged');
   }
+
+  test(
+      'album lifecycle converges: create+add on A, rename+remove on B, '
+      'identical albums/album_files tables including added_at', () async {
+    final base = DateTime.now().millisecondsSinceEpoch;
+    var nowA = base;
+    var nowB = base + 500;
+    a = engineFor(dbA, cloud, 'devA', wallClock: () => nowA);
+    b = engineFor(dbB, cloud, 'devB', wallClock: () => nowB);
+
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFile, targetId: 'f1', name: 'a.jpg'));
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFile, targetId: 'f2', name: 'b.jpg'));
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createAlbum, targetId: 'AL', name: 'Trip'));
+    nowA = base + 1000;
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.addToAlbum, targetId: 'f1', folderId: 'AL'));
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.addToAlbum, targetId: 'f2', folderId: 'AL'));
+    await a.syncCycle();
+    await b.syncCycle();
+
+    final albumOnB = (await dbB.query('albums',
+        where: 'id = ?', whereArgs: ['AL']))
+        .single;
+    expect(albumOnB['name'], 'Trip');
+    expect(albumOnB['kind'], 'photo');
+    expect(albumOnB['is_smart'], 0);
+    expect(albumOnB['account_id'], account);
+    final membersOnB =
+        await dbB.query('album_files', orderBy: 'file_id');
+    expect(membersOnB.length, 2);
+    expect(membersOnB.first['added_at'], base + 1000,
+        reason: 'added_at = the add op\'s HLC wall, device-identical');
+
+    nowB = base + 2000;
+    await b.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.renameAlbum, targetId: 'AL', name: 'Trip 2026'));
+    await b.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.removeFromAlbum, targetId: 'f2', folderId: 'AL'));
+    await b.syncCycle();
+    await a.syncCycle();
+
+    for (final db in [dbA, dbB]) {
+      final album =
+          (await db.query('albums', where: 'id = ?', whereArgs: ['AL']))
+              .single;
+      expect(album['name'], 'Trip 2026');
+      final members = await db.query('album_files');
+      expect(members.single['file_id'], 'f1');
+    }
+    await expectConvergedMaterialization(dbA, dbB);
+  });
+
+  test(
+      'offline add-vs-deleteAlbum race: delete is terminal on BOTH devices '
+      'regardless of HLC order; files survive', () async {
+    final base = DateTime.now().millisecondsSinceEpoch;
+    var nowA = base;
+    var nowB = base + 500;
+    a = engineFor(dbA, cloud, 'devA', wallClock: () => nowA);
+    b = engineFor(dbB, cloud, 'devB', wallClock: () => nowB);
+
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createFile, targetId: 'f1', name: 'a.jpg'));
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createAlbum, targetId: 'AL', name: 'Trip'));
+    await a.syncCycle();
+    await b.syncCycle();
+
+    // OFFLINE: A adds (later wall) while B deletes (earlier wall).
+    nowA = base + 5000;
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.addToAlbum, targetId: 'f1', folderId: 'AL'));
+    nowB = base + 1000;
+    await b.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.deleteAlbum, targetId: 'AL'));
+    await a.syncCycle();
+    await b.syncCycle();
+    await a.syncCycle();
+
+    for (final db in [dbA, dbB]) {
+      expect(await db.query('albums', where: 'is_smart = 0'), isEmpty,
+          reason: 'deleteAlbum is terminal — the later add cannot revive');
+      expect(await db.query('album_files'), isEmpty);
+      final f1 = (await fileRow(db, 'f1'))!;
+      expect(f1['is_deleted'], 0,
+          reason: 'deleting an album never touches the files');
+    }
+    await expectConvergedMaterialization(dbA, dbB);
+  });
+
+  test(
+      'smart album rows (is_smart=1, NULL account) are structurally outside '
+      'the materializer: identical seeds survive album sync untouched',
+      () async {
+    for (final db in [dbA, dbB]) {
+      await db.insert('albums', {
+        'id': 'smart_all_photos',
+        'name': 'All Photos',
+        'is_smart': 1,
+        'smart_query': 'all_images',
+        'kind': 'photo',
+        'created_at': 42,
+        'updated_at': 42,
+      });
+    }
+    await a.recordLocalOp(const LocalSyncAction(
+        kind: SyncOpKind.createAlbum,
+        targetId: 'PL',
+        name: 'Gym mix',
+        favorite: true));
+    await a.syncCycle();
+    await b.syncCycle();
+
+    for (final db in [dbA, dbB]) {
+      final smart = (await db.query('albums',
+              where: 'id = ?', whereArgs: ['smart_all_photos']))
+          .single;
+      expect(smart['created_at'], 42,
+          reason: 'materializer must never rewrite smart rows');
+      final pl =
+          (await db.query('albums', where: 'id = ?', whereArgs: ['PL']))
+              .single;
+      expect(pl['kind'], 'audio',
+          reason: 'v=true on createAlbum materializes as a playlist');
+    }
+    await expectConvergedMaterialization(dbA, dbB);
+  });
 
   test(
       'INSTANT-PURGE REGRESSION: cascade-binned files carry the deleteFolder '
