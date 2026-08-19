@@ -24,6 +24,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../src/models/file_model.dart';
+import '../../src/utils/perf_trace.dart';
 import '../database_service.dart';
 import '../device_identity_service.dart';
 import '../system_folders.dart';
@@ -481,7 +482,10 @@ class SyncEngine {
   /// Rows without ops (pre-sync legacy rows, Vault-Health recoveries in
   /// progress) are LEFT ALONE — visible locally, never promoted into the
   /// log, exactly the property that kills resurrection.
-  Future<void> applyMergedState() async {
+  Future<void> applyMergedState() =>
+      trace('applyMergedState', _applyMergedState);
+
+  Future<void> _applyMergedState() async {
     final db = await _db();
     // pending 0 = synced, 1 = local not-yet-uploaded; both are in the view.
     final opRows = await db.query('sync_ops',

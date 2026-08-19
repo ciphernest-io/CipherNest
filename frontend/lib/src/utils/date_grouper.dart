@@ -1,5 +1,6 @@
 import 'package:intl/intl.dart';
 import '../models/file_model.dart';
+import 'perf_trace.dart';
 
 class DateSection {
   final String label;
@@ -10,7 +11,10 @@ class DateSection {
 
 /// Groups a list of [CnestFile] (already sorted by createdAt DESC) into
 /// date sections: Today, Yesterday, This Week, Last Week, then "Month Year".
-List<DateSection> groupByDate(List<CnestFile> files) {
+List<DateSection> groupByDate(List<CnestFile> files) =>
+    traceSync('groupByDate', () => _groupByDate(files));
+
+List<DateSection> _groupByDate(List<CnestFile> files) {
   if (files.isEmpty) return [];
 
   final now = DateTime.now();
@@ -63,14 +67,15 @@ List<DateSection> groupByDate(List<CnestFile> files) {
 }
 
 /// "Month Year" sections (July 2026) — the gallery's mid zoom levels.
-List<DateSection> groupByMonth(List<CnestFile> files) {
-  final fmt = DateFormat.yMMMM();
-  return _groupByLabel(files, (f) => fmt.format(f.createdAt));
-}
+List<DateSection> groupByMonth(List<CnestFile> files) =>
+    traceSync('groupByMonth', () {
+      final fmt = DateFormat.yMMMM();
+      return _groupByLabel(files, (f) => fmt.format(f.createdAt));
+    });
 
 /// Year sections — the gallery's most zoomed-out level.
-List<DateSection> groupByYear(List<CnestFile> files) =>
-    _groupByLabel(files, (f) => '${f.createdAt.year}');
+List<DateSection> groupByYear(List<CnestFile> files) => traceSync(
+    'groupByYear', () => _groupByLabel(files, (f) => '${f.createdAt.year}'));
 
 /// Folds an already-sorted list into contiguous sections that share a label.
 List<DateSection> _groupByLabel(

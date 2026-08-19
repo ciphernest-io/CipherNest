@@ -22,6 +22,7 @@ import '../../../services/encryption_service.dart';
 import '../../../services/cache_manager_service.dart';
 import '../../../services/local_content_guard.dart';
 import '../../utils/byte_format.dart';
+import '../../utils/perf_trace.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/recycle_bin_service.dart';
@@ -448,7 +449,10 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     await _downloadFileAtIndex(_currentIndex - 2);
   }
 
-  Future<void> _downloadFileAtIndex(int index) async {
+  Future<void> _downloadFileAtIndex(int index) =>
+      trace('viewerPrefetch', () => _downloadFileAtIndexImpl(index));
+
+  Future<void> _downloadFileAtIndexImpl(int index) async {
     if (index < 0 || index >= _currentFiles.length) return;
     final file = _currentFiles[index];
     if (file.cloudId == null) return;
@@ -2963,7 +2967,9 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     }
   }
 
-  Future<void> _loadImages() async {
+  Future<void> _loadImages() => trace('viewerLoadImages', _loadImagesImpl);
+
+  Future<void> _loadImagesImpl() async {
     if (!mounted) return;
 
     // STEP 1 — placeholder, ALWAYS. Try the same three rungs the grid uses so

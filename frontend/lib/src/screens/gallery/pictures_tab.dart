@@ -14,6 +14,7 @@ import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/file_model.dart';
 import '../../utils/date_grouper.dart';
+import '../../utils/perf_trace.dart';
 import '../../../services/cache_manager_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
@@ -1030,7 +1031,9 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
     _loadThumbnail();
   }
 
-  Future<void> _loadThumbnail() async {
+  Future<void> _loadThumbnail() => trace('gridThumbLadder', _loadThumbnailImpl);
+
+  Future<void> _loadThumbnailImpl() async {
     if (!mounted) return;
 
     // RUNG 1: Android's MediaStore — same drawer Samsung Gallery reads from.

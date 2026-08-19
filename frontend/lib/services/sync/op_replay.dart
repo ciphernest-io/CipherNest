@@ -32,6 +32,7 @@
 /// reference exactly.
 library;
 
+import '../../src/utils/perf_trace.dart';
 import 'sync_op.dart';
 
 class FileState {
@@ -198,7 +199,10 @@ class VaultState {
 }
 
 /// Replays [ops] (any order, duplicates tolerated) into a [VaultState].
-VaultState replayOps(Iterable<SyncOp> ops) {
+VaultState replayOps(Iterable<SyncOp> ops) =>
+    traceSync('replayOps', () => _replayOps(ops));
+
+VaultState _replayOps(Iterable<SyncOp> ops) {
   // 1. Dedupe by idempotency key. Duplicate keys carry identical content by
   //    construction (an op is written once and only copied thereafter).
   final byKey = <String, SyncOp>{};

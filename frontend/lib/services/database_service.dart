@@ -7,6 +7,7 @@ import '../src/models/file_model.dart';
 import '../src/models/folder_model.dart';
 import '../src/models/album_model.dart';
 import '../src/models/share_model.dart';
+import '../src/utils/perf_trace.dart';
 import 'cache_manager_service.dart';
 import 'cloud/account_registry.dart';
 import 'notify.dart';
@@ -1378,6 +1379,11 @@ class DatabaseService extends ChangeNotifier {
   /// "is the vault empty?" check) — anything user-facing must keep the
   /// default so hidden folders stay hidden.
   Future<List<CnestFile>> getFilesByType(CnestFileType type,
+          {bool includeHidden = false}) =>
+      trace('getFilesByType',
+          () => _getFilesByType(type, includeHidden: includeHidden));
+
+  Future<List<CnestFile>> _getFilesByType(CnestFileType type,
       {bool includeHidden = false}) async {
     final db = await database;
     if (_currentAccountId == null) return [];

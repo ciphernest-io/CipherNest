@@ -6,6 +6,7 @@ import 'package:cryptography/cryptography.dart';
 
 import '../crypto/aes_gcm.dart';
 import '../crypto/hpke.dart';
+import '../src/utils/perf_trace.dart';
 import 'key_manager_service.dart';
 
 /// CipherNest file format **v1**. One format, no legacy path.
@@ -113,7 +114,10 @@ class EncryptionService {
   // Whole-file (bytes) encrypt / decrypt
   // ---------------------------------------------------------------------------
 
-  static Future<Uint8List> encryptFile(Uint8List fileBytes) async {
+  static Future<Uint8List> encryptFile(Uint8List fileBytes) =>
+      trace('aesEncryptFile', () => _encryptFile(fileBytes));
+
+  static Future<Uint8List> _encryptFile(Uint8List fileBytes) async {
     final fileKey = await AesGcm.with256bits().newSecretKey();
     final fileKeyBytes = Uint8List.fromList(await fileKey.extractBytes());
     final contentId = _randomBytes(16);
@@ -137,7 +141,10 @@ class EncryptionService {
     return out.toBytes();
   }
 
-  static Future<Uint8List> decryptFile(Uint8List encryptedBundle) async {
+  static Future<Uint8List> decryptFile(Uint8List encryptedBundle) =>
+      trace('aesDecryptFile', () => _decryptFile(encryptedBundle));
+
+  static Future<Uint8List> _decryptFile(Uint8List encryptedBundle) async {
     final fileKey = await decryptFileKeyFromHeader(encryptedBundle);
     return decryptBody(encryptedBundle.sublist(headerSize), fileKey);
   }
@@ -168,7 +175,10 @@ class EncryptionService {
   }
 
   /// SHA-256 hex of an in-memory plaintext buffer (already read once).
-  static Future<String> hashPlaintext(Uint8List bytes) async {
+  static Future<String> hashPlaintext(Uint8List bytes) =>
+      trace('sha256Hash', () => _hashPlaintext(bytes));
+
+  static Future<String> _hashPlaintext(Uint8List bytes) async {
     final digest = await _sha256.hash(bytes);
     return _hex(digest.bytes);
   }
