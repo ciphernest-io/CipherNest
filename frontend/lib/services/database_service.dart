@@ -1985,6 +1985,9 @@ class DatabaseService extends ChangeNotifier {
 
   /// The derived device albums, as synthesized smart [CnestAlbum]s (never
   /// persisted) — so the existing album card/detail UI works unchanged.
+  /// Counts query the group's folder ids DIRECTLY: routing them through
+  /// _smartAlbumCount re-ran the _deviceAlbumGroups folder query once PER
+  /// album (N+1) — and this method fires on every DatabaseService notify.
   Future<List<CnestAlbum>> getDeviceAlbums() async {
     final db = await database;
     if (_currentAccountId == null) return [];
@@ -1992,15 +1995,22 @@ class DatabaseService extends ChangeNotifier {
     final groups = await _deviceAlbumGroups(db);
     final albums = <CnestAlbum>[];
     for (final e in groups.entries) {
-      final query = '$_deviceAlbumQueryPrefix${e.key}';
+      final ids = e.value.ids;
+      final ph = List.filled(ids.length, '?').join(',');
+      final count = Sqflite.firstIntValue(await db.rawQuery(
+            'SELECT COUNT(*) as cnt FROM files WHERE folder_id IN ($ph) '
+            'AND is_deleted = 0 AND is_hidden = 0 AND account_id = ?',
+            [...ids, _currentAccountId],
+          )) ??
+          0;
       albums.add(CnestAlbum(
         id: 'device_${e.key}',
         name: e.value.display,
         isSmart: true,
-        smartQuery: query,
+        smartQuery: '$_deviceAlbumQueryPrefix${e.key}',
         createdAt: now,
         updatedAt: now,
-        fileCount: await _smartAlbumCount(db, query),
+        fileCount: count,
       ));
     }
     albums.sort(
