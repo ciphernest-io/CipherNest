@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import 'activity_center.dart';
+import 'auto_sync_service.dart';
 import 'backup_selection_service.dart';
 import 'migration_service.dart';
 import 'system_folders.dart';
@@ -32,11 +33,23 @@ class BackupBackfillRunner {
     ];
   }
 
-  Future<void> runPending() async {
+  /// [calledFromSync] = invoked from inside runFullSync, which already
+  /// holds the cross-isolate run lease and has finished its upload pass —
+  /// no extra guards needed. UI-triggered calls (enrollment sheets) must
+  /// themselves respect the single-flight rules: never race a live
+  /// incremental sync (its dedup index predates our inserts — double
+  /// uploads), and never run concurrently with the OTHER isolate's sync.
+  Future<void> runPending({bool calledFromSync = false}) async {
     if (_running) return;
     // A running migration owns the pipeline; its reentrancy guard would
     // hand us an all-zero "clean" result and we'd wrongly clear the flag.
     if (MigrationService().isRunning) return;
+    var ownsLease = false;
+    if (!calledFromSync) {
+      if (AutoSyncService().isSyncing) return;
+      if (!await AutoSyncService.acquireRunLease()) return;
+      ownsLease = true;
+    }
     _running = true;
     try {
       final pending = await BackupSelectionService().pendingBackfills();
@@ -94,6 +107,7 @@ class BackupBackfillRunner {
       }
     } finally {
       _running = false;
+      if (ownsLease) await AutoSyncService.releaseRunLease();
     }
   }
 }

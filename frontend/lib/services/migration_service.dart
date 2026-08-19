@@ -197,6 +197,12 @@ class MigrationService {
       if (_isCancelled) break;
 
       final asset = assets[i];
+      // Keep the cross-isolate sync lease fresh: a background runFullSync
+      // firing mid-migration would race this pass (its dedup snapshot
+      // predates our inserts). Standalone migration-screen runs acquire no
+      // lease explicitly — this heartbeat IS their claim, and it
+      // self-expires within the freshness window after the run ends.
+      await AutoSyncService.refreshRunLease();
       try {
         final file = await asset.file;
         if (file == null) {
@@ -335,6 +341,10 @@ class MigrationService {
     );
     await DatabaseService().addFile(newFile);
 
+    // Register with the shared in-flight set: the auto-sync HEAL pass must
+    // never retry this row in place while our upload is running (a slow
+    // large-video backfill can outlive the 15-minute grace window).
+    AutoSyncService.inFlightUploadIds.add(fileId);
     try {
       // Encrypt and upload (content hash computed in the same pass).
       final mainCloudFilename = '$fileId.cnest';
@@ -403,6 +413,8 @@ class MigrationService {
         debugPrint('Migration rollback failed for $filename: $rollbackErr');
       }
       rethrow;
+    } finally {
+      AutoSyncService.inFlightUploadIds.remove(fileId);
     }
   }
 }

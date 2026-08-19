@@ -18,6 +18,7 @@ import 'database_backup_service.dart';
 import 'database_service.dart';
 import 'encryption_service.dart';
 import 'key_manager_service.dart';
+import 'migration_service.dart';
 import 'mp4_metadata_parser.dart';
 import 'sync/device_registry_service.dart';
 import 'sync/sync_coordinator.dart';
@@ -74,9 +75,57 @@ class AutoSyncService {
   /// Callback for progress updates (used by foreground UI if active).
   void Function(int synced, int total)? onProgress;
 
+  // ---- Cross-isolate single-flight lease -------------------------------
+  // _isSyncing and inFlightUploadIds are ISOLATE-LOCAL: the foreground app
+  // and the WorkManager worker each have their own singleton, so both could
+  // scan the same window and upload the same assets twice (rows are keyed
+  // by random UUIDs — nothing downstream dedups). SharedPreferences is the
+  // only state both isolates share; a heartbeat lease there closes the
+  // minutes-wide overlap. NOT a true CAS — two isolates acquiring in the
+  // same instant can still double-run for one window — but the realistic
+  // race (worker fires mid-foreground-batch, or vice versa) is gone. The
+  // lease self-expires (freshness window) so a killed run never wedges
+  // sync; holders refresh it per processed item.
+  static const String _kRunLeasePref = 'auto_sync_run_lease_v1';
+  static const Duration _leaseFreshness = Duration(minutes: 2);
+
+  static Future<bool> acquireRunLease() async {
+    final prefs = await SharedPreferences.getInstance();
+    // reload() defeats the per-isolate prefs cache — without it this
+    // isolate never sees the other's heartbeat.
+    await prefs.reload();
+    final last = prefs.getInt(_kRunLeasePref) ?? 0;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - last < _leaseFreshness.inMilliseconds) return false;
+    await prefs.setInt(_kRunLeasePref, now);
+    return true;
+  }
+
+  static Future<void> refreshRunLease() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(
+        _kRunLeasePref, DateTime.now().millisecondsSinceEpoch);
+  }
+
+  static Future<void> releaseRunLease() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_kRunLeasePref, 0);
+  }
+
   /// Runs a full auto-sync cycle: scans gallery, deduplicates, encrypts+uploads new files.
   Future<AutoSyncResult> runFullSync() async {
     if (_isSyncing) return AutoSyncResult(synced: 0, failed: 0, skipped: 0);
+    // A live migration/backfill owns the upload pipeline: our dedup index
+    // would predate its inserts (and its scan snapshot predates ours), so
+    // racing it double-uploads. Skip the cycle — the watermark is untouched
+    // and the next cycle rescans everything.
+    if (MigrationService().isRunning) {
+      return AutoSyncResult(synced: 0, failed: 0, skipped: 0);
+    }
+    if (!await acquireRunLease()) {
+      // The OTHER isolate's run is live (see lease note above).
+      return AutoSyncResult(synced: 0, failed: 0, skipped: 0);
+    }
     _isSyncing = true;
     // Stale chain decisions must not leak between runs (a folder binned
     // since the last run changes where new files land).
@@ -145,6 +194,8 @@ class AutoSyncService {
           outcomes.add((capturedMs: entry.capturedMs, ok: false));
         }
         onProgress?.call(synced + failed + skipped, total);
+        // Heartbeat: a long batch must keep the cross-isolate lease fresh.
+        await refreshRunLease();
       }
 
       // Watermark: advance only past the capture-ordered PREFIX of outcomes
@@ -178,12 +229,13 @@ class AutoSyncService {
       // completed yet: run them now, after the incremental pass. Interrupted
       // runs are safe to repeat — the migration dedup index skips everything
       // already vaulted, and the pending flag only clears on a clean pass.
-      await BackupBackfillRunner().runPending();
+      await BackupBackfillRunner().runPending(calledFromSync: true);
     } catch (e) {
       debugPrint('Auto-sync error: $e');
       if (classifyNetworkError(e) != null) offlineFailures++;
     } finally {
       _isSyncing = false;
+      await releaseRunLease();
     }
 
     return AutoSyncResult(
@@ -356,7 +408,15 @@ class AutoSyncService {
   /// this service creates.
   static String? _deviceKeyCache;
 
-  Future<(String, String)> _deviceIdentity() async {
+  /// Null on a TRANSIENT plugin failure (e.g. first call in a background
+  /// isolate). Returning a fallback key here used to mint a permanent,
+  /// SYNCED "My Android phone" device folder — the phantom subtree the
+  /// non-caching comment thought it was preventing. Null tells the caller
+  /// to skip the device level entirely for this asset; the next successful
+  /// identity resumes normal placement. A device that DETERMINISTICALLY
+  /// reports empty manufacturer+model keeps the stable 'unknown device'
+  /// key (same key every run — no split).
+  Future<(String, String)?> _deviceIdentity() async {
     final display = await DeviceRegistryService().deviceName();
     final cachedKey = _deviceKeyCache;
     if (cachedKey != null) return (cachedKey, display);
@@ -370,11 +430,7 @@ class AutoSyncService {
       _deviceKeyCache = key;
       return (key, display);
     } catch (_) {
-      // Transient plugin failure (e.g. first call in a background isolate):
-      // return the generic fallback WITHOUT caching it, so the next call
-      // retries — a cached failure would permanently split the backup into
-      // an "unknown device" subtree beside the real one.
-      return ('unknown device', display);
+      return null;
     }
   }
 
@@ -398,7 +454,15 @@ class AutoSyncService {
     // salt with — file at the vault root (_syncAsset throws earlier anyway).
     final acct = AccountRegistry().activeAccount?.id;
     if (acct == null) return null;
-    final (key, display) = await _deviceIdentity();
+    final identity = await _deviceIdentity();
+    if (identity == null) {
+      // Transient identity failure: place under Phone Backup ROOT — never
+      // under a fake device key (that subtree would be permanent and
+      // synced). No memo, so every asset retries identity.
+      return _ensureChain(
+          acct, [(SystemFolders.rootId(acct), SystemFolders.rootName)]);
+    }
+    final (key, display) = identity;
     final album = bucketName?.trim() ?? '';
     final memoKey =
         '$acct|$key|${album.isEmpty ? '' : SystemFolders.normalize(album)}';
@@ -417,13 +481,20 @@ class AutoSyncService {
       return null;
     }
 
-    final chain = <(String, String)>[
+    final parent = await _ensureChain(acct, [
       (SystemFolders.rootId(acct), SystemFolders.rootName),
       (SystemFolders.deviceId(acct, key), display),
       if (album.isNotEmpty)
         (SystemFolders.albumId(acct, key, album), album),
-    ];
+    ]);
+    _ensuredChain[memoKey] = parent;
+    return parent;
+  }
 
+  /// Walks one ensure-chain (create-if-missing, respect deletion/purge per
+  /// level) and returns the deepest live folder id, or null = vault root.
+  Future<String?> _ensureChain(
+      String acct, List<(String, String)> chain) async {
     final dbs = DatabaseService();
     String? parent; // null = vault root
     for (final (id, name) in chain) {
@@ -437,7 +508,6 @@ class AutoSyncService {
       if (row.isDeleted) break;
       parent = id;
     }
-    _ensuredChain[memoKey] = parent;
     return parent;
   }
 
