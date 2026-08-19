@@ -139,15 +139,25 @@ class _AlbumsTabState extends State<AlbumsTab> {
         if (_deviceAlbums.isNotEmpty) ...[
           _sectionHeader('On this phone', cs),
           _grid([
+            // Keys are LOAD-BEARING: without them Flutter reuses card STATE
+            // by grid position, pairing a stale cover with a different
+            // album whenever the list shifts (album deleted, device section
+            // appearing).
             for (final album in _deviceAlbums)
-              _AlbumCard(album: album, onTap: () => _openAlbum(album)),
+              _AlbumCard(
+                  key: ValueKey(album.id),
+                  album: album,
+                  onTap: () => _openAlbum(album)),
           ]),
         ],
         _sectionHeader('My albums', cs,
             subtitle: 'Synced across your devices'),
         _grid([
           for (final album in _albums)
-            _AlbumCard(album: album, onTap: () => _openAlbum(album)),
+            _AlbumCard(
+                key: ValueKey(album.id),
+                album: album,
+                onTap: () => _openAlbum(album)),
           _buildCreateCard(),
         ]),
         const SizedBox(height: 8),
@@ -312,7 +322,7 @@ class _AlbumCard extends StatefulWidget {
   final CnestAlbum album;
   final VoidCallback onTap;
 
-  const _AlbumCard({required this.album, required this.onTap});
+  const _AlbumCard({super.key, required this.album, required this.onTap});
 
   @override
   State<_AlbumCard> createState() => _AlbumCardState();
@@ -325,6 +335,23 @@ class _AlbumCardState extends State<_AlbumCard> {
   void initState() {
     super.initState();
     _loadCover();
+  }
+
+  @override
+  void didUpdateWidget(covariant _AlbumCard old) {
+    super.didUpdateWidget(old);
+    // Re-run the cover load when the album's cover identity may have
+    // changed. initState-only loading kept a DELETED or HIDDEN photo on
+    // screen as the cover for the whole gallery session (the tab lives in
+    // an IndexedStack, so this State can survive for hours) — in a privacy
+    // vault that's not just staleness. fileCount is the cheap proxy for
+    // "the auto-cover candidates changed" (delete/restore/hide all move it).
+    if (old.album.id != widget.album.id ||
+        old.album.coverFileId != widget.album.coverFileId ||
+        old.album.fileCount != widget.album.fileCount) {
+      setState(() => _coverBytes = null);
+      _loadCover();
+    }
   }
 
   Future<void> _loadCover() async {

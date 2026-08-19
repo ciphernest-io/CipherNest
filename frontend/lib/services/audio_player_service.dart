@@ -97,7 +97,13 @@ class AudioPlayerService extends ChangeNotifier {
   /// artifact DocThumbnail writes), so one decrypt serves the UI and the
   /// media session and the cache GC already knows the name. Null on any
   /// failure/offline: the placeholder is fine.
-  Future<Uri?> _artUriFor(CnestFile file) async {
+  ///
+  /// [allowDownload] is true ONLY for the track playback starts on:
+  /// resolving art for the WHOLE queue used to fire one download+decrypt
+  /// per track before setAudioSource, so tapping one song in a large
+  /// library sat silent behind N network round trips (and offline, behind
+  /// N timeouts). Other tracks get cached-art-or-placeholder.
+  Future<Uri?> _artUriFor(CnestFile file, {required bool allowDownload}) async {
     if (!_showTitlesOnLockScreen) return null;
     final thumbId = file.thumbnailCloudId;
     if (thumbId == null || file.cloudId == null) return null;
@@ -105,6 +111,7 @@ class AudioPlayerService extends ChangeNotifier {
       final dir = await getTemporaryDirectory();
       final cacheFile = File('${dir.path}/thumb_${file.cloudId}.jpg');
       if (!await cacheFile.exists()) {
+        if (!allowDownload) return null;
         final enc = await CloudService().downloadFile(thumbId);
         final dec = await EncryptionService.decryptFile(enc);
         await cacheFile.writeAsBytes(dec);
@@ -125,8 +132,10 @@ class AudioPlayerService extends ChangeNotifier {
   ///
   /// Art is resolved HERE (awaited) because media-session tags are
   /// immutable once the queue loads.
-  Future<AudioSource> _sourceFor(CnestFile file) async {
-    final tag = _mediaItemFor(file, artUri: await _artUriFor(file));
+  Future<AudioSource> _sourceFor(CnestFile file,
+      {bool artDownload = false}) async {
+    final tag = _mediaItemFor(file,
+        artUri: await _artUriFor(file, allowDownload: artDownload));
     if (file.localPath != null) {
       final local = File(file.localPath!);
       if (await local.exists()) {
@@ -165,11 +174,15 @@ class AudioPlayerService extends ChangeNotifier {
     _endCloudSessions();
     _queue = List.of(tracks);
     _queueSourceName = sourceName;
-    final sources = await Future.wait(_queue.map(_sourceFor));
+    final start = startIndex.clamp(0, _queue.length - 1);
+    final sources = await Future.wait([
+      for (var i = 0; i < _queue.length; i++)
+        _sourceFor(_queue[i], artDownload: i == start),
+    ]);
     final playlist = ConcatenatingAudioSource(children: sources);
     await _player.setAudioSource(
       playlist,
-      initialIndex: startIndex.clamp(0, _queue.length - 1),
+      initialIndex: start,
     );
     unawaited(_player.play());
     notifyListeners();

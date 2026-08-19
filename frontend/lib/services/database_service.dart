@@ -9,6 +9,7 @@ import '../src/models/album_model.dart';
 import '../src/models/share_model.dart';
 import 'cache_manager_service.dart';
 import 'cloud/account_registry.dart';
+import 'notify.dart';
 import 'cloud/sealed_metadata.dart';
 import 'sync/sync_coordinator.dart';
 import 'sync/sync_op.dart';
@@ -1791,11 +1792,42 @@ class DatabaseService extends ChangeNotifier {
 
   Future<void> addFilesToAlbum(String albumId, List<String> fileIds) async {
     if (_isVirtualAlbumId(albumId)) return;
-    for (final fileId in fileIds) {
+    // Only op-BACKED files can join an album: the materializer's FK guard
+    // drops membership pairs whose file has no createFile op anywhere
+    // (mid-upload rows, pre-sync legacy rows, Vault-Health recoveries), so
+    // recording those ops would report success while the album silently
+    // stays empty on every device. Refuse them honestly instead.
+    final backed = await opBackedFileIds(fileIds);
+    for (final fileId in backed) {
       // t = the FILE, f = the collection — one pair-LWW op per membership.
       await SyncCoordinator()
           .record(SyncOpKind.addToAlbum, fileId, folderId: albumId);
     }
+    final skipped = fileIds.length - backed.length;
+    if (skipped > 0) {
+      Notify.info(skipped == 1
+          ? '1 file is still syncing — not added yet'
+          : '$skipped files are still syncing — not added yet');
+    }
+  }
+
+  /// The subset of [ids] that have a createFile op in the log — the only
+  /// files album-membership ops can materialize for. Order-preserving.
+  @visibleForTesting
+  Future<List<String>> opBackedFileIds(List<String> ids) async {
+    if (ids.isEmpty || _currentAccountId == null) return const [];
+    final db = await database;
+    final ph = List.filled(ids.length, '?').join(',');
+    final rows = await db.rawQuery(
+      "SELECT DISTINCT target_id FROM sync_ops WHERE account_id = ? "
+      "AND kind = 'createFile' AND target_id IN ($ph)",
+      [_currentAccountId, ...ids],
+    );
+    final backed = {for (final r in rows) r['target_id'] as String};
+    return [
+      for (final id in ids)
+        if (backed.contains(id)) id
+    ];
   }
 
   Future<void> removeFileFromAlbum(String albumId, String fileId) async {

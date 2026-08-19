@@ -22,6 +22,13 @@ class BackupBackfillRunner {
 
   bool _running = false;
 
+  /// User cancel from the pill stops the WHOLE pending queue, not just the
+  /// current album — MigrationService.cancel() only breaks the current
+  /// runMigration (and resets its own flag on entry/exit), so without this
+  /// the runner would pop the next album's task seconds after the user hit
+  /// X, once per enrolled album.
+  bool _cancelAll = false;
+
   /// The pending albums that exist on this device, in album-list order.
   /// Pure so it's testable without MediaStore.
   @visibleForTesting
@@ -51,6 +58,7 @@ class BackupBackfillRunner {
       ownsLease = true;
     }
     _running = true;
+    _cancelAll = false;
     try {
       final pending = await BackupSelectionService().pendingBackfills();
       if (pending.isEmpty) return;
@@ -62,9 +70,11 @@ class BackupBackfillRunner {
           pending, [for (final a in albums) a.name]).toSet();
 
       for (final album in albums) {
+        if (_cancelAll) break;
         if (!wanted.contains(album.name)) continue;
         final scan =
             await MigrationService().scanGallery(albumPaths: [album.path]);
+        if (_cancelAll) break;
         if (scan.assets.isEmpty) {
           // Nothing left to vault — the backfill is (already) complete.
           await BackupSelectionService().clearBackfill(album.name);
@@ -77,7 +87,10 @@ class BackupBackfillRunner {
           total: scan.assets.length,
           onPause: MigrationService().pause,
           onResume: MigrationService().resume,
-          onCancel: MigrationService().cancel,
+          onCancel: () {
+            _cancelAll = true;
+            MigrationService().cancel();
+          },
         );
         try {
           final result = await MigrationService().runMigration(
