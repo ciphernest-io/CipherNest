@@ -335,57 +335,75 @@ class MigrationService {
     );
     await DatabaseService().addFile(newFile);
 
-    // Encrypt and upload (content hash computed in the same pass).
-    final mainCloudFilename = '$fileId.cnest';
-    String? mainCloudId;
-    String? contentHash;
+    try {
+      // Encrypt and upload (content hash computed in the same pass).
+      final mainCloudFilename = '$fileId.cnest';
+      String? mainCloudId;
+      String? contentHash;
 
-    if (isVideo) {
-      final encryptedSize = EncryptionService.calculateEncryptedSize(fileSize);
-      final hashed = EncryptionService.encryptStreamWithHash(
-          file.openRead(), totalSize: fileSize);
-      mainCloudId = await CloudService().uploadEncryptedFile(
-        filename: mainCloudFilename,
-        type: CnestFileType.image,
-        originalName: filename,
-        stream: hashed.stream,
-        size: encryptedSize,
-      );
-      contentHash = await hashed.hash;
-    } else {
-      final fileBytes = await file.readAsBytes();
-      final hashed = await EncryptionService.encryptFileWithHash(fileBytes);
-      contentHash = hashed.hash;
-      mainCloudId = await CloudService().uploadEncryptedFile(
-        filename: mainCloudFilename,
-        type: isImage ? CnestFileType.image : CnestFileType.document,
-        originalName: filename,
-        bytes: hashed.encrypted,
-      );
+      if (isVideo) {
+        final encryptedSize =
+            EncryptionService.calculateEncryptedSize(fileSize);
+        final hashed = EncryptionService.encryptStreamWithHash(
+            file.openRead(), totalSize: fileSize);
+        mainCloudId = await CloudService().uploadEncryptedFile(
+          filename: mainCloudFilename,
+          type: CnestFileType.image,
+          originalName: filename,
+          stream: hashed.stream,
+          size: encryptedSize,
+        );
+        contentHash = await hashed.hash;
+      } else {
+        final fileBytes = await file.readAsBytes();
+        final hashed = await EncryptionService.encryptFileWithHash(fileBytes);
+        contentHash = hashed.hash;
+        mainCloudId = await CloudService().uploadEncryptedFile(
+          filename: mainCloudFilename,
+          type: isImage ? CnestFileType.image : CnestFileType.document,
+          originalName: filename,
+          bytes: hashed.encrypted,
+        );
+      }
+
+      if (mainCloudId == null) throw Exception('Upload failed for $filename');
+
+      // Upload thumbnail
+      String? thumbCloudId;
+      if (thumbnailBytes != null) {
+        final encryptedThumb =
+            await EncryptionService.encryptFile(thumbnailBytes);
+        thumbCloudId = await CloudService().uploadEncryptedFile(
+          filename: '${fileId}_thumb.cnest',
+          type: CnestFileType.image,
+          bytes: encryptedThumb,
+        );
+      }
+
+      final capturedMs = asset.createDateTime.millisecondsSinceEpoch;
+      await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId,
+          filename: filename,
+          contentHash: contentHash,
+          sizeBytes: fileSize,
+          capturedAt: capturedMs > 0 ? capturedMs : null,
+          folderId: folderId);
+      return true;
+    } catch (e) {
+      // Failed mid-upload: remove the phantom row — same contract as the
+      // manual pipeline (rollbackFailedUpload, never permanentlyDeleteFile:
+      // no createFile op exists yet, so a purge op would be a spurious
+      // tombstone). Leaving the row would poison the next scan's dedup
+      // index: the asset reads "already vaulted", the backfill flag clears
+      // as a clean pass, and if the user then deletes the gallery copy the
+      // heal pass purges the row — permanent loss behind a "backed up"
+      // claim.
+      try {
+        await DatabaseService().rollbackFailedUpload(fileId);
+      } catch (rollbackErr) {
+        debugPrint('Migration rollback failed for $filename: $rollbackErr');
+      }
+      rethrow;
     }
-
-    if (mainCloudId == null) throw Exception('Upload failed for $filename');
-
-    // Upload thumbnail
-    String? thumbCloudId;
-    if (thumbnailBytes != null) {
-      final encryptedThumb =
-          await EncryptionService.encryptFile(thumbnailBytes);
-      thumbCloudId = await CloudService().uploadEncryptedFile(
-        filename: '${fileId}_thumb.cnest',
-        type: CnestFileType.image,
-        bytes: encryptedThumb,
-      );
-    }
-
-    final capturedMs = asset.createDateTime.millisecondsSinceEpoch;
-    await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId,
-        filename: filename,
-        contentHash: contentHash,
-        sizeBytes: fileSize,
-        capturedAt: capturedMs > 0 ? capturedMs : null,
-        folderId: folderId);
-    return true;
   }
 }
 

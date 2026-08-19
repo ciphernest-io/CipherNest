@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:file_picker/file_picker.dart';
@@ -404,12 +405,34 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       MaterialPageRoute(
           builder: (_) => CaptureScreen(startInVideoMode: video)),
     );
-    if (pick == null || !mounted) return;
+    if (pick == null) return;
+    // ZK hygiene: the capture is PLAINTEXT in app temp. The upload
+    // pipeline's finally deletes it after upload — but only if an upload
+    // is attempted, so every bail path here must delete it itself or the
+    // plaintext sits at rest indefinitely (GC treats it as lowest-priority
+    // "everything else" and rarely evicts it).
+    if (!mounted) {
+      await _discardCapture(pick);
+      return;
+    }
 
     final dest = await _pickDestination([pick], label: pick.name);
-    if (dest == null) return;
+    if (dest == null) {
+      await _discardCapture(pick);
+      return;
+    }
     await _uploadPicked([pick],
         category: UploadCategory.media, folderId: dest.folderId);
+  }
+
+  /// Deletes a cancelled capture's plaintext temp file. Best-effort.
+  Future<void> _discardCapture(PlatformFile pick) async {
+    final path = pick.path;
+    if (path == null) return;
+    try {
+      final f = File(path);
+      if (await f.exists()) await f.delete();
+    } catch (_) {}
   }
 }
 

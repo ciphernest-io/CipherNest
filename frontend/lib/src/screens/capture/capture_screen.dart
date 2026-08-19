@@ -58,19 +58,41 @@ class _CaptureScreenState extends State<CaptureScreen>
   }
 
   // Canonical camera-plugin lifecycle: dispose on pause (the OS owns the
-  // camera), re-init on resume. A recording in flight is discarded — its
-  // partial file dies with the controller.
+  // camera), re-init on resume. A recording in flight is discarded — and
+  // its partial file is finalized-then-DELETED: dispose alone releases the
+  // recorder but leaves the partial plaintext video on disk.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final controller = _controller;
-    if (controller == null || !controller.value.isInitialized) return;
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
+      if (controller == null || !controller.value.isInitialized) return;
       _recordTimer?.cancel();
+      final wasRecording = _recording;
       _recording = false;
       _controller = null;
-      controller.dispose();
+      if (mounted) setState(() {});
+      () async {
+        try {
+          if (wasRecording && controller.value.isRecordingVideo) {
+            // Stop first so the plugin hands us the partial file's path,
+            // then delete the plaintext (ZK hygiene).
+            final partial = await controller.stopVideoRecording();
+            try {
+              await File(partial.path).delete();
+            } catch (_) {}
+          }
+        } catch (_) {
+          // Discard-path errors are unactionable; the dispose below is
+          // what matters.
+        } finally {
+          controller.dispose();
+        }
+      }();
     } else if (state == AppLifecycleState.resumed && _controller == null) {
+      // NOTE: reached because the null-guard above lives INSIDE the pause
+      // branch — a top-of-method null return would make this unreachable
+      // (the camera was dead after every backgrounding).
       _initCamera();
     }
   }

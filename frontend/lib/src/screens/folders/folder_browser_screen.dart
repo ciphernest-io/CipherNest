@@ -631,7 +631,20 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       MaterialPageRoute(
           builder: (_) => CaptureScreen(startInVideoMode: video)),
     );
-    if (pick == null || !mounted) return;
+    if (pick == null) return;
+    if (!mounted) {
+      // ZK hygiene: no upload will run, so the plaintext capture in temp
+      // must die here (the pipeline's finally only covers attempted
+      // uploads).
+      final path = pick.path;
+      if (path != null) {
+        try {
+          final f = File(path);
+          if (await f.exists()) await f.delete();
+        } catch (_) {}
+      }
+      return;
+    }
 
     setState(() => _isUploading = true);
     try {

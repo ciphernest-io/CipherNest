@@ -194,6 +194,16 @@ class AutoSyncService {
     );
   }
 
+  /// Whether a failed upload attempt may delete its own row. Fresh inserts
+  /// roll back (no phantom tile); HEAL retries never do — the pending row
+  /// is the retry state itself, and the watermark has typically advanced
+  /// past the asset's capture time, so deleting the row would permanently
+  /// exclude the photo from backup with zero UI signal. Pinned by test so
+  /// a future "simplification" can't quietly reintroduce the data loss.
+  @visibleForTesting
+  static bool shouldRollbackFailedAttempt({required bool isHealRetry}) =>
+      !isHealRetry;
+
   /// The watermark's next value, or null when it must not move.
   ///
   /// [outcomes] are the scan window's assets in capture-time ASC order.
@@ -602,14 +612,25 @@ class AutoSyncService {
 
       return true;
     } catch (e) {
-      // Roll the row back — same contract as the manual upload path.
-      // rollbackFailedUpload, NOT permanentlyDeleteFile: this row never
-      // recorded a createFile op (that happens in markAsUploaded), so a
-      // purgeFile op here would be a spurious tombstone shipped to peers.
-      try {
-        await DatabaseService().rollbackFailedUpload(fileId);
-      } catch (rollbackErr) {
-        debugPrint('Auto-sync rollback failed for $filename: $rollbackErr');
+      // Roll the row back — same contract as the manual upload path — but
+      // ONLY for rows THIS attempt inserted. rollbackFailedUpload, NOT
+      // permanentlyDeleteFile: this row never recorded a createFile op
+      // (that happens in markAsUploaded), so a purgeFile op here would be
+      // a spurious tombstone shipped to peers.
+      //
+      // A HEAL retry (existingRow != null) must NEVER roll back: the
+      // pending row IS the retry state. Its assetId is what dedup-hides
+      // the asset from rescans, so the watermark has usually advanced
+      // past the capture time by the time heal runs — deleting the row on
+      // a transient failure (offline blip, cloud 500) would silently
+      // exclude the photo from backup forever. Keep the row; the attempt
+      // clock already touched at entry gives the grace-window backoff.
+      if (shouldRollbackFailedAttempt(isHealRetry: existingRow != null)) {
+        try {
+          await DatabaseService().rollbackFailedUpload(fileId);
+        } catch (rollbackErr) {
+          debugPrint('Auto-sync rollback failed for $filename: $rollbackErr');
+        }
       }
       rethrow;
     } finally {
