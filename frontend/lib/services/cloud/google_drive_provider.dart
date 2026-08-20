@@ -35,6 +35,24 @@ class GoogleDriveProvider implements CloudProvider {
   @override
   String? get currentUser => _currentUserAccount?.email ?? account.email;
 
+  /// Clears BOTH the local plugin session and GMS's cached grant/token so
+  /// the next signIn() mints fresh consent and fresh tokens. Needed after
+  /// the user revokes CipherNest in Drive's "Manage Apps": signOut() alone
+  /// leaves GMS serving a cached access token for the revoked grant — every
+  /// API call then 401s and no consent screen ever appears (the
+  /// "CS_CONN after clean-slate revocation" signup wedge). disconnect()
+  /// throws when there is no live session; degrade to signOut and continue —
+  /// the goal is a clean slate, not a guaranteed revocation call.
+  static Future<void> forceFreshConsent() async {
+    try {
+      await _googleSignIn.disconnect();
+    } catch (_) {
+      try {
+        await _googleSignIn.signOut();
+      } catch (_) {}
+    }
+  }
+
   /// Static helper for the cloud-selection screen to add a brand-new Google
   /// account. Returns a CloudAccount ready to register, or null if the user
   /// cancels the sign-in flow.

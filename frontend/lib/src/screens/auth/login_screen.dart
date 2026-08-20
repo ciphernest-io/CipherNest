@@ -163,10 +163,17 @@ class _LoginScreenState extends State<LoginScreen> {
 
     if (!mounted) return;
     final hasActive = AccountRegistry().activeAccount != null;
-    Navigator.pushReplacementNamed(
-      context,
-      hasActive ? AppRoutes.home : AppRoutes.reconnect,
-    );
+    // Reconnect is for a vault that HAD a cloud and lost the session. If no
+    // account was EVER registered, this is a signup interrupted at the
+    // cloud picker (e.g. auto-locked while deciding) — reconnect is a dead
+    // end there ("reconnect your cloud" for a cloud that never existed),
+    // and the user is wedged. Resume the signup's cloud selection instead.
+    final route = hasActive
+        ? AppRoutes.home
+        : AccountRegistry().hasAnyAccount
+            ? AppRoutes.reconnect
+            : AppRoutes.cloudSelection;
+    Navigator.pushReplacementNamed(context, route);
   }
 
   @override

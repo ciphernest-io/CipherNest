@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../src/config/routes.dart';
+import 'cloud/account_registry.dart';
 import 'key_manager_service.dart';
 
 /// Auto-lock: zeroes the vault private key after a period of inactivity and
@@ -59,12 +60,20 @@ class AppLockService {
     recordActivity();
   }
 
+  /// Auto-lock is suspended until the FIRST cloud account is connected.
+  /// During onboarding (password set, phrase shown, cloud picker open) the
+  /// vault is empty — there is nothing cloud-reachable to protect — and a
+  /// mid-signup lock used to wedge users: unlock routed to "reconnect" for
+  /// a cloud that was never connected. Manual [lockNow] still works.
+  bool get _onboardingInProgress => !AccountRegistry().hasAnyAccount;
+
   /// Resets the inactivity countdown. Call on user interaction and on unlock.
   void recordActivity() {
     _lastActivity = DateTime.now();
     _timer?.cancel();
     if (_timeout.inMinutes <= 0) return; // disabled
     if (!KeyManagerService().isUnlocked) return; // nothing to lock
+    if (_onboardingInProgress) return; // no auto-lock mid-signup
     _timer = Timer(_timeout, _onTimeout);
   }
 
@@ -73,6 +82,7 @@ class AppLockService {
   /// while the app was suspended; otherwise restarts the countdown.
   void onResumed() {
     if (_timeout.inMinutes <= 0 || !KeyManagerService().isUnlocked) return;
+    if (_onboardingInProgress) return;
     final elapsed = DateTime.now().difference(_lastActivity);
     if (elapsed >= _timeout && !(_isPlaybackActive?.call() ?? false)) {
       lockNow();
@@ -87,6 +97,7 @@ class AppLockService {
       _timer = Timer(const Duration(seconds: 30), _onTimeout);
       return;
     }
+    if (_onboardingInProgress) return;
     lockNow();
   }
 

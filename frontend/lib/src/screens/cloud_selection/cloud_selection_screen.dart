@@ -66,7 +66,8 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
   // Connect
   // ---------------------------------------------------------------------------
 
-  Future<void> _connectProvider(int providerType) async {
+  Future<void> _connectProvider(int providerType,
+      {bool retriedAuth = false}) async {
     setState(() {
       _isLoading = true;
       _statusMsg = 'Authenticating...';
@@ -232,12 +233,37 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
           await AccountRegistry().removeAccount(newAccount.id);
         } catch (_) {}
       }
-      if (!mounted) return;
       debugPrint('Cloud connect error: $e\n$s');
+      // Revoked-grant self-heal (Google): after the user removes CipherNest
+      // in Drive's "Manage Apps", GMS still serves a cached token for the
+      // revoked grant — signIn() succeeds, then the first API call 401s.
+      // Nuke the cached session (disconnect → fresh consent screen) and
+      // retry ONCE. Safe here: the session that gets disconnected is the
+      // one that just failed, and the account registration was rolled back.
+      if (!retriedAuth &&
+          providerType == CloudAccount.providerGoogle &&
+          _isAuthInvalid(e)) {
+        await GoogleDriveProvider.forceFreshConsent();
+        if (!mounted) return;
+        return _connectProvider(providerType, retriedAuth: true);
+      }
+      if (!mounted) return;
       final err = _mapConnectError(e);
       await showCnestError(context, err);
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  /// The error shapes a revoked/expired grant produces: HTTP 401 bodies,
+  /// googleapis DetailedApiRequestError text, and GMS token failures.
+  bool _isAuthInvalid(Object e) {
+    final msg = e.toString().toLowerCase();
+    return msg.contains('401') ||
+        msg.contains('invalid_grant') ||
+        msg.contains('invalid_credentials') ||
+        msg.contains('unauthenticated') ||
+        msg.contains('unauthorized') ||
+        msg.contains('authentication credential');
   }
 
   CnestError _mapConnectError(Object e) {
@@ -268,7 +294,10 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
     }
     if (msg.contains('token exchange failed') ||
         msg.contains('not authenticated') ||
-        msg.contains('failed to fetch user info')) {
+        msg.contains('failed to fetch user info') ||
+        // Revoked/expired grant that survived the disconnect-and-retry:
+        // an access problem, not a mystery (was CS_CONN).
+        _isAuthInvalid(e)) {
       return const AuthDeniedError(provider: 'Your provider');
     }
     return UnexpectedError(code: 'CS_CONN', debugDetail: e.toString());
