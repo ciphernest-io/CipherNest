@@ -68,6 +68,19 @@
                       android:host="ciphernest.ciphernest20.workers.dev"
                       android:pathPrefix="/s/"/>
             </intent-filter>
+            <!-- OAuth return relay: the worker callback page's button fires
+                 scheme ciphernest-open at THIS activity so the app task
+                 comes to the foreground; MainActivity.relayOAuthReturn
+                 rewrites the URI to ciphernest and hands it to the plugin's
+                 CallbackActivity in its own disposable task. A DISTINCT
+                 scheme on purpose: giving MainActivity the plain ciphernest
+                 scheme would create two filter matches and a chooser. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="ciphernest-open"/>
+            </intent-filter>
         </activity>
         <!-- OAuth2 redirect callback for flutter_web_auth_2.
              ONE delivery path, deliberately: the OAuth redirect_uri is the

@@ -26,6 +26,45 @@ class MainActivity : AudioServiceFragmentActivity() {
     // Pending Dart result for an in-flight ACTION_OPEN_DOCUMENT_TREE pick.
     private var treePickResult: MethodChannel.Result? = null
 
+    // ---- OAuth return relay (ciphernest-open scheme, see manifest) ----
+
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        relayOAuthReturn(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        relayOAuthReturn(intent)
+    }
+
+    // The worker page's "Open CipherNest" button targets THIS activity so
+    // the app task comes forward; the URI (scheme rewritten back to
+    // ciphernest) is then handed to the plugin's CallbackActivity, whose
+    // completer finishes the sign-in. FLAG_ACTIVITY_NEW_TASK is
+    // LOAD-BEARING: without it CallbackActivity joins OUR task and its
+    // finishAndRemoveTask() destroys the whole app. With it (and the
+    // affinity mismatch: ours is "", its is the package default) it gets a
+    // disposable task that removes itself, revealing us in the foreground.
+    private fun relayOAuthReturn(intent: Intent?) {
+        val data = intent?.data ?: return
+        if (data.scheme != "ciphernest-open") return
+        val rewritten = data.buildUpon().scheme("ciphernest").build()
+        try {
+            startActivity(
+                Intent(
+                    this,
+                    com.linusu.flutter_web_auth_2.CallbackActivity::class.java,
+                )
+                    .setData(rewritten)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        } catch (_: Exception) {
+            // Best effort: worst case matches the old behavior (the user
+            // returns to the app manually and sign-in completes there).
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         val vault = BiometricSeedVault(this)
