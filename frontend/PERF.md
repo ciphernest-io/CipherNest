@@ -83,3 +83,32 @@ Re-measure protocol per fix: rerun the SAME probe scenarios at the
 
 Append a dated row-set per fix cluster: `FIX-n (commit) — scenario — before →
 after`, keeping the original baseline rows untouched.
+
+### FIX-4 (viewer keep-alive removed + cacheWidth 4096) — Aug 23 2026
+
+S2 viewer, 10 swipes, profile build, A55. CORPUS CHANGED since baseline:
+the MTR#1 wipe replaced the 118-photo seeded corpus with 130 real photos
+(post-MTR re-backup), so absolute PSS is not comparable to the baseline
+row — the per-page GROWTH is the metric.
+
+| page | PSS MB | Graphics MB |
+|---|---|---|
+| 1 | 894 | 512 |
+| 2 | 930 | 518 |
+| 3 | 974 | 563 |
+| 4 | 860 | 532 |
+| 5 | 876 | 547 |
+| 6 | 871 | 562 |
+| 7 | 826 | 532 |
+| 8 | 840 | 546 |
+| 9 | 847 | 561 |
+| 10 | 831 | 531 |
+| 11 | 879 | 546 |
+
+Before: monotonic +17-20 MB/page, 682→855 over 10 pages, nothing ever
+released (route-exit was the only reclaim point). After: oscillation in a
+GC-managed band (peak 974 at page 3, then RECLAIMED — net **-15 MB** over
+the same 10 pages). Retention per visited page is gone; pages dispose on
+leave as designed. **PASS.** The high absolute floor (~850, Graphics ~540)
+is texture/decode footprint of full-res pages behind a 130-photo grid —
+FIX-5/FIX-6 territory (decode constraints), not retention.

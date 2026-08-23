@@ -2612,8 +2612,16 @@ class _SinglePhotoView extends StatefulWidget {
   State<_SinglePhotoView> createState() => _SinglePhotoViewState();
 }
 
+// NO AutomaticKeepAliveClientMixin — deliberately. Keep-alive retained
+// EVERY visited page's full-res bytes plus its live VideoPlayerController
+// and streaming session until route exit: measured +17-20 MB PSS per
+// swipe on the A55 (682→855 MB in ten swipes, PERF.md S2) — an LMK/OOM
+// path on budget devices. With default PageView semantics a page leaving
+// the cache window is DISPOSED (dispose() already frees the controller and
+// ends the streaming session), and returning to it re-reads the disk-backed
+// caches (thumb_/decrypted files) — a cheap decode, not a re-download.
 class _SinglePhotoViewState extends State<_SinglePhotoView>
-    with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin {
   Uint8List? _fullImage;
   Uint8List? _thumbImage;
   // Rung 1 placeholder bytes — MediaStore thumbnail.
@@ -2770,9 +2778,6 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
   );
   Animation<Matrix4>? _zoomTween;
   TapDownDetails? _doubleTapDetails;
-
-  @override
-  bool get wantKeepAlive => true;
 
   @override
   void initState() {
@@ -3237,8 +3242,6 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
 
   @override
   Widget build(BuildContext context) {
-    super.build(context);
-
     // VIDEO PLAYER MODE — bare VideoPlayer; every control (play/pause,
     // time, mute, scrubber) lives in the viewer's dock, so a tap on the
     // video toggles ALL chrome as one unit, Samsung-style.
@@ -3347,6 +3350,12 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
                   _fullImage!,
                   fit: BoxFit.contain,
                   gaplessPlayback: true,
+                  // Bound the decoded bitmap: at max zoom (4x) a 1080-wide
+                  // viewport never needs more than ~4320 source pixels, and
+                  // 4096 is the safe GPU-texture ceiling. An unconstrained
+                  // 50MP shot would otherwise decode to a ~200MB RGBA
+                  // buffer on exactly the screen where memory is tightest.
+                  cacheWidth: 4096,
                   errorBuilder: (_, _, _) => const SizedBox.shrink(),
                   frameBuilder: (context, child, frame, wasSync) {
                     if (wasSync) return child;
