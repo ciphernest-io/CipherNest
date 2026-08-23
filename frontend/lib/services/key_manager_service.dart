@@ -153,6 +153,107 @@ class KeyManagerService {
     await _installSeed(seed, newPassword);
   }
 
+  // ---------------------------------------------------------------------------
+  // Staged recovery (keys in memory, nothing persisted)
+  // ---------------------------------------------------------------------------
+
+  /// Candidate recovery awaiting ownership proof. The old restore flow
+  /// PERSISTED an unverified seed before any check — a wrong-but-valid
+  /// phrase permanently overwrote seed_blob_v1 and the only way out was a
+  /// reinstall (MTR#1 F9).
+  Uint8List? _stagedSeed;
+  String? _stagedPassword;
+
+  /// True while a staged (uncommitted) recovery is loaded.
+  bool get hasStagedRecovery => _stagedSeed != null;
+
+  /// Derives the candidate vault keys into MEMORY ONLY, so the canary and
+  /// snapshot probes run against them, and holds the seed + password for
+  /// [commitStagedRecovery]. Persists nothing: no seed blob, no public key,
+  /// no biometric teardown. Call [discardStagedRecovery] on any exit that
+  /// doesn't commit.
+  Future<void> stageRecovery(String mnemonic, String newPassword) async {
+    if (!bip39.validateMnemonic(mnemonic)) {
+      throw Exception('Invalid recovery phrase');
+    }
+    discardStagedRecovery();
+    final seed = bip39.mnemonicToSeed(mnemonic);
+    final keys = await _deriveKeys(seed);
+    _vaultKeyPair = keys.keyPair;
+    _vaultPublicKey = keys.publicKey;
+    _kLocal = keys.kLocal;
+    _stagedSeed = seed;
+    _stagedPassword = newPassword;
+  }
+
+  /// Persists the staged recovery — the phrase proved it owns the vault (or
+  /// the user explicitly chose to found a new vault with it). The in-memory
+  /// keys stay resident (already derived from this seed).
+  Future<void> commitStagedRecovery() async {
+    final seed = _stagedSeed;
+    final password = _stagedPassword;
+    if (seed == null || password == null) {
+      throw StateError('No staged recovery to commit.');
+    }
+    await _storage.write(
+      key: _kVaultPub,
+      value: base64Encode(_vaultPublicKey!.bytes),
+    );
+    await _encryptAndSaveSeedBlob(password, seed);
+    // Same rule as _installSeed: a new seed never inherits a biometric wrap.
+    await disableBiometric();
+    seed.fillRange(0, seed.length, 0);
+    _stagedSeed = null;
+    _stagedPassword = null;
+  }
+
+  /// Drops a staged recovery and the in-memory keys derived from it.
+  /// Idempotent; safe to call when nothing is staged.
+  void discardStagedRecovery() {
+    final seed = _stagedSeed;
+    if (seed == null) return;
+    seed.fillRange(0, seed.length, 0);
+    _stagedSeed = null;
+    _stagedPassword = null;
+    _vaultKeyPair = null;
+    _vaultPublicKey = null;
+    _kLocal = null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Vault wipe (the primitive sign-out/forget/start-over flows build on)
+  // ---------------------------------------------------------------------------
+
+  /// Destroys every key artifact on this device: in-memory keys, the
+  /// password-wrapped seed blob, the stored public key, the crash-recovery
+  /// mnemonic blob and its flags, and the biometric wrap. Files in the
+  /// cloud are untouched — the recovery phrase regains access elsewhere.
+  ///
+  /// This is deliberately KeyManagerService-scoped; account registry, DB,
+  /// and prefs cleanup live in VaultResetService.
+  Future<void> wipeVault() async {
+    discardStagedRecovery();
+    _vaultKeyPair = null;
+    _vaultPublicKey = null;
+    _kLocal = null;
+    await disableBiometric();
+    await _storage.delete(key: _kVaultPub);
+    final prefs = await SharedPreferences.getInstance();
+    for (final key in [
+      _kSeedBlob,
+      _kSeedNonce,
+      _kSeedMac,
+      _kSeedSalt,
+      _kSignupInProgress,
+      _kRecoveryShown,
+      _kEncryptedMnemonic,
+      _kEncryptedMnemonicNonce,
+      _kEncryptedMnemonicMac,
+    ]) {
+      await prefs.remove(key);
+    }
+  }
+
   /// Derives the vault keys from [seed], writes the public key to secure
   /// storage, and password-wraps the seed. Loads all keys into memory.
   Future<void> _installSeed(Uint8List seed, String password) async {

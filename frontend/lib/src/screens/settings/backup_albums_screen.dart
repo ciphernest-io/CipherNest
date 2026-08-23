@@ -65,6 +65,20 @@ class _BackupAlbumsScreenState extends State<BackupAlbumsScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Backed-up albums')),
+      // Every checkbox change writes through immediately; Done is the
+      // explicit confirm affordance the flow lacked (back-arrow-only exit
+      // read as "did that save?" in the field).
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: FilledButton(
+            onPressed: () => Navigator.pop(context),
+            style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14)),
+            child: const Text('Done'),
+          ),
+        ),
+      ),
       body: selection == null || albums == null
           ? const Center(child: CircularProgressIndicator())
           : ListView(
@@ -80,7 +94,7 @@ class _BackupAlbumsScreenState extends State<BackupAlbumsScreen> {
                         value: BackupMode.all,
                         title: const Text('All albums'),
                         subtitle: Text(
-                          'Every album on this phone backs up — including '
+                          'Every album on this phone backs up, including '
                           'new albums that appear later',
                           style: TextStyle(
                               color: cs.onSurface.withAlpha(140),
@@ -192,7 +206,13 @@ Future<bool?> showBackupEnrollSheet(BuildContext context, String albumName,
 /// the mode; the all-albums path also offers the include-existing shortcut
 /// (queues a backfill for every current bucket). Pushing the checklist
 /// screen presets selected mode.
-Future<void> showBackupAlbumChoiceSheet(BuildContext context) async {
+///
+/// Returns false when the sheet was DISMISSED without a choice — callers
+/// that just flipped auto-sync on must revert the toggle: an absent
+/// selection pref reads as BackupMode.all, so a silent dismissal used to
+/// commit the most aggressive setting (all albums, background) by
+/// not-choosing (MTR#1 F8).
+Future<bool> showBackupAlbumChoiceSheet(BuildContext context) async {
   final cs = Theme.of(context).colorScheme;
   final choice = await showModalBottomSheet<String>(
     context: context,
@@ -213,7 +233,7 @@ Future<void> showBackupAlbumChoiceSheet(BuildContext context) async {
             leading: const ThemeIcon('images'),
             title: const Text('All albums'),
             subtitle: Text(
-              'Camera, screenshots, WhatsApp — everything, including new '
+              'Camera, screenshots, WhatsApp: everything, including new '
               'albums later',
               style:
                   TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 12),
@@ -235,11 +255,11 @@ Future<void> showBackupAlbumChoiceSheet(BuildContext context) async {
       ),
     ),
   );
-  if (choice == null) return; // dismissed: keep defaults (all, from now)
+  if (choice == null) return false; // dismissed: caller reverts the toggle
 
   if (choice == 'all') {
     await BackupSelectionService().setMode(BackupMode.all);
-    if (!context.mounted) return;
+    if (!context.mounted) return true;
     final backfill = await showBackupEnrollSheet(context, 'all albums');
     if (backfill == true) {
       final albums = await MigrationService().getAlbums();
@@ -247,13 +267,14 @@ Future<void> showBackupAlbumChoiceSheet(BuildContext context) async {
           albums.where((a) => !a.path.isAll).map((a) => a.name));
       unawaited(BackupBackfillRunner().runPending());
     }
-    return;
+    return true;
   }
 
   await BackupSelectionService().setMode(BackupMode.selected);
-  if (!context.mounted) return;
+  if (!context.mounted) return true;
   await Navigator.push(
     context,
     MaterialPageRoute(builder: (_) => const BackupAlbumsScreen()),
   );
+  return true;
 }

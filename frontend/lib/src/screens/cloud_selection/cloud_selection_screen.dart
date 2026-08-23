@@ -10,6 +10,8 @@ import '../../../services/cloud/google_drive_provider.dart';
 import '../../../services/cloud/onedrive_provider.dart';
 import '../../../services/cnest_errors.dart';
 import '../../../services/database_backup_service.dart';
+import '../../../services/key_manager_service.dart';
+import '../../../services/sync/segment_codec.dart';
 import '../../../services/sync/sync_coordinator.dart';
 import '../../../services/database_service.dart';
 import '../../config/routes.dart';
@@ -21,7 +23,18 @@ import '../../widgets/theme_icon.dart';
 /// Which flow entered the cloud picker. Each mode changes copy + how the
 /// probe result is interpreted (existing files during signup are a warning,
 /// but during restore they're expected).
-enum CloudSelectionMode { signup, restore, addAnother, reconnect }
+enum CloudSelectionMode {
+  signup,
+  restore,
+  addAnother,
+  reconnect,
+
+  /// A live local vault with an EMPTY account registry (the user
+  /// disconnected every cloud). Connect runs the canary with the INSTALLED
+  /// keys — no phrase entry, and never signup copy for a vault that
+  /// already exists.
+  attach,
+}
 
 /// Route-argument container. Legacy callers can still pass a bare `true`
 /// (interpreted as add-another for backward compatibility); new callers
@@ -36,6 +49,7 @@ class CloudSelectionArgs {
       CloudSelectionArgs(mode: CloudSelectionMode.addAnother);
   static const reconnect =
       CloudSelectionArgs(mode: CloudSelectionMode.reconnect);
+  static const attach = CloudSelectionArgs(mode: CloudSelectionMode.attach);
 }
 
 class CloudSelectionScreen extends StatefulWidget {
@@ -147,19 +161,55 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
         }
 
         if (_mode == CloudSelectionMode.restore && !hasExisting) {
-          final choice = await _promptEmptyVaultOnRestore();
-          if (choice == _EmptyVaultChoice.tryDifferent) {
-            await AccountRegistry().removeAccount(newAccount.id);
-            if (mounted) setState(() => _isLoading = false);
-            return;
+          // F3: "vault exists" must mean more than blobs in vault/. A
+          // completed signup that never uploaded still has op-log segments
+          // in backup/log/ (and possibly an index snapshot); the old probe
+          // read only vault/*.cnest and told those users their vault was
+          // "deleted or signup was never completed".
+          List<Map<String, dynamic>> logObjects = const [];
+          var storageLevelVault = false;
+          try {
+            logObjects = await CloudService().listLogObjects();
+            storageLevelVault = logObjects.isNotEmpty;
+          } catch (_) {}
+          if (!storageLevelVault) {
+            try {
+              storageLevelVault =
+                  (await DatabaseBackupService().listSnapshots()).isNotEmpty;
+            } catch (_) {}
           }
-          if (choice == _EmptyVaultChoice.setUpAsNew) {
-            skipCanary = true;
-          }
-          if (choice == null) {
-            await AccountRegistry().removeAccount(newAccount.id);
-            if (mounted) setState(() => _isLoading = false);
-            return;
+
+          if (storageLevelVault) {
+            // Blob-less vault: the canary has nothing to decrypt (it passes
+            // trivially on an empty listing), so ownership is proved
+            // against a log segment instead — segments are HPKE-sealed to
+            // the vault key exactly like file blobs, and the staged keys
+            // are already in memory.
+            setState(() => _statusMsg = 'Verifying encryption keys...');
+            final owned = await _stagedKeysOpenAnyLogObject(logObjects);
+            if (!owned) {
+              await AccountRegistry().removeAccount(newAccount.id);
+              if (!mounted) return;
+              final exit = await _promptWrongPhrase(offerReEnter: true);
+              await _handleWrongPhraseExit(exit);
+              return;
+            }
+            skipCanary = true; // ownership proven
+          } else {
+            final choice = await _promptEmptyVaultOnRestore();
+            if (choice == _EmptyVaultChoice.tryDifferent) {
+              await AccountRegistry().removeAccount(newAccount.id);
+              if (mounted) setState(() => _isLoading = false);
+              return;
+            }
+            if (choice == _EmptyVaultChoice.setUpAsNew) {
+              skipCanary = true;
+            }
+            if (choice == null) {
+              await AccountRegistry().removeAccount(newAccount.id);
+              if (mounted) setState(() => _isLoading = false);
+              return;
+            }
           }
         }
       }
@@ -172,10 +222,22 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
         final isValid = await canaryWithRetry();
         if (!isValid) {
           await AccountRegistry().removeAccount(newAccount.id);
-          if (mounted) await _promptWrongPhrase();
-          if (mounted) setState(() => _isLoading = false);
+          if (!mounted) return;
+          final exit = await _promptWrongPhrase(
+              offerReEnter: _mode == CloudSelectionMode.restore);
+          await _handleWrongPhraseExit(exit);
           return;
         }
+      }
+
+      // Ownership proven (canary, segment proof, or an explicit
+      // use-this-account choice): persist the staged recovery NOW, before
+      // any account/DB state lands. Until this line a wrong phrase costs
+      // nothing — the old flow persisted the seed back at the password
+      // screen and a wrong phrase was unrecoverable without a reinstall.
+      if (_mode == CloudSelectionMode.restore &&
+          KeyManagerService().hasStagedRecovery) {
+        await KeyManagerService().commitStagedRecovery();
       }
 
       DatabaseService().setCurrentAccount(newAccount.id);
@@ -435,19 +497,56 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: const Text('This account has no CipherNest files.'),
+        title: const Text('No CipherNest data on this account.'),
         content: const Text(
-          "If you signed up on a different Google or Microsoft account, sign out and try that one. If this really is the right account, either the vault was deleted, or you never actually completed signup on this account.",
+          "If your vault lives on a different Google or Microsoft account, connect that one instead.\n\n"
+          "Or start fresh here: your phrase founds a new vault on this account. The same phrase can still restore your other vault elsewhere.",
         ),
         actions: [
           TextButton(
             onPressed: () =>
-                Navigator.pop(ctx, _EmptyVaultChoice.setUpAsNew),
-            child: const Text("It's the right one, set up as new"),
+                Navigator.pop(ctx, _EmptyVaultChoice.tryDifferent),
+            child: const Text('Try a different account'),
           ),
+          // First-class action, not an error apology: creating a NEW
+          // provider vault with an EXISTING phrase is a supported flow.
           FilledButton(
             onPressed: () =>
-                Navigator.pop(ctx, _EmptyVaultChoice.tryDifferent),
+                Navigator.pop(ctx, _EmptyVaultChoice.setUpAsNew),
+            child: const Text('Use this account with my phrase'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Wrong key for this cloud's vault. Every exit is a real path forward —
+  /// the old dialog's only action was "OK", which looped the user forever
+  /// (the field report's restore dead end).
+  Future<_WrongPhraseExit?> _promptWrongPhrase({required bool offerReEnter}) {
+    return showDialog<_WrongPhraseExit>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("That phrase doesn't match this vault."),
+        content: const Text(
+          "Either the recovery phrase is wrong, or this is a different cloud account than the one you signed up with.",
+        ),
+        actions: [
+          if (offerReEnter)
+            TextButton(
+              onPressed: () =>
+                  Navigator.pop(ctx, _WrongPhraseExit.reEnterPhrase),
+              child: const Text('Re-enter phrase'),
+            ),
+          if (offerReEnter)
+            TextButton(
+              onPressed: () =>
+                  Navigator.pop(ctx, _WrongPhraseExit.createNewVault),
+              child: const Text('Create a new vault'),
+            ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(ctx, _WrongPhraseExit.differentAccount),
             child: const Text('Try a different account'),
           ),
         ],
@@ -455,23 +554,72 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
     );
   }
 
-  Future<void> _promptWrongPhrase() {
-    return showDialog<void>(
+  /// Routes a [_WrongPhraseExit]. The staged keys survive only the
+  /// "different account" path (same phrase, next cloud); the other exits
+  /// leave the restore attempt entirely.
+  Future<void> _handleWrongPhraseExit(_WrongPhraseExit? exit) async {
+    switch (exit) {
+      case _WrongPhraseExit.reEnterPhrase:
+        KeyManagerService().discardStagedRecovery();
+        if (mounted) {
+          Navigator.pushReplacementNamed(context, AppRoutes.restore);
+        }
+      case _WrongPhraseExit.createNewVault:
+        KeyManagerService().discardStagedRecovery();
+        if (mounted) {
+          Navigator.pushReplacementNamed(context, AppRoutes.masterPassword);
+        }
+      case _WrongPhraseExit.differentAccount:
+      case null:
+        if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  /// F1 escape from the signup cloud picker: abandon this new vault's keys
+  /// (nothing is uploaded yet) and go restore with an existing phrase.
+  Future<void> _restoreExistingInstead() async {
+    final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text("That phrase doesn't match this vault."),
+        title: const Text('Restore an existing vault instead?'),
         content: const Text(
-          "Either the recovery phrase is wrong, or this is a different cloud account than the one you signed up with.\n\n"
-          "Double-check your phrase word by word. If you're sure it's right, try a different cloud account.",
+          'This abandons the new vault you just created. Nothing has been '
+          'uploaded yet, so nothing is lost. Its recovery phrase stops '
+          'working.',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('OK'),
-          ),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Keep setting up')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Restore instead')),
         ],
       ),
     );
+    if (confirmed != true || !mounted) return;
+    await KeyManagerService().wipeVault();
+    if (!mounted) return;
+    Navigator.pushReplacementNamed(context, AppRoutes.restore);
+  }
+
+  /// Ownership probe for a blob-less vault: can the staged keys open any of
+  /// the first few log objects? Snapshot-only vaults (no segments at all)
+  /// pass without proof — the DB-restore step simply fails decryption on a
+  /// wrong phrase and the vault attaches empty, a bounded downside.
+  Future<bool> _stagedKeysOpenAnyLogObject(
+      List<Map<String, dynamic>> objects) async {
+    if (objects.isEmpty) return true;
+    for (final obj in objects.take(3)) {
+      final id = obj['id'] as String?;
+      if (id == null) continue;
+      try {
+        final bytes = await CloudService().downloadFile(id);
+        if (await SegmentCodec.tryOpen(bytes) != null) return true;
+        if (await SegmentCodec.tryOpenSnapshot(bytes) != null) return true;
+      } catch (_) {}
+    }
+    return false;
   }
 
   Future<bool?> _promptRestoreDbBackup() {
@@ -648,6 +796,20 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
                   fontSize: 12,
                 ),
               ),
+              if (_mode == CloudSelectionMode.signup && !_isLoading) ...[
+                const SizedBox(height: 8),
+                // F1 escape: mid-signup (a lock-and-resume can land here
+                // too) the way back to restoring an existing vault must
+                // always be reachable — the in-progress signup keys are
+                // wiped after an explicit confirm, safe because nothing has
+                // been uploaded before the first cloud connect.
+                Center(
+                  child: TextButton(
+                    onPressed: _restoreExistingInstead,
+                    child: const Text('I already have a recovery phrase'),
+                  ),
+                ),
+              ],
               if (_isLoading) ...[
                 const SizedBox(height: 32),
                 const Center(child: CircularProgressIndicator()),
@@ -675,6 +837,8 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
         return 'Reconnect to your vault';
       case CloudSelectionMode.reconnect:
         return 'Reconnect your cloud';
+      case CloudSelectionMode.attach:
+        return 'Connect a cloud to your vault';
       case CloudSelectionMode.signup:
         return 'Where should your files live?';
     }
@@ -688,6 +852,8 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
         return "Pick the cloud where you originally set up CipherNest. We will decrypt your existing files with the phrase you just entered.";
       case CloudSelectionMode.reconnect:
         return "Pick the cloud you were signed into last time. Your files are safe there; we just need to re-link.";
+      case CloudSelectionMode.attach:
+        return "Your vault is on this device but no cloud is connected. Pick where its files should sync.";
       case CloudSelectionMode.signup:
         return "Your files stay encrypted end-to-end. Your cloud provider only ever sees scrambled data.";
     }
@@ -777,4 +943,7 @@ enum _ExistingVaultChoice { restoreInstead, startOver }
 
 /// Start-over's follow-up decision about the previous vault's blobs.
 enum _StartOverCleanup { deleteNow, keepUnreadable }
+
+/// Exits from the wrong-phrase dialog — every one is a path forward.
+enum _WrongPhraseExit { reEnterPhrase, createNewVault, differentAccount }
 enum _EmptyVaultChoice { tryDifferent, setUpAsNew }

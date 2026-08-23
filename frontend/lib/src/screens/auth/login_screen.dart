@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../widgets/theme_icon.dart';
 import '../../config/routes.dart';
@@ -163,16 +164,24 @@ class _LoginScreenState extends State<LoginScreen> {
 
     if (!mounted) return;
     final hasActive = AccountRegistry().activeAccount != null;
-    // Reconnect is for a vault that HAD a cloud and lost the session. If no
-    // account was EVER registered, this is a signup interrupted at the
-    // cloud picker (e.g. auto-locked while deciding) — reconnect is a dead
-    // end there ("reconnect your cloud" for a cloud that never existed),
-    // and the user is wedged. Resume the signup's cloud selection instead.
-    final route = hasActive
-        ? AppRoutes.home
-        : AccountRegistry().hasAnyAccount
-            ? AppRoutes.reconnect
-            : AppRoutes.cloudSelection;
+    // Resume-by-progress. Reconnect is for a vault that HAD a cloud and
+    // lost the session. If no account was EVER registered, this is a signup
+    // interrupted at the cloud picker (e.g. killed while deciding) —
+    // reconnect is a dead end there, resume the signup's cloud selection.
+    // An active account with the quick-settings step unfinished (a lock or
+    // kill on that screen) resumes THERE — the step used to be silently
+    // lost forever.
+    if (hasActive) {
+      final prefs = await SharedPreferences.getInstance();
+      final settled = prefs.getBool('quick_settings_shown_v1') ?? false;
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(
+          context, settled ? AppRoutes.home : AppRoutes.quickSettings);
+      return;
+    }
+    final route = AccountRegistry().hasAnyAccount
+        ? AppRoutes.reconnect
+        : AppRoutes.cloudSelection;
     Navigator.pushReplacementNamed(context, route);
   }
 

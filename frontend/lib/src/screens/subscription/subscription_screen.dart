@@ -5,14 +5,28 @@ import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 
+/// Route-argument sentinel: the onboarding-tail slot (quick settings ->
+/// paywall -> home). Exits go HOME. Any other entry (upsells push normally)
+/// pops back where it came from.
+class SubscriptionScreenArgs {
+  const SubscriptionScreenArgs._();
+  static const String onboardingTail = 'onboarding-tail';
+}
+
 /// Three-tier paywall (Free / Plus / Lifetime). In v1.0 the CTAs are mock:
-/// every purchase path routes to master-password creation without touching
-/// billing. Live purchases land in v1.1 when RevenueCat is wired.
+/// purchases don't touch billing — the full payments workstream (RevenueCat,
+/// entitlements, lapse behavior, restore) is its own project. Position: the
+/// single skippable slot at the END of onboarding (value-first; it used to
+/// block signup before the password screen), plus normal pushes from
+/// contextual upsells.
 ///
 /// Guarded upstream by `kPaywallEnabled` in `flags.dart`. When that flag is
-/// off, the onboarding CTA skips this screen entirely.
+/// off, the onboarding tail skips this screen entirely.
 class SubscriptionScreen extends StatefulWidget {
-  const SubscriptionScreen({super.key});
+  const SubscriptionScreen({super.key, this.onboardingTail = false});
+
+  /// True when shown as the last onboarding step — exits advance to home.
+  final bool onboardingTail;
 
   @override
   State<SubscriptionScreen> createState() => _SubscriptionScreenState();
@@ -32,22 +46,27 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     setState(() => _expanded = _expanded == kind ? null : kind);
   }
 
-  void _continueFree() {
-    // Onboarding pushed us with pushNamedAndRemoveUntil, so there's nothing
-    // behind us. Advance instead of trying to pop into oblivion. If we ever
-    // get shown from Settings (v1.1), that entry point will push normally
-    // and pop below will just close the sheet.
+  /// Every exit converges here. Onboarding-tail advances to home (the vault
+  /// already exists at this point); upsell pushes pop; the home fallback
+  /// covers a bare stack.
+  void _leave() {
+    if (widget.onboardingTail) {
+      Navigator.pushReplacementNamed(context, AppRoutes.home);
+      return;
+    }
     if (Navigator.canPop(context)) {
       Navigator.pop(context);
       return;
     }
-    Navigator.pushReplacementNamed(context, AppRoutes.masterPassword);
+    Navigator.pushReplacementNamed(context, AppRoutes.home);
   }
 
+  void _continueFree() => _leave();
+
   void _mockPurchase() {
-    // Placeholder for RevenueCat.purchase(). In v1.0 the vault is created
-    // without billing; the tier UI is here for design + walkthrough only.
-    Navigator.pushReplacementNamed(context, AppRoutes.masterPassword);
+    // Placeholder for RevenueCat.purchase(). Billing is a separate project;
+    // the tier UI is here for design + walkthrough only.
+    _leave();
   }
 
   void _restorePurchase() {

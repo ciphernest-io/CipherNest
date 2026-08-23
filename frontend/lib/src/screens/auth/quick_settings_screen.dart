@@ -5,8 +5,11 @@ import '../../../services/auto_sync_worker.dart';
 import '../../../services/biometric_unlock_service.dart';
 import '../../../services/key_manager_service.dart';
 import '../../../services/notify.dart';
+import '../../config/flags.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
+import '../subscription/subscription_screen.dart'
+    show SubscriptionScreenArgs;
 import '../../widgets/password_confirm_dialog.dart';
 import '../../widgets/theme_icon.dart';
 import '../settings/backup_albums_screen.dart';
@@ -97,14 +100,34 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
     if (!mounted) return;
     setState(() => _autoSyncOn = v);
     // Which albums? All vs a checklist, with the include-existing shortcut.
-    if (v) await showBackupAlbumChoiceSheet(context);
+    if (v) {
+      final chose = await showBackupAlbumChoiceSheet(context);
+      if (!chose) {
+        // Dismissed without choosing: revert. An absent selection reads as
+        // ALL albums, so leaving the toggle on would commit the most
+        // aggressive setting by not-choosing (MTR#1 F8).
+        await AutoSyncScheduler.writeMode(AutoSyncMode.off);
+        if (mounted) setState(() => _autoSyncOn = false);
+      }
+    }
   }
 
   Future<void> _finish() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kShownFlag, true);
     if (!mounted) return;
-    Navigator.pushReplacementNamed(context, AppRoutes.home);
+    // Value-first paywall slot: the single skippable pitch sits at the END
+    // of onboarding, after the vault is real — never before the password
+    // screen. Mock CTAs until the payments project lands.
+    if (kPaywallEnabled) {
+      Navigator.pushReplacementNamed(
+        context,
+        AppRoutes.subscription,
+        arguments: SubscriptionScreenArgs.onboardingTail,
+      );
+    } else {
+      Navigator.pushReplacementNamed(context, AppRoutes.home);
+    }
   }
 
   @override
@@ -127,7 +150,7 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                _bioOfferable ? 'Two quick settings.' : 'One quick setting.',
+                'A few quick settings.',
                 style: text.headlineMedium
                     ?.copyWith(fontWeight: FontWeight.w600),
               ),
@@ -160,6 +183,66 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
                   onChanged: _toggleBiometric,
                 ),
               ],
+              const SizedBox(height: 12),
+              // Theme: System follows the phone live; Light/Dark pin it.
+              ListenableBuilder(
+                listenable: ThemeController(),
+                builder: (context, _) => Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: cs.surface,
+                    borderRadius: BorderRadius.circular(
+                        ThemeController().tokens.rCard),
+                    border:
+                        Border.all(color: cs.outline.withValues(alpha: 0.3)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(right: 12),
+                            child: ThemeIcon(
+                              ThemeController().brightness == Brightness.dark
+                                  ? 'moon'
+                                  : 'sun',
+                              size: 22,
+                              color: cs.primary,
+                              selected: true,
+                            ),
+                          ),
+                          Text(
+                            'Appearance',
+                            style: text.titleSmall
+                                ?.copyWith(fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        child: SegmentedButton<AppThemeMode>(
+                          segments: const [
+                            ButtonSegment(
+                                value: AppThemeMode.system,
+                                label: Text('System')),
+                            ButtonSegment(
+                                value: AppThemeMode.light,
+                                label: Text('Light')),
+                            ButtonSegment(
+                                value: AppThemeMode.dark,
+                                label: Text('Dark')),
+                          ],
+                          selected: {ThemeController().mode},
+                          onSelectionChanged: (s) =>
+                              ThemeController().setMode(s.first),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
               const Spacer(),
               SizedBox(
                 width: double.infinity,

@@ -22,7 +22,10 @@ import '../../../services/biometric_unlock_service.dart';
 import '../../../services/gallery_prefs.dart';
 import '../../../services/key_manager_service.dart';
 import '../../../services/metadata_migration_service.dart';
+import '../../../services/vault_reset_service.dart';
 import '../../models/file_model.dart';
+import '../cloud_selection/cloud_selection_screen.dart'
+    show CloudSelectionArgs;
 import 'package:device_info_plus/device_info_plus.dart';
 import '../../../services/sync/device_registry_service.dart';
 import '../../../services/sync/sync_coordinator.dart';
@@ -730,20 +733,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  /// Disconnects ONE cloud account: registry row + this provider's OAuth
+  /// session. The vault (keys, DB, files) stays on the device — this is
+  /// NOT sign-out-of-the-vault; that's [_forgetVaultOnDevice]. The old
+  /// wording said "Sign out" while clearing only the registry row, and
+  /// landed a live vault on the SIGNUP picker (MTR#1 F4).
   Future<void> _handleRemoveAccount(String accountId) async {
     final accounts = AccountRegistry().accounts;
     final account = accounts.firstWhere((a) => a.id == accountId);
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Sign out of ${account.email}?'),
-        content: Text('Files on ${account.providerName} stay there. You can sign back in anytime.'),
+        title: Text('Disconnect ${account.email}?'),
+        content: Text(
+            'Files on ${account.providerName} stay there, and your vault '
+            'stays on this device. You can reconnect anytime.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: Text(
-              'Sign Out',
+              'Disconnect',
               style: TextStyle(color: Theme.of(ctx).colorScheme.error),
             ),
           ),
@@ -753,6 +763,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (confirm != true) return;
 
     final wasActive = AccountRegistry().activeAccount?.id == accountId;
+    if (wasActive) {
+      // Drop the provider's OAuth grant too — "disconnect" that leaves a
+      // live token behind isn't a disconnect. Best-effort: the registry
+      // removal below is the part that must not hinge on the network.
+      try {
+        await CloudService().signOut();
+      } catch (_) {}
+    }
     await AccountRegistry().removeAccount(accountId);
     CloudService().reset();
 
@@ -761,11 +779,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (newActive != null) {
         DatabaseService().setCurrentAccount(newActive.id);
       } else if (mounted) {
-        // No accounts left — back to cloud selection (clean slate)
+        // No accounts left, but the vault LIVES here — attach mode, never
+        // the signup picker.
         Navigator.pushNamedAndRemoveUntil(
-            context, AppRoutes.cloudSelection, (r) => false);
+            context, AppRoutes.cloudSelection, (r) => false,
+            arguments: CloudSelectionArgs.attach);
       }
     }
+  }
+
+  /// The true "sign out": destroys every local artifact of the vault (keys,
+  /// index, caches, flags) and returns to the welcome screen. Cloud data is
+  /// untouched; the recovery phrase restores access anywhere.
+  Future<void> _forgetVaultOnDevice() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Forget this vault on this device?'),
+        content: const Text(
+          'This removes the vault from this phone: keys, the local index, '
+          'and all cached files.\n\nYour encrypted files stay in your '
+          'cloud. To get back in, here or on any device, you need your '
+          '12-word recovery phrase. If you have not written it down, stop '
+          'and do that first.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Forget vault',
+                style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    await VaultResetService().forgetVaultOnDevice();
+    if (!mounted) return;
+    Navigator.pushNamedAndRemoveUntil(
+        context, AppRoutes.onboarding, (r) => false);
   }
 
   @override
@@ -1053,18 +1107,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
               final tc = ThemeController();
               return Column(
                 children: [
-                  SwitchListTile(
-                    secondary: ThemeIcon(
+                  ListTile(
+                    leading: ThemeIcon(
                       tc.brightness == Brightness.dark ? 'moon' : 'sun',
                       color: Theme.of(context).colorScheme.primary,
                     ),
-                    title: Text('Light Mode', style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
-                    subtitle: Text(
-                      tc.brightness == Brightness.dark ? 'Currently dark' : 'Currently light',
-                      style: TextStyle(color: Theme.of(context).textTheme.bodyMedium!.color),
+                    title: Text('Appearance mode',
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.onSurface)),
+                    subtitle: Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: SegmentedButton<AppThemeMode>(
+                        segments: const [
+                          ButtonSegment(
+                              value: AppThemeMode.system,
+                              label: Text('System')),
+                          ButtonSegment(
+                              value: AppThemeMode.light, label: Text('Light')),
+                          ButtonSegment(
+                              value: AppThemeMode.dark, label: Text('Dark')),
+                        ],
+                        selected: {tc.mode},
+                        onSelectionChanged: (s) => tc.setMode(s.first),
+                      ),
                     ),
-                    value: tc.brightness == Brightness.light,
-                    onChanged: (_) => tc.toggleBrightness(),
                   ),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
@@ -1179,6 +1245,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onTap: () => _cleanupPriorKeyFiles(rows),
               );
             },
+          ),
+          ListTile(
+            leading: ThemeIcon('signOut', color: cs.error),
+            title: Text('Forget this vault on this device',
+                style: TextStyle(color: cs.error)),
+            subtitle: Text(
+                'Remove keys, index, and caches here. Cloud files stay; '
+                'your recovery phrase gets you back in.',
+                style: TextStyle(color: cs.onSurface.withAlpha(140))),
+            onTap: _forgetVaultOnDevice,
           ),
           ValueListenableBuilder<MetadataMigrationState>(
             valueListenable: MetadataMigrationService().state,

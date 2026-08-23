@@ -69,6 +69,14 @@ class _AppState extends State<App> with WidgetsBindingObserver {
     }
   }
 
+  @override
+  void didChangePlatformBrightness() {
+    // System theme mode must re-theme the moment the OS flips.
+    _themeController.onPlatformBrightnessChanged(
+      WidgetsBinding.instance.platformDispatcher.platformBrightness,
+    );
+  }
+
   void _onThemeChanged() {
     setState(() {});
   }

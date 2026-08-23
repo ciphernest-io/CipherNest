@@ -11,6 +11,7 @@ import '../../widgets/account_switcher.dart';
 import '../../widgets/ciphernest_logo.dart';
 
 import '../../utils/byte_format.dart';
+import '../../../services/app_lock_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/cloud/account_registry.dart';
@@ -93,6 +94,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _markSetupCompleted() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('setup_completed_v1', true);
+    // Onboarding is over — arm the inactivity auto-lock from this moment.
+    AppLockService().notifySetupCompleted();
   }
 
   Future<void> _initSession() async {

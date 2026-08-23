@@ -45,6 +45,16 @@ class _RecoveryPhraseScreenState extends State<RecoveryPhraseScreen> {
                 onPressed: () => setState(() => _stage = 1),
               )
             : null,
+        actions: [
+          // F1 escape: the option to restore an existing vault stays
+          // reachable until the user lands in theirs. The just-minted
+          // signup keys are wiped after an explicit confirm (nothing is
+          // uploaded before the first cloud connect).
+          TextButton(
+            onPressed: _restoreExistingInstead,
+            child: const Text('Have a phrase?'),
+          ),
+        ],
       ),
       body: SafeArea(
         child: _stage == 1
@@ -69,6 +79,32 @@ class _RecoveryPhraseScreenState extends State<RecoveryPhraseScreen> {
               ),
       ),
     );
+  }
+
+  Future<void> _restoreExistingInstead() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Restore an existing vault instead?'),
+        content: const Text(
+          'This abandons the new vault you just created, including the '
+          'phrase on this screen. Nothing has been uploaded yet, so nothing '
+          'is lost.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Keep this vault')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Restore instead')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await KeyManagerService().wipeVault();
+    if (!mounted) return;
+    Navigator.pushReplacementNamed(context, AppRoutes.restore);
   }
 }
 

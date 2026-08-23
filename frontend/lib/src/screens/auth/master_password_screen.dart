@@ -14,10 +14,11 @@ import '../cloud_selection/cloud_selection_screen.dart' show CloudSelectionArgs;
 /// [KeyManagerService.createAccount] and hands the mnemonic to the
 /// recovery-phrase screen for display + type-back challenge.
 ///
-/// [restore] is the recovery path: the caller already has a validated
-/// mnemonic (passed via [MasterPasswordArgs.mnemonic]); this screen
-/// installs it via [KeyManagerService.recoverAccount] and routes to cloud
-/// selection.
+/// [restore] is the recovery path: the caller has a checksum-valid mnemonic
+/// (passed via [MasterPasswordArgs.mnemonic]); this screen STAGES it via
+/// [KeyManagerService.stageRecovery] — nothing is persisted until the cloud
+/// canary proves the phrase owns the vault (a wrong-but-valid phrase used
+/// to permanently overwrite the seed here, before any ownership check).
 enum MasterPasswordMode { createNew, restore }
 
 /// Route argument carrier. Missing argument (or wrong type) is treated as
@@ -77,12 +78,14 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
               'MasterPasswordScreen entered restore mode without a mnemonic',
             );
           }
-          await KeyManagerService().recoverAccount(mnemonic, _password);
+          await KeyManagerService().stageRecovery(mnemonic, _password);
           if (!mounted) return;
           Navigator.pushNamedAndRemoveUntil(
             context,
             AppRoutes.cloudSelection,
-            (route) => route.settings.name == AppRoutes.splash,
+            // Clear the whole stack deliberately (the old splash-predicate
+            // never matched — splash pushReplacement'd itself away).
+            (route) => false,
             arguments: CloudSelectionArgs.restore,
           );
       }
@@ -110,7 +113,7 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
         ? 'Set a new master password.'
         : 'Create your master password.';
     final sub = isRestore
-        ? 'Your recovery phrase already proved you own the vault. Pick a new local password to unlock CipherNest on this device.'
+        ? 'Pick a new local password for this device. Next you connect your cloud, and we check the phrase against your vault before anything is saved.'
         : 'The recovery phrase owns the vault. This password unlocks it on this device. Forget the password, use the phrase to set a new one. Lose both, and the files are gone.';
     final ctaText =
         isRestore ? 'Restore vault' : 'Continue to recovery phrase';
@@ -181,6 +184,22 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
                           ),
                   ),
                 ),
+                if (!isRestore) ...[
+                  const SizedBox(height: 12),
+                  // The escape hatch lives where the user's mental model is:
+                  // they're making a new vault and realize they already hold
+                  // a phrase (new provider, existing key — or plain restore).
+                  Center(
+                    child: TextButton(
+                      onPressed: _isLoading
+                          ? null
+                          : () => Navigator.pushReplacementNamed(
+                              context, AppRoutes.restore),
+                      child:
+                          const Text('Use a recovery phrase I already have'),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

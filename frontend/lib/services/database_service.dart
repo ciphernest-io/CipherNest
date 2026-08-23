@@ -74,6 +74,17 @@ class DatabaseService extends ChangeNotifier {
     }
   }
 
+  /// Closes and DELETES the database file — the "forget this vault on this
+  /// device" primitive. The next `database` access recreates a fresh empty
+  /// schema. Cloud state is untouched.
+  Future<void> destroyDatabase() async {
+    await closeDatabase();
+    _currentAccountId = null;
+    final dbPath = await getDatabasesPath();
+    await deleteDatabase(join(dbPath, 'ciphernest_v3.db'));
+    notifyListeners();
+  }
+
   Future<Database> _initDB() async {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, 'ciphernest_v3.db');

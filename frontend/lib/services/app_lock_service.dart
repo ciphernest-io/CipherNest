@@ -4,7 +4,6 @@ import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../src/config/routes.dart';
-import 'cloud/account_registry.dart';
 import 'key_manager_service.dart';
 
 /// Auto-lock: zeroes the vault private key after a period of inactivity and
@@ -43,7 +42,24 @@ class AppLockService {
   }) async {
     _navKey = navigatorKey;
     _isPlaybackActive = isPlaybackActive;
+    final prefs = await SharedPreferences.getInstance();
+    _setupCompleted = prefs.getBool('setup_completed_v1') ?? false;
     await reloadTimeout();
+  }
+
+  /// HomeScreen calls this the first time it mounts — from that moment
+  /// onboarding is over and the inactivity lock arms.
+  void notifySetupCompleted() {
+    if (_setupCompleted) return;
+    _setupCompleted = true;
+    recordActivity();
+  }
+
+  /// VaultResetService calls this on forget-vault: back to the unarmed
+  /// pre-onboarding state.
+  void onVaultForgotten() {
+    _setupCompleted = false;
+    cancel();
   }
 
   Future<void> reloadTimeout() async {
@@ -60,12 +76,17 @@ class AppLockService {
     recordActivity();
   }
 
-  /// Auto-lock is suspended until the FIRST cloud account is connected.
-  /// During onboarding (password set, phrase shown, cloud picker open) the
-  /// vault is empty — there is nothing cloud-reachable to protect — and a
-  /// mid-signup lock used to wedge users: unlock routed to "reconnect" for
-  /// a cloud that was never connected. Manual [lockNow] still works.
-  bool get _onboardingInProgress => !AccountRegistry().hasAnyAccount;
+  /// Whether the user has EVER landed on the home screen (the true end of
+  /// onboarding). Cached from 'setup_completed_v1' at [init]; flipped live
+  /// by [notifySetupCompleted] / [onVaultForgotten].
+  bool _setupCompleted = false;
+
+  /// Auto-lock is suspended until onboarding is COMPLETE (first home
+  /// landing). The earlier hasAnyAccount guard still let the lock fire on
+  /// the post-connect quick-settings step, silently losing that step
+  /// forever (MTR#1 F8). During onboarding nothing cloud-reachable needs
+  /// protecting yet; manual [lockNow] still works.
+  bool get _onboardingInProgress => !_setupCompleted;
 
   /// Resets the inactivity countdown. Call on user interaction and on unlock.
   void recordActivity() {

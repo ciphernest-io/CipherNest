@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../config/flags.dart';
 import '../../config/routes.dart';
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
@@ -54,15 +53,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     // the restore flow instead of onboarding. The setup-complete flag is
     // written only once the user actually reaches HomeScreen.
     //
-    // With the paywall flag on (dev/test build), show the tier sheet
-    // before signup. In the release AAB the flag is off and we jump
-    // straight to master-password creation.
-    final target = kPaywallEnabled
-        ? AppRoutes.subscription
-        : AppRoutes.masterPassword;
+    // The paywall no longer sits here: value-first, it shows ONCE at the
+    // END of onboarding (quick settings -> paywall -> home). Blocking
+    // signup before the password screen was the worst possible slot.
     Navigator.pushNamedAndRemoveUntil(
       context,
-      target,
+      AppRoutes.masterPassword,
       (route) => false,
     );
   }
@@ -115,25 +111,47 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
                   const SizedBox(height: 16),
 
-                  // Secondary Action (Skip OR Restore)
-                  // We use a fixed height container to prevent layout jumping
+                  // Secondary actions. The restore entry is visible on
+                  // EVERY page (it used to vanish after one swipe), named
+                  // for what the user actually holds: a recovery phrase —
+                  // right for restoring an old vault AND for founding a new
+                  // provider vault with an existing phrase. Fixed height
+                  // prevents layout jumping.
                   SizedBox(
                     height: 48,
-                    child: Center(
-                      child: _currentIndex == 0
-                      ? TextButton(
-                          onPressed: () => Navigator.pushNamed(context, AppRoutes.restore),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        TextButton(
+                          onPressed: () =>
+                              Navigator.pushNamed(context, AppRoutes.restore),
                           child: Text(
-                            'I already have an account',
-                            style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(120), decoration: TextDecoration.underline),
+                            'I already have a recovery phrase',
+                            style: TextStyle(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withAlpha(120),
+                              decoration: TextDecoration.underline,
+                            ),
                           ),
-                        )
-                      : (_currentIndex != _pages.length - 1
-                        ? TextButton(
+                        ),
+                        if (_currentIndex != _pages.length - 1) ...[
+                          const SizedBox(width: 12),
+                          TextButton(
                             onPressed: _finish,
-                            child: Text('Skip', style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(120))),
-                          )
-                        : const SizedBox.shrink()), // Empty space on last slide
+                            child: Text(
+                              'Skip',
+                              style: TextStyle(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurface
+                                    .withAlpha(120),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                 ],

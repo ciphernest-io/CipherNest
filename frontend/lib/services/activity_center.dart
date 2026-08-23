@@ -386,12 +386,19 @@ class ActivityCenter extends ChangeNotifier {
         final synced = msg.a;
         final failed = msg.b;
         if (task != null) {
-          final message = failed > 0
-              ? '$synced backed up · $failed failed'
-              : synced > 0
-                  ? '$synced photo${synced == 1 ? '' : 's'} secured'
-                  : 'No new photos found';
-          failed > 0 ? task.fail(message) : task.complete(message);
+          if (synced == 0 && failed == 0) {
+            // Nothing happened — say nothing. Every sibling path (the
+            // worker's own notification, the away-summary) already guards
+            // the zero case; this one didn't, and a 15-minute background
+            // interval turned it into a "No new photos found" notification
+            // drumbeat (MTR#1 X5).
+            task.discard();
+          } else {
+            final message = failed > 0
+                ? '$synced backed up · $failed failed'
+                : '$synced photo${synced == 1 ? '' : 's'} secured';
+            failed > 0 ? task.fail(message) : task.complete(message);
+          }
         }
         // The worker isolate's own notifier bump never crosses isolates —
         // THIS is what makes bg-synced photos appear in the gallery live.
