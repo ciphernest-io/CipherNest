@@ -80,7 +80,7 @@ class DatabaseService extends ChangeNotifier {
 
     final db = await openDatabase(
       path,
-      version: 19,
+      version: 20,
       onCreate: (db, version) async {
         await _createSchema(db);
         await _createSyncSchema(db);
@@ -283,6 +283,14 @@ class DatabaseService extends ChangeNotifier {
           await db.delete('albums',
               where: "id IN ('smart_camera', 'smart_screenshots')");
         }
+        // v20: prior_key marks rows adopted from blobs encrypted under a
+        // PREVIOUS vault key (start-over on a populated cloud, or sealed
+        // metadata that wouldn't open). The current phrase can never decrypt
+        // them; Settings > Storage offers the bulk cleanup.
+        if (oldVersion < 20) {
+          await db.execute('ALTER TABLE files ADD COLUMN prior_key INTEGER '
+              'NOT NULL DEFAULT 0');
+        }
   }
 
   /// The virtual folder tree (v15). Fully op-derived — every row is
@@ -414,7 +422,8 @@ class DatabaseService extends ChangeNotifier {
         device_model TEXT,
         folder_id TEXT,
         deleted_by_folder_id TEXT,
-        is_hidden INTEGER NOT NULL DEFAULT 0
+        is_hidden INTEGER NOT NULL DEFAULT 0,
+        prior_key INTEGER NOT NULL DEFAULT 0
       )
     ''');
     await db.execute(_createFoldersTableSql);
@@ -976,13 +985,26 @@ class DatabaseService extends ChangeNotifier {
 
   /// Moves a file into [folderId] (null = root). The row is updated
   /// locally for instant UI, then the op re-materializes the same value.
-  Future<void> moveFileToFolder(String fileId, String? folderId) async {
+  ///
+  /// Only op-BACKED files may move (same contract as [addFilesToAlbum], same
+  /// reason): replay silently no-ops a moveFile whose file has no createFile
+  /// op, so for an op-less row the local column write would "succeed" while
+  /// the log never learns the membership — deleteFolder's cascade then can't
+  /// see the file, producing the bin-shows-0 / files-orphaned split state
+  /// (MTR#1 B7). Returns false (with an honest toast) when refused.
+  Future<bool> moveFileToFolder(String fileId, String? folderId) async {
+    final backed = await opBackedFileIds([fileId]);
+    if (backed.isEmpty) {
+      Notify.info('File is still syncing — try moving it in a moment');
+      return false;
+    }
     final db = await database;
     await db.update('files', {'folder_id': folderId},
         where: 'id = ?', whereArgs: [fileId]);
     await SyncCoordinator()
         .record(SyncOpKind.moveFile, fileId, folderId: folderId);
     notifyListeners();
+    return true;
   }
 
   /// Live folders under [parentId] (null = root), name-ordered.
@@ -1047,10 +1069,18 @@ class DatabaseService extends ChangeNotifier {
   /// Live subtree totals for [folderId]: descendant folders and files
   /// anywhere in the subtree — what a cascade delete will actually bin.
   /// The folder list is small; the subtree expands in Dart.
-  Future<({int folders, int files})> getFolderSubtreeCounts(
+  ///
+  /// `files` counts only op-BACKED files, because deleteFolder's cascade
+  /// runs in replay space and cannot bin a row with no createFile op — the
+  /// old SQLite-only count promised "71 files" and the cascade delivered 0
+  /// (MTR#1 B7). `unsyncedFiles` reports any op-less stragglers separately
+  /// so the confirm dialog can be honest that they stay behind.
+  Future<({int folders, int files, int unsyncedFiles})> getFolderSubtreeCounts(
       String folderId) async {
     final db = await database;
-    if (_currentAccountId == null) return (folders: 0, files: 0);
+    if (_currentAccountId == null) {
+      return (folders: 0, files: 0, unsyncedFiles: 0);
+    }
     final rows = await db.query('folders',
         columns: ['id', 'parent_id'],
         where: 'account_id = ? AND is_deleted = 0',
@@ -1069,12 +1099,24 @@ class DatabaseService extends ChangeNotifier {
       }
     }
     final placeholders = List.filled(subtree.length, '?').join(',');
-    final fileCount = Sqflite.firstIntValue(await db.rawQuery(
+    final totalCount = Sqflite.firstIntValue(await db.rawQuery(
             'SELECT COUNT(*) FROM files WHERE account_id = ? '
             'AND is_deleted = 0 AND folder_id IN ($placeholders)',
             [_currentAccountId, ...subtree])) ??
         0;
-    return (folders: subtree.length - 1, files: fileCount);
+    final backedCount = Sqflite.firstIntValue(await db.rawQuery(
+            'SELECT COUNT(DISTINCT f.id) FROM files f '
+            "JOIN sync_ops o ON o.target_id = f.id AND o.kind = 'createFile' "
+            'AND o.account_id = f.account_id '
+            'WHERE f.account_id = ? AND f.is_deleted = 0 '
+            'AND f.folder_id IN ($placeholders)',
+            [_currentAccountId, ...subtree])) ??
+        0;
+    return (
+      folders: subtree.length - 1,
+      files: backedCount,
+      unsyncedFiles: totalCount - backedCount,
+    );
   }
 
   /// Binned TOP-LEVEL folder entries (deleted directly, not by a cascade) —
@@ -1564,6 +1606,12 @@ class DatabaseService extends ChangeNotifier {
           'is_uploaded': 1,
           'local_path': null,
           'type': resolvedType.index,
+          // Sealed metadata that won't open under OUR key = a blob sealed to
+          // a previous vault key. Adopting it as a normal openable row is
+          // how start-over vaults ended with 71 files that all died with a
+          // raw SecretBoxAuthenticationError on tap. Flag it so the UI can
+          // be honest and Settings > Storage can clean it up.
+          'prior_key': resolved.unreadable ? 1 : 0,
         },
         conflictAlgorithm: ConflictAlgorithm.ignore,
       );
@@ -1608,6 +1656,60 @@ class DatabaseService extends ChangeNotifier {
     // Overwritten each sweep (not accumulated) so a healed vault clears it.
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(kMetaUnreadableCountPref, unreadableMeta);
+  }
+
+  /// Stamps prior_key=1 on rows whose cloud_id is in [cloudIds] — the
+  /// start-over "keep the old files" path, where the ENTIRE pre-existing
+  /// blob set is known to be sealed under the previous vault key (including
+  /// legacy-plaintext-name blobs whose metadata resolves fine).
+  Future<void> markPriorKeyByCloudIds(Iterable<String> cloudIds) async {
+    final ids = cloudIds.toList();
+    if (ids.isEmpty || _currentAccountId == null) return;
+    final db = await database;
+    const chunk = 500;
+    for (var i = 0; i < ids.length; i += chunk) {
+      final slice = ids.sublist(
+          i, i + chunk > ids.length ? ids.length : i + chunk);
+      final ph = List.filled(slice.length, '?').join(',');
+      await db.rawUpdate(
+        'UPDATE files SET prior_key = 1 WHERE account_id = ? '
+        'AND (cloud_id IN ($ph) OR thumbnail_cloud_id IN ($ph))',
+        [_currentAccountId, ...slice, ...slice],
+      );
+    }
+    notifyListeners();
+  }
+
+  /// Rows flagged as encrypted under a previous vault key (live only).
+  Future<List<CnestFile>> getPriorKeyFiles() async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final rows = await db.query('files',
+        where: 'account_id = ? AND prior_key = 1 AND is_deleted = 0',
+        whereArgs: [_currentAccountId],
+        orderBy: 'size_bytes DESC');
+    return rows.map(CnestFile.fromMap).toList();
+  }
+
+  /// Whether [fileId] is flagged prior_key — the open paths check this to
+  /// show the honest "previous phrase" message instead of attempting a
+  /// decrypt that can only fail.
+  Future<bool> isPriorKeyFile(String fileId) async {
+    final db = await database;
+    final rows = await db.query('files',
+        columns: ['prior_key'], where: 'id = ?', whereArgs: [fileId]);
+    return rows.isNotEmpty && rows.first['prior_key'] == 1;
+  }
+
+  /// Hard-deletes one prior-key row. Cloud blob deletion is the CALLER's
+  /// job (best-effort, before this) — these rows are op-less by
+  /// construction (their create ops are sealed in unreadable old segments),
+  /// so there is no purgeFile op to record and nothing to converge: the row
+  /// simply goes away on this device, and the blob's absence keeps it away.
+  Future<void> hardDeletePriorKeyRow(String fileId) async {
+    final db = await database;
+    await db.delete('files',
+        where: 'id = ? AND prior_key = 1', whereArgs: [fileId]);
   }
 
   /// Prefs key: how many vault blobs had sealed metadata that failed to open

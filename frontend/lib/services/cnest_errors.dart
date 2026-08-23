@@ -136,6 +136,27 @@ final class EmptyVaultForRestoreError extends CnestError {
   @override String get iconName => 'warningCircle';
 }
 
+/// A file encrypted under a PREVIOUS vault key (adopted by reconcile after
+/// a "start over", or flagged when its sealed metadata wouldn't open). The
+/// current phrase can never decrypt it — this is a fact about the file, not
+/// a transient failure.
+final class PriorKeyFileError extends CnestError {
+  const PriorKeyFileError();
+  @override String get title => "This file is locked with a previous phrase.";
+  @override String get message =>
+      "It was encrypted before you started over, under a recovery phrase "
+      "this vault no longer uses, so it can't be opened. You can remove "
+      "these files in Settings under Storage.";
+  @override String? get primaryActionLabel => null;
+  @override String get iconName => 'lockKey';
+}
+
+/// True when [e] is an AEAD authentication failure from the crypto layer
+/// (wrong key / tampered blob) — the `cryptography` package throws
+/// SecretBoxAuthenticationError when the GCM MAC check fails.
+bool isCryptoAuthFailure(Object e) =>
+    e.toString().toLowerCase().contains('secretbox');
+
 final class CorruptedVaultError extends CnestError {
   const CorruptedVaultError();
   @override String get title => "Some files can't be decrypted.";
@@ -178,6 +199,20 @@ final class UploadInterruptedError extends CnestError {
       "once you're on a stable connection.";
   @override String? get primaryActionLabel => 'Try again';
   @override String get iconName => 'wifiSlash';
+}
+
+/// The error shapes a revoked/expired/invalid cloud grant produces: HTTP 401
+/// bodies, googleapis DetailedApiRequestError text, and GMS token failures.
+/// Shared by the signup screen's consent-retry and the in-session
+/// 401 → [TokenExpiredError] mapping.
+bool isAuthInvalidError(Object e) {
+  final msg = e.toString().toLowerCase();
+  return msg.contains('401') ||
+      msg.contains('invalid_grant') ||
+      msg.contains('invalid_credentials') ||
+      msg.contains('unauthenticated') ||
+      msg.contains('unauthorized') ||
+      msg.contains('authentication credential');
 }
 
 /// Maps a raw exception to a network-class [CnestError], or null when the

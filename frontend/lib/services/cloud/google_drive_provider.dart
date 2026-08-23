@@ -80,12 +80,40 @@ class GoogleDriveProvider implements CloudProvider {
   }
 
   Future<drive.DriveApi> _getApi() async {
-    if (_authHeaders == null) {
+    // Re-mint the Authorization header on EVERY call. authHeaders serves the
+    // cached token while it's valid and transparently refreshes an expired
+    // one, so this is cheap in the common case. Snapshot-caching the header
+    // map for the process lifetime meant any UI-isolate Drive call after the
+    // token's ~60-minute life died with a 401 (share creation, editor save,
+    // and the vault-index backup all surfaced it).
+    var acct = _currentUserAccount;
+    if (acct == null) {
       await restoreSession();
-      if (_authHeaders == null) throw Exception('Not authenticated');
+      acct = _currentUserAccount;
+      if (acct == null) throw Exception('Not authenticated');
     }
-    final client = GoogleAuthClient(_authHeaders!);
+    _authHeaders = await acct.authHeaders;
+    final client = GoogleAuthClient(_authHeaders!, onAuthRejected: _remintHeaders);
     return drive.DriveApi(client);
+  }
+
+  /// Called by [GoogleAuthClient] when the server rejects the token with a
+  /// 401 even though it looked valid locally (expiry race, server-side
+  /// revocation). Drops the plugin's token cache so authHeaders can't serve
+  /// the same rejected token back, then mints a fresh set. Null = give up
+  /// and let the 401 propagate.
+  Future<Map<String, String>?> _remintHeaders() async {
+    try {
+      var acct = _currentUserAccount ?? await _googleSignIn.signInSilently();
+      if (acct == null) return null;
+      await acct.clearAuthCache();
+      acct = await _googleSignIn.signInSilently() ?? acct;
+      _currentUserAccount = acct;
+      _authHeaders = await acct.authHeaders;
+      return _authHeaders;
+    } catch (_) {
+      return null;
+    }
   }
 
   @override
@@ -513,31 +541,41 @@ class GoogleDriveProvider implements CloudProvider {
     final created = await api.files.create(driveFile, uploadMedia: media);
     final fileId = created.id!;
 
-    // Make it readable by anyone with the link
-    await api.permissions.create(
-      drive.Permission()
-        ..type = 'anyone'
-        ..role = 'reader',
-      fileId,
-    );
+    // From here on a failure would orphan the blob in shares/ with no local
+    // CnestShare row (that's only written after we return), so revokeShare
+    // could never reach it. Best-effort delete before rethrowing.
+    try {
+      // Make it readable by anyone with the link
+      await api.permissions.create(
+        drive.Permission()
+          ..type = 'anyone'
+          ..role = 'reader',
+        fileId,
+      );
 
-    // Fetch Drive's canonical anonymous download URL. `webContentLink` is
-    // populated once the file has anyone/reader permission and works for
-    // truly-anonymous recipients (no Google session required). The
-    // previous hand-constructed URL used `authuser=0`, which asked Drive
-    // to "use the first Google account signed in on this browser"; for
-    // anonymous recipients that resolved to a sign-in HTML page instead
-    // of the encrypted bytes, breaking the web viewer.
-    final withLink = await api.files.get(
-      fileId,
-      $fields: 'webContentLink',
-    ) as drive.File;
-    final downloadUrl = withLink.webContentLink ??
-        // Fallback if Drive doesn't populate the field (rare edge case).
-        // This form works for small files anonymously; large files may
-        // require the confirmation-token dance which we don't do here.
-        'https://drive.google.com/uc?export=download&id=$fileId';
-    return (cloudId: fileId, downloadUrl: downloadUrl);
+      // Fetch Drive's canonical anonymous download URL. `webContentLink` is
+      // populated once the file has anyone/reader permission and works for
+      // truly-anonymous recipients (no Google session required). The
+      // previous hand-constructed URL used `authuser=0`, which asked Drive
+      // to "use the first Google account signed in on this browser"; for
+      // anonymous recipients that resolved to a sign-in HTML page instead
+      // of the encrypted bytes, breaking the web viewer.
+      final withLink = await api.files.get(
+        fileId,
+        $fields: 'webContentLink',
+      ) as drive.File;
+      final downloadUrl = withLink.webContentLink ??
+          // Fallback if Drive doesn't populate the field (rare edge case).
+          // This form works for small files anonymously; large files may
+          // require the confirmation-token dance which we don't do here.
+          'https://drive.google.com/uc?export=download&id=$fileId';
+      return (cloudId: fileId, downloadUrl: downloadUrl);
+    } catch (e) {
+      try {
+        await api.files.delete(fileId);
+      } catch (_) {}
+      rethrow;
+    }
   }
 
   @override
@@ -553,12 +591,38 @@ class GoogleDriveProvider implements CloudProvider {
 
 class GoogleAuthClient extends http.BaseClient {
   final Map<String, String> _headers;
+
+  /// One-shot 401 recovery hook. Returns fresh auth headers, or null to let
+  /// the 401 propagate.
+  final Future<Map<String, String>?> Function()? onAuthRejected;
+
   final http.Client _client = http.Client();
-  GoogleAuthClient(this._headers);
+  GoogleAuthClient(this._headers, {this.onAuthRejected});
+
   @override
-  Future<http.StreamedResponse> send(http.BaseRequest request) {
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
     request.headers.addAll(_headers);
-    return _client.send(request);
+    final response = await _client.send(request);
+    // Retry exactly once on 401 with re-minted headers. Only non-streamed
+    // requests can be replayed — a finalized byte stream can't be re-read,
+    // so media uploads rely on the fresh per-call mint in _getApi() instead.
+    if (response.statusCode == 401 &&
+        onAuthRejected != null &&
+        request is http.Request) {
+      final fresh = await onAuthRejected!();
+      if (fresh != null) {
+        await response.stream.drain<void>().then((_) {}, onError: (_) {});
+        final retry = http.Request(request.method, request.url)
+          ..headers.addAll(request.headers)
+          ..headers.addAll(fresh)
+          ..bodyBytes = request.bodyBytes
+          ..followRedirects = request.followRedirects
+          ..maxRedirects = request.maxRedirects
+          ..persistentConnection = request.persistentConnection;
+        return _client.send(retry);
+      }
+    }
+    return response;
   }
 }
 

@@ -1,4 +1,4 @@
-import 'package:shared_preferences/shared_preferences.dart';
+﻿import 'package:shared_preferences/shared_preferences.dart';
 
 import 'system_folders.dart';
 
@@ -48,6 +48,17 @@ class BackupSelectionService {
   static const String _kEnrolled = 'backup_enrolled_buckets';
   static const String _kPendingBackfill = 'backup_pending_backfill';
 
+  /// SharedPreferences caches per isolate. The background sync worker runs
+  /// in its own isolate, so every read-modify-write on the shared sets must
+  /// reload first or it writes back a stale snapshot — the worker's
+  /// clearBackfill could silently erase an album the foreground enrolled
+  /// seconds earlier (same reason AutoSyncService.acquireRunLease reloads).
+  Future<SharedPreferences> _freshPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    return prefs;
+  }
+
   Future<BackupSelection> load() async {
     final prefs = await SharedPreferences.getInstance();
     // Absent pref = ALL: preserves the pre-selection behavior (sync
@@ -68,7 +79,7 @@ class BackupSelectionService {
   /// Enrolls [bucketName]; with [backfill] its existing photos are queued
   /// for the bucket-scoped backfill runner.
   Future<void> enroll(String bucketName, {required bool backfill}) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _freshPrefs();
     final key = SystemFolders.normalize(bucketName);
     final enrolled = (prefs.getStringList(_kEnrolled) ?? []).toSet()..add(key);
     await prefs.setStringList(_kEnrolled, enrolled.toList());
@@ -82,7 +93,7 @@ class BackupSelectionService {
   /// Removes [bucketName] from the checklist (and any queued backfill).
   /// Already-vaulted copies stay — unenrolling only stops future uploads.
   Future<void> unenroll(String bucketName) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _freshPrefs();
     final key = SystemFolders.normalize(bucketName);
     final enrolled = (prefs.getStringList(_kEnrolled) ?? []).toSet()
       ..remove(key);
@@ -95,14 +106,14 @@ class BackupSelectionService {
   /// Normalized names of albums with an incomplete "include existing"
   /// backfill.
   Future<Set<String>> pendingBackfills() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _freshPrefs();
     return (prefs.getStringList(_kPendingBackfill) ?? const []).toSet();
   }
 
   /// Queues backfills for [bucketNames] (the all-albums "include existing
   /// photos" onboarding shortcut).
   Future<void> queueBackfills(Iterable<String> bucketNames) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _freshPrefs();
     final pending = (prefs.getStringList(_kPendingBackfill) ?? []).toSet()
       ..addAll(bucketNames.map(SystemFolders.normalize));
     await prefs.setStringList(_kPendingBackfill, pending.toList());
@@ -110,7 +121,7 @@ class BackupSelectionService {
 
   /// Marks one album's backfill complete.
   Future<void> clearBackfill(String bucketName) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _freshPrefs();
     final pending = (prefs.getStringList(_kPendingBackfill) ?? []).toSet()
       ..remove(SystemFolders.normalize(bucketName));
     await prefs.setStringList(_kPendingBackfill, pending.toList());

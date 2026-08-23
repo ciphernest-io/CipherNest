@@ -82,46 +82,87 @@ class ImageEditService {
       await DatabaseService().addFile(row);
     }
 
-    // 4. Upload main + thumb concurrently.
-    final mainUpload = CloudService().uploadEncryptedFile(
-      filename: '$fileId.cnest',
-      type: CnestFileType.image,
-      originalName: editedFilename,
-      bytes: encryptedMain,
-    );
-    final thumbUpload = CloudService().uploadEncryptedFile(
-      filename: '${fileId}_thumb.cnest',
-      type: CnestFileType.image,
-      bytes: encryptedThumb,
-    );
-    final mainCloudId = await mainUpload;
-    final thumbCloudId = await thumbUpload;
-
-    if (mainCloudId == null) {
-      throw Exception('Edit upload failed: main blob did not upload');
+    // 4. Upload main + thumb concurrently, awaited JOINTLY: with two bare
+    // sequential awaits, the first rejection left the other future unhandled
+    // in the zone, and a main-succeeds/thumb-fails split threw after the
+    // blob landed but before markAsUploaded (dead row + orphan blob).
+    String? mainCloudId;
+    String? thumbCloudId;
+    Object? uploadError;
+    StackTrace? uploadStack;
+    void captureFailure(Object e, StackTrace s) {
+      uploadError ??= e;
+      uploadStack ??= s;
     }
 
-    // 5. Mark uploaded (updates cloud_id + thumbnail_cloud_id + content_hash
-    // for both modes). Records the createFile sync op — for replace-original
-    // the duplicate create (same uuid) is dead on arrival in replay, by
-    // design.
-    // Preserve the source's capture time as the sort key so an edited image
-    // keeps its place in the gallery timeline instead of jumping to "now".
-    final capturedMs = source.createdAt.millisecondsSinceEpoch;
-    await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId,
-        filename: editedFilename,
-        contentHash: editedHash,
-        sizeBytes: editedBytes.length,
-        capturedAt: capturedMs > 0 ? capturedMs : null);
+    await Future.wait<void>([
+      CloudService()
+          .uploadEncryptedFile(
+            filename: '$fileId.cnest',
+            type: CnestFileType.image,
+            originalName: editedFilename,
+            bytes: encryptedMain,
+          )
+          .then<void>((id) => mainCloudId = id)
+          .catchError(captureFailure),
+      CloudService()
+          .uploadEncryptedFile(
+            filename: '${fileId}_thumb.cnest',
+            type: CnestFileType.image,
+            bytes: encryptedThumb,
+          )
+          .then<void>((id) => thumbCloudId = id)
+          .catchError(captureFailure),
+    ]);
 
-    // 6. Replace-mode cleanup: delete old cloud blobs and stale cache, and
-    // CLEAR the stale local_path/asset_id — they still point at the original,
-    // unedited gallery file. Without this, the display rungs would prefer
-    // that stale local source over the newly-uploaded edited blob.
-    if (replaceOriginal) {
-      await _bestEffortReplaceCleanup(source);
-      await DatabaseService().updateSizeBytes(fileId, editedBytes.length);
-      await DatabaseService().clearLocalRefs(fileId);
+    try {
+      final err = uploadError;
+      if (err != null) Error.throwWithStackTrace(err, uploadStack!);
+      if (mainCloudId == null) {
+        throw Exception('Edit upload failed: main blob did not upload');
+      }
+
+      // 5. Mark uploaded (updates cloud_id + thumbnail_cloud_id + content_hash
+      // for both modes). Records the createFile sync op — for replace-original
+      // the duplicate create (same uuid) is dead on arrival in replay, by
+      // design.
+      // Preserve the source's capture time as the sort key so an edited image
+      // keeps its place in the gallery timeline instead of jumping to "now".
+      final capturedMs = source.createdAt.millisecondsSinceEpoch;
+      await DatabaseService().markAsUploaded(fileId, mainCloudId!, thumbCloudId,
+          filename: editedFilename,
+          contentHash: editedHash,
+          sizeBytes: editedBytes.length,
+          capturedAt: capturedMs > 0 ? capturedMs : null);
+
+      // 6. Replace-mode cleanup: delete old cloud blobs and stale cache, and
+      // CLEAR the stale local_path/asset_id — they still point at the original,
+      // unedited gallery file. Without this, the display rungs would prefer
+      // that stale local source over the newly-uploaded edited blob.
+      if (replaceOriginal) {
+        await _bestEffortReplaceCleanup(source);
+        await DatabaseService().updateSizeBytes(fileId, editedBytes.length);
+        await DatabaseService().clearLocalRefs(fileId);
+      }
+    } catch (e) {
+      // Failure past the row insert. Roll the copy row back — the contract
+      // every other insert-before-upload site already follows
+      // (rollbackFailedUpload, never permanentlyDeleteFile: the row never
+      // recorded a createFile op) — and reclaim any blob that did land, so
+      // neither a permanent "Syncing…" ghost nor an orphan survives.
+      if (!replaceOriginal) {
+        try {
+          await DatabaseService().rollbackFailedUpload(fileId);
+        } catch (_) {}
+      }
+      for (final orphan in [mainCloudId, thumbCloudId]) {
+        if (orphan != null) {
+          try {
+            await CloudService().deleteFile(orphan);
+          } catch (_) {}
+        }
+      }
+      rethrow;
     }
 
     DatabaseBackupService().scheduleBackup();

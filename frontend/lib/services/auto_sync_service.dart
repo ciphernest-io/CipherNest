@@ -135,6 +135,7 @@ class AutoSyncService {
     int failed = 0;
     int skipped = 0;
     int offlineFailures = 0;
+    var pipelineReady = false;
 
     try {
       // Encrypt-only: load just the vault PUBLIC key. New uploads are sealed
@@ -152,6 +153,9 @@ class AutoSyncService {
       final account = AccountRegistry().activeAccount;
       if (account == null) return AutoSyncResult(synced: 0, failed: 0, skipped: 0);
       DatabaseService().setCurrentAccount(account.id);
+      // Key + account are live: queued backfills can run even if this cycle
+      // bails later (see the finally).
+      pipelineReady = true;
 
       // Heal phantom rows from interrupted past runs: rows inserted before
       // an upload that never completed. With the gallery copy still present
@@ -224,16 +228,27 @@ class AutoSyncService {
 
       // Notify all subscribed screens (gallery, documents) to refresh
       SyncService().syncNotifier.value++;
-
-      // Enrolled-with-"include existing" albums whose backfill hasn't
-      // completed yet: run them now, after the incremental pass. Interrupted
-      // runs are safe to repeat — the migration dedup index skips everything
-      // already vaulted, and the pending flag only clears on a clean pass.
-      await BackupBackfillRunner().runPending(calledFromSync: true);
     } catch (e) {
       debugPrint('Auto-sync error: $e');
       if (classifyNetworkError(e) != null) offlineFailures++;
     } finally {
+      // Enrolled-with-"include existing" albums whose backfill hasn't
+      // completed yet: run them after the incremental pass. In the FINALLY —
+      // this used to sit at the end of the try, where every early return
+      // (empty scan window, no permission) skipped it, leaving a user whose
+      // incremental sync had nothing to do with a permanently stalled
+      // backfill queue (MTR#1 B5). Runs before the lease/_isSyncing release
+      // so it executes in exactly the context calledFromSync promises.
+      // Interrupted runs are safe to repeat — the migration dedup index
+      // skips everything already vaulted, and the pending flag only clears
+      // on a clean pass.
+      if (pipelineReady) {
+        try {
+          await BackupBackfillRunner().runPending(calledFromSync: true);
+        } catch (e) {
+          debugPrint('Post-sync backfill error: $e');
+        }
+      }
       _isSyncing = false;
       await releaseRunLease();
     }

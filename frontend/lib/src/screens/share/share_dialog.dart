@@ -7,8 +7,10 @@ import 'package:share_plus/share_plus.dart';
 import '../../config/routes.dart';
 import '../../models/file_model.dart';
 import '../../models/share_model.dart';
+import '../../../services/cnest_errors.dart';
 import '../../../services/notify.dart';
 import '../../../services/share_service.dart';
+import '../../../services/upload_pipeline.dart';
 import '../../../services/subscription_service.dart';
 
 /// Bottom-sheet dialog for creating a new share. Shows expiry dropdown,
@@ -87,7 +89,10 @@ class _ShareDialogState extends State<ShareDialog> {
       if (mounted) setState(() => _result = share);
     } catch (e) {
       if (mounted) {
-        setState(() => _error = 'Failed to create share: $e');
+        // Raw exception text never reaches the sheet. Map to the typed
+        // taxonomy and render its plain-language copy inline.
+        final err = e is CnestError ? e : UploadPipeline.mapUploadError(e);
+        setState(() => _error = '${err.title} ${err.message}');
       }
     } finally {
       if (mounted) setState(() => _creating = false);

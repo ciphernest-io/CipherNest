@@ -64,7 +64,7 @@ class _MigrationScreenState extends State<MigrationScreen> {
 
   Future<void> _scanSelectedAlbums() async {
     final selectedPaths = _selectedAlbumIndices
-        .map((i) => _allAlbums[i].path)
+        .expand((i) => _allAlbums[i].paths)
         .toList();
     if (selectedPaths.isEmpty) return;
 

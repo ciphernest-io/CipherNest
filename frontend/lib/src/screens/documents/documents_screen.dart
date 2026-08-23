@@ -13,10 +13,12 @@ import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/auto_sync_service.dart';
 import '../../../services/cloud/cloud_service.dart';
+import '../../../services/cnest_errors.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/notify.dart';
 import '../../../services/sync_service.dart';
 import '../../widgets/doc_thumbnail.dart';
+import '../../widgets/friendly_error_sheet.dart';
 import '../../widgets/file_actions.dart';
 import '../share/share_dialog.dart';
 
@@ -67,6 +69,12 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
     setState(() => _openingFileId = file.id);
 
     try {
+      // A prior-key file (adopted after a start-over) can never decrypt
+      // under this vault's phrase — say so instead of trying and dying.
+      if (await DatabaseService().isPriorKeyFile(file.id)) {
+        if (mounted) await showCnestError(context, const PriorKeyFileError());
+        return;
+      }
       // 1. Get the path (Temp directory)
       // We use temp so the OS cleans it up later. Secure!
       final dir = await getTemporaryDirectory();
@@ -93,7 +101,13 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
       }
 
     } catch (e) {
-      Notify.error('Could not open file: $e');
+      // Wrong-key MAC failure (prior-key leftover) gets plain language,
+      // never the raw crypto exception.
+      if (isCryptoAuthFailure(e)) {
+        if (mounted) await showCnestError(context, const PriorKeyFileError());
+      } else {
+        Notify.error('Could not open file: $e');
+      }
     } finally {
       if (mounted) setState(() => _openingFileId = null);
     }

@@ -7,6 +7,7 @@ import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../src/models/file_model.dart';
 import 'auto_sync_service.dart';
+import 'system_folders.dart';
 import 'cloud/cloud_service.dart';
 import 'database_backup_service.dart';
 import 'database_service.dart';
@@ -38,11 +39,31 @@ class MigrationService {
       ),
     );
 
+    // Merge same-named buckets (e.g. /DCIM/Snapseed + /Pictures/Snapseed)
+    // into one entry, matching the vault's album identity (albumId is keyed
+    // on the normalized name). The aggregate "all" album never merges.
     final result = <AlbumInfo>[];
+    final groupIndexByKey = <String, int>{};
     for (final album in albums) {
       final count = await album.assetCountAsync;
       if (count == 0) continue;
-      result.add(AlbumInfo(path: album, name: album.name, count: count));
+      if (album.isAll) {
+        result.add(AlbumInfo(paths: [album], name: album.name, count: count));
+        continue;
+      }
+      final key = SystemFolders.normalize(album.name);
+      final existing = groupIndexByKey[key];
+      if (existing == null) {
+        groupIndexByKey[key] = result.length;
+        result.add(AlbumInfo(paths: [album], name: album.name, count: count));
+      } else {
+        final g = result[existing];
+        result[existing] = AlbumInfo(
+          paths: [...g.paths, album],
+          name: g.name,
+          count: g.count + count,
+        );
+      }
     }
     return result;
   }
@@ -420,11 +441,23 @@ class MigrationService {
 }
 
 class AlbumInfo {
-  final AssetPathEntity path;
+  /// Every MediaStore bucket carrying this display name. Same-named buckets
+  /// at different filesystem paths merge into ONE album everywhere in the
+  /// product (SystemFolders.albumId is keyed on the name) — the picker was
+  /// the sole non-merging surface, showing two "Snapseed" rows whose
+  /// name-keyed checkboxes ticked together.
+  final List<AssetPathEntity> paths;
   final String name;
+
+  /// Combined asset count across [paths].
   final int count;
 
-  AlbumInfo({required this.path, required this.name, required this.count});
+  AlbumInfo({required this.paths, required this.name, required this.count});
+
+  /// The primary bucket, for callers that need a single entity (eviction
+  /// priority, isAll checks — aggregate albums are never merged, so a
+  /// group is either all real buckets or the lone aggregate).
+  AssetPathEntity get path => paths.first;
 }
 
 class MigrationScanResult {

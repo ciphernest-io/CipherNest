@@ -22,6 +22,7 @@ import '../../../services/biometric_unlock_service.dart';
 import '../../../services/gallery_prefs.dart';
 import '../../../services/key_manager_service.dart';
 import '../../../services/metadata_migration_service.dart';
+import '../../models/file_model.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import '../../../services/sync/device_registry_service.dart';
 import '../../../services/sync/sync_coordinator.dart';
@@ -150,6 +151,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   bool _vaultHealthScanning = false;
+
+  /// Bumped after a prior-key cleanup so the FutureBuilder tile re-queries.
+  int _priorKeyRefresh = 0;
   VaultHealthReport? _vaultHealth;
 
   String _vaultHealthSubtitle(ColorScheme cs) {
@@ -229,6 +233,79 @@ class _SettingsScreenState extends State<SettingsScreen> {
       showDragHandle: true,
       builder: (ctx) => _VaultHealthSheet(report: report!),
     );
+  }
+
+  /// Bulk-removes prior-key files: cloud blobs first (main must go, or the
+  /// row stays so the next reconcile can't silently re-adopt an unflagged
+  /// legacy-name blob), then the op-less local row. No purgeFile op — these
+  /// rows never had a createFile op, so there is nothing to converge.
+  Future<void> _cleanupPriorKeyFiles(List<CnestFile> rows) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+            'Delete ${rows.length} locked file${rows.length == 1 ? '' : 's'}?'),
+        content: const Text(
+          'These files were encrypted under a previous recovery phrase and '
+          'can never be opened with this vault. This deletes them from your '
+          'cloud permanently.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Delete forever',
+                style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    Future<void> deleteBlobTolerant(String id) async {
+      try {
+        await CloudService().deleteFile(id);
+      } catch (e) {
+        final m = e.toString().toLowerCase();
+        // Already gone = success for our purposes.
+        if (!m.contains('404') && !m.contains('not found') &&
+            !m.contains('notfound') && !m.contains('itemnotfound')) {
+          rethrow;
+        }
+      }
+    }
+
+    final task = ActivityCenter().start(
+        kind: ActivityKind.binOp,
+        label: 'Removing 0/${rows.length}…',
+        total: rows.length);
+    var ok = 0;
+    var done = 0;
+    for (final f in rows) {
+      try {
+        if (f.cloudId != null) await deleteBlobTolerant(f.cloudId!);
+        if (f.thumbnailCloudId != null) {
+          try {
+            await deleteBlobTolerant(f.thumbnailCloudId!);
+          } catch (_) {}
+        }
+        await DatabaseService().hardDeletePriorKeyRow(f.id);
+        ok++;
+      } catch (_) {
+        // Row kept: blob still in the cloud, tile stays until it succeeds.
+      }
+      done++;
+      task.update(done, label: 'Removing $done/${rows.length}…');
+    }
+    final failed = rows.length - ok;
+    if (failed > 0) {
+      task.fail('$ok removed · $failed failed, try again later');
+    } else {
+      task.complete('$ok old file${ok == 1 ? '' : 's'} removed');
+    }
+    if (mounted) setState(() => _priorKeyRefresh++);
   }
 
   Future<void> _runMetadataMigration() async {
@@ -1079,6 +1156,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
             trailing: ThemeIcon('caretRight',
                 size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: _openDevices,
+          ),
+          // Storage cleanup for blobs sealed under a PREVIOUS vault key
+          // (kept during a "start over"). Hidden while there are none.
+          FutureBuilder<List<CnestFile>>(
+            key: ValueKey('prior_key_$_priorKeyRefresh'),
+            future: DatabaseService().getPriorKeyFiles(),
+            builder: (context, snap) {
+              final rows = snap.data ?? const <CnestFile>[];
+              if (rows.isEmpty) return const SizedBox.shrink();
+              final total = rows.fold<int>(0, (s, f) => s + f.sizeBytes);
+              return ListTile(
+                leading: ThemeIcon('lockKey', color: cs.primary),
+                title: Text('Files from a previous phrase',
+                    style: TextStyle(color: cs.onSurface)),
+                subtitle: Text(
+                    '${rows.length} locked file${rows.length == 1 ? '' : 's'}'
+                    ' · ${formatBytes(total)} · tap to remove',
+                    style: TextStyle(color: cs.onSurface.withAlpha(140))),
+                trailing: ThemeIcon('caretRight',
+                    size: 16, color: cs.onSurface.withAlpha(140)),
+                onTap: () => _cleanupPriorKeyFiles(rows),
+              );
+            },
           ),
           ValueListenableBuilder<MetadataMigrationState>(
             valueListenable: MetadataMigrationService().state,

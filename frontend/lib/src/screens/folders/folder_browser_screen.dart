@@ -10,6 +10,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../../../services/activity_center.dart';
 import '../../../services/audio_player_service.dart';
+import '../../../services/cnest_errors.dart';
 import '../../../services/notify.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/database_service.dart';
@@ -197,14 +198,21 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       if (sub.folders > 0) '${sub.folders} folder${sub.folders == 1 ? '' : 's'}',
       if (sub.files > 0) '${sub.files} file${sub.files == 1 ? '' : 's'}',
     ].join(' and ');
+    // Op-less stragglers (still-syncing or previous-phrase files) are
+    // outside the cascade's reach — say so instead of implying they bin.
+    final strandedNote = sub.unsyncedFiles > 0
+        ? '\n\n${sub.unsyncedFiles} file'
+            '${sub.unsyncedFiles == 1 ? " isn't" : "s aren't"} synced yet '
+            'and will stay in your vault, outside this folder.'
+        : '';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Delete "${folder.name}"?'),
         content: Text(
-            '${contains.isEmpty ? 'The folder moves' : 'The folder — '
-                '$contains inside — moves'} to the Recycle Bin '
-            'as one entry. You can restore it for 30 days.'),
+            '${contains.isEmpty ? 'The folder moves' : 'The folder, with '
+                '$contains inside, moves'} to the Recycle Bin '
+            'as one entry. You can restore it for 30 days.$strandedNote'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -279,8 +287,10 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   Future<void> _moveOneFile(CnestFile file) async {
     final pick = await showFolderPicker(context);
     if (pick == null) return;
-    await DatabaseService().moveFileToFolder(file.id, pick.folderId);
-    Notify.info('Moved to "${pick.label}"');
+    final moved =
+        await DatabaseService().moveFileToFolder(file.id, pick.folderId);
+    // A refusal (still-syncing file) already toasted its own explanation.
+    if (moved) Notify.info('Moved to "${pick.label}"');
   }
 
   Future<void> _moveSelectedFiles() async {
@@ -297,7 +307,13 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
         : null;
     final ok = await honestCount<String>(
       ids,
-      (id) => DatabaseService().moveFileToFolder(id, pick.folderId),
+      (id) async {
+        // A refused move (still-syncing file) must count as a failure, not
+        // a success — replay can't materialize it (see moveFileToFolder).
+        if (!await DatabaseService().moveFileToFolder(id, pick.folderId)) {
+          throw StateError('file not op-backed yet');
+        }
+      },
       onEach: (d) => task?.update(d, label: 'Moving $d/${ids.length}…'),
     );
     final failed = ids.length - ok;
@@ -1004,6 +1020,12 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     if (_openingFileId != null) return;
     setState(() => _openingFileId = file.id);
     try {
+      // A prior-key file (adopted after a start-over) can never decrypt
+      // under this vault's phrase — say so instead of trying and dying.
+      if (await DatabaseService().isPriorKeyFile(file.id)) {
+        if (mounted) await showCnestError(context, const PriorKeyFileError());
+        return;
+      }
       final dir = await getTemporaryDirectory();
       final tempFile = File('${dir.path}/${file.filename}');
       if (!await tempFile.exists()) {
@@ -1015,7 +1037,13 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       final result = await OpenFile.open(tempFile.path);
       if (result.type != ResultType.done) throw Exception(result.message);
     } catch (e) {
-      Notify.error('Could not open file: $e');
+      // Wrong-key MAC failure (prior-key leftover) gets plain language,
+      // never the raw crypto exception.
+      if (isCryptoAuthFailure(e)) {
+        if (mounted) await showCnestError(context, const PriorKeyFileError());
+      } else {
+        Notify.error('Could not open file: $e');
+      }
     } finally {
       if (mounted) setState(() => _openingFileId = null);
     }

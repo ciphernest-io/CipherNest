@@ -498,6 +498,9 @@ class UploadPipeline {
         msg.contains('quota exceeded')) {
       return const StorageFullError();
     }
+    // Quota first: Drive's quota errors are 403s with auth-ish wording that
+    // isAuthInvalidError must never claim.
+    if (isAuthInvalidError(e)) return const TokenExpiredError();
     return classifyNetworkError(e) ??
         UnexpectedError(code: 'UPLOAD', debugDetail: e.toString());
   }

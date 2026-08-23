@@ -94,6 +94,12 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       // Existing-vault probe. Only signup and restore care what's on the
       // remote cloud; addAnother/reconnect skip this step.
       var skipCanary = false;
+      // Start-over bookkeeping: the pre-existing blobs are sealed under the
+      // PREVIOUS vault key. Either we delete them now, or we adopt them
+      // flagged prior_key so the UI never presents them as openable.
+      var foreignVault = false;
+      var purgeForeignBlobs = false;
+      List<String> foreignCloudIds = const [];
       if (_mode == CloudSelectionMode.signup ||
           _mode == CloudSelectionMode.restore) {
         setState(() => _statusMsg = 'Checking your cloud...');
@@ -109,9 +115,29 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
             return;
           }
           if (choice == _ExistingVaultChoice.startOver) {
-            // User accepted the orphaning; skip canary since it will fail
-            // against another key.
+            // Second, explicit choice: what happens to the old files. The
+            // old copy promised cleanup "from Settings, Storage" while no
+            // such control existed and the files presented as normal then
+            // died with a raw crypto error on tap (MTR#1 B3/F5).
+            final mains = files
+                .where((f) =>
+                    !((f['name'] as String? ?? '').endsWith('_thumb.cnest')))
+                .length;
+            if (!mounted) return;
+            final cleanup = await _promptStartOverCleanup(mains);
+            if (cleanup == null) {
+              await AccountRegistry().removeAccount(newAccount.id);
+              if (mounted) setState(() => _isLoading = false);
+              return;
+            }
+            // Canary would fail against the old key by definition.
             skipCanary = true;
+            foreignVault = true;
+            purgeForeignBlobs = cleanup == _StartOverCleanup.deleteNow;
+            foreignCloudIds = [
+              for (final f in files)
+                if (f['id'] is String) f['id'] as String
+            ];
           }
           if (choice == null) {
             await AccountRegistry().removeAccount(newAccount.id);
@@ -154,11 +180,17 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
 
       DatabaseService().setCurrentAccount(newAccount.id);
 
-      // Restore DB backup, if any (skip in add-another mode). Snapshots are
-      // per-device since Stage 1 of multi-device sync: list them all, let
-      // the user pick when more than one exists, and surface the
-      // multi-device notice when another device's snapshot is present.
-      if (_mode != CloudSelectionMode.addAnother) {
+      if (purgeForeignBlobs) {
+        await _purgeForeignVault(foreignCloudIds);
+      }
+
+      // Restore DB backup, if any (skip in add-another mode, and after a
+      // start-over: those snapshots are sealed to the previous key and can
+      // never be opened). Snapshots are per-device since Stage 1 of
+      // multi-device sync: list them all, let the user pick when more than
+      // one exists, and surface the multi-device notice when another
+      // device's snapshot is present.
+      if (_mode != CloudSelectionMode.addAnother && !foreignVault) {
         setState(() => _statusMsg = 'Checking for backup...');
         final snapshots = await DatabaseBackupService().listSnapshots();
         if (snapshots.isNotEmpty) {
@@ -204,6 +236,14 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       final files = await CloudService().listCloudFiles();
       await DatabaseService().reconcile(files.cast<Map<String, dynamic>>());
 
+      // Start-over: whatever pre-existing blobs survived (all of them on
+      // the "keep" path, stray delete failures on the purge path) are now
+      // adopted rows that can never decrypt — flag them so the UI is honest
+      // and Settings > Storage can clean them up.
+      if (foreignVault) {
+        await DatabaseService().markPriorKeyByCloudIds(foreignCloudIds);
+      }
+
       if (!mounted) return;
       if (_mode == CloudSelectionMode.addAnother) {
         Navigator.pop(context);
@@ -242,7 +282,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       // one that just failed, and the account registration was rolled back.
       if (!retriedAuth &&
           providerType == CloudAccount.providerGoogle &&
-          _isAuthInvalid(e)) {
+          isAuthInvalidError(e)) {
         await GoogleDriveProvider.forceFreshConsent();
         if (!mounted) return;
         return _connectProvider(providerType, retriedAuth: true);
@@ -252,18 +292,6 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       await showCnestError(context, err);
       if (mounted) setState(() => _isLoading = false);
     }
-  }
-
-  /// The error shapes a revoked/expired grant produces: HTTP 401 bodies,
-  /// googleapis DetailedApiRequestError text, and GMS token failures.
-  bool _isAuthInvalid(Object e) {
-    final msg = e.toString().toLowerCase();
-    return msg.contains('401') ||
-        msg.contains('invalid_grant') ||
-        msg.contains('invalid_credentials') ||
-        msg.contains('unauthenticated') ||
-        msg.contains('unauthorized') ||
-        msg.contains('authentication credential');
   }
 
   CnestError _mapConnectError(Object e) {
@@ -297,7 +325,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
         msg.contains('failed to fetch user info') ||
         // Revoked/expired grant that survived the disconnect-and-retry:
         // an access problem, not a mystery (was CS_CONN).
-        _isAuthInvalid(e)) {
+        isAuthInvalidError(e)) {
       return const AuthDeniedError(provider: 'Your provider');
     }
     return UnexpectedError(code: 'CS_CONN', debugDetail: e.toString());
@@ -316,7 +344,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
         title: const Text('This account already has a CipherNest vault.'),
         content: const Text(
           "Good news: your files are safe. To read them, tap Restore and enter the recovery phrase from when you first signed up.\n\n"
-          "If you've lost that phrase and want to start over on the same cloud, we can create a new empty vault here. Your old files won't be deleted. They will just be unreadable with this new password. You can clean them up later from Settings, Storage.",
+          "If you've lost that phrase, you can start over with a new empty vault on this same cloud. We'll ask what to do with the old files next.",
         ),
         actions: [
           TextButton(
@@ -333,6 +361,73 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
         ],
       ),
     );
+  }
+
+  /// The start-over follow-up: an explicit, counted decision about the old
+  /// files. Null = cancel the whole start-over.
+  Future<_StartOverCleanup?> _promptStartOverCleanup(int fileCount) {
+    final t = ThemeController().tokens;
+    final noun = fileCount == 1 ? 'file' : 'files';
+    return showDialog<_StartOverCleanup>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('What about the old files?'),
+        content: Text(
+          "This account holds $fileCount encrypted $noun from the previous "
+          "vault. Your new phrase can't open them.\n\n"
+          "Delete them now to start clean, or keep them. Kept files stay in "
+          "your cloud and show as locked in the app; you can remove them "
+          "later in Settings under Storage.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () =>
+                Navigator.pop(ctx, _StartOverCleanup.keepUnreadable),
+            child: const Text('Keep them'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, _StartOverCleanup.deleteNow),
+            style: FilledButton.styleFrom(backgroundColor: t.danger),
+            child: Text('Delete old $noun'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Deletes the previous vault's blobs plus its op-log segments and index
+  /// snapshots (all sealed to the old key, all permanently unreadable).
+  /// Best-effort per object: a straggler that survives gets adopted flagged
+  /// prior_key by the post-reconcile mark, never as an openable file.
+  Future<void> _purgeForeignVault(List<String> cloudIds) async {
+    var done = 0;
+    for (final id in cloudIds) {
+      try {
+        await CloudService().deleteFile(id);
+      } catch (_) {}
+      done++;
+      if (done % 5 == 0 && mounted) {
+        setState(() =>
+            _statusMsg = 'Removing old files ($done/${cloudIds.length})...');
+      }
+    }
+    try {
+      for (final obj in await CloudService().listLogObjects()) {
+        final id = obj['id'] as String?;
+        if (id == null) continue;
+        try {
+          await CloudService().deleteFile(id);
+        } catch (_) {}
+      }
+    } catch (_) {}
+    try {
+      for (final snap in await DatabaseBackupService().listSnapshots()) {
+        try {
+          await CloudService().deleteFile(snap.cloudId);
+        } catch (_) {}
+      }
+    } catch (_) {}
   }
 
   Future<_EmptyVaultChoice?> _promptEmptyVaultOnRestore() {
@@ -679,4 +774,7 @@ class _UnsupportedProviderException implements Exception {
 }
 
 enum _ExistingVaultChoice { restoreInstead, startOver }
+
+/// Start-over's follow-up decision about the previous vault's blobs.
+enum _StartOverCleanup { deleteNow, keepUnreadable }
 enum _EmptyVaultChoice { tryDifferent, setUpAsNew }
