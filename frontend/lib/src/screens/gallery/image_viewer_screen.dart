@@ -28,10 +28,13 @@ import '../../../services/database_backup_service.dart';
 import '../../../services/recycle_bin_service.dart';
 import '../../../services/auto_sync_service.dart';
 import '../../../services/file_metadata_service.dart';
+import '../../../services/cnest_errors.dart';
 import '../../../services/image_edit_service.dart';
 import '../../../services/notify.dart';
+import '../../../services/upload_pipeline.dart';
 import '../../../services/video_streaming_server.dart';
 import '../../widgets/file_actions.dart';
+import '../../widgets/friendly_error_sheet.dart';
 import '../share/share_dialog.dart';
 import 'image_editor_screen.dart';
 
@@ -817,7 +820,10 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       );
     } catch (e) {
       if (mounted) Navigator.of(context).pop(); // dismiss progress
-      Notify.error('Save failed: $e');
+      // Typed sheet, never raw exception text (session-expired 401s were
+      // reaching users verbatim here).
+      final err = e is CnestError ? e : UploadPipeline.mapUploadError(e);
+      if (mounted) await showCnestError(context, err);
     }
   }
 
@@ -1681,7 +1687,13 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       });
       Notify.info('Frame saved to vault');
     } catch (e) {
-      Notify.error('Capture failed: $e');
+      // Same save path as the editor — same typed surfacing.
+      final err = e is CnestError ? e : UploadPipeline.mapUploadError(e);
+      if (mounted) {
+        await showCnestError(context, err);
+      } else {
+        Notify.error(err.title);
+      }
     }
   }
 
@@ -3036,13 +3048,15 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     if (widget.file.cloudId == null) {
       // No cloud blob linked yet. Two very different cases:
       //  * A peer's createFile op materialized this row but reconcile hasn't
-      //    joined the blob yet (it carries a content hash / known size) — the
-      //    normal cross-device case, still propagating → calm "Syncing…".
-      //  * A true phantom: no local copy (checked above), nothing cached, the
-      //    upload never completed and carries no op identity → broken state,
-      //    which ends the spinner instead of looping forever.
-      final stillPropagating =
-          widget.file.contentHash != null || widget.file.sizeBytes > 0;
+      //    joined the blob yet — the normal cross-device case, still
+      //    propagating → calm "Syncing…". applyMergedState ALWAYS inserts
+      //    those with is_uploaded = 1, so that flag is the discriminator.
+      //  * A true phantom: no local copy (checked above), nothing cached,
+      //    is_uploaded = 0 — an upload that never completed (the old
+      //    "size > 0 ⇒ propagating" test read a failed save-as-copy row,
+      //    which has a real size and a null hash, as a peer's op and showed
+      //    "Syncing…" forever) → broken state ends the spinner honestly.
+      final stillPropagating = widget.file.isUploaded;
       if (mounted) {
         setState(() {
           _isLoadingFull = false;
