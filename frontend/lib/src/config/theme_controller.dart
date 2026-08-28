@@ -22,9 +22,15 @@ enum AppThemeMode { system, light, dark }
 class ThemeController extends ChangeNotifier {
   static final ThemeController _instance = ThemeController._internal();
   factory ThemeController() => _instance;
-  ThemeController._internal() {
-    _load();
-  }
+  ThemeController._internal();
+
+  Future<void>? _loadFuture;
+
+  /// Reads the saved pack + mode. `main()` awaits this BEFORE `runApp` so
+  /// the very first frame is already the user's theme: loading it after the
+  /// first frame re-themed a live MaterialApp, which animates ThemeData
+  /// changes (the Binary-to-pack flash on the splash). Idempotent.
+  Future<void> load() => _loadFuture ??= _load();
 
   ThemePack _pack = ThemePack.binary;
   AppThemeMode _mode = AppThemeMode.system;

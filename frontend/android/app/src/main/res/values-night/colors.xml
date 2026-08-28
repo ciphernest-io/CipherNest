@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#FF000000</color>
+    <!-- Binary dark `bg` token (theme_packs.dart). -->
+    <color name="splash_background">#FF0E0E0F</color>
 </resources>

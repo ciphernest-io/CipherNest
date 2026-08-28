@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+ draws its OWN starting window (an icon on a color)
+         before the process exists, and ignores windowDisablePreview for
+         launcher starts, so it cannot be removed: only emptied. A
+         transparent icon on the Binary `bg` color makes it a flat surface
+         so the brand appears exactly once, on the Flutter SplashScreen. -->
+    <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <item name="android:windowBackground">@drawable/launch_background</item>
+        <item name="android:windowSplashScreenBackground">@color/splash_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+    </style>
+</resources>

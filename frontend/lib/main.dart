@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:ui' show PlatformDispatcher;
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:just_audio_background/just_audio_background.dart';
@@ -9,21 +12,56 @@ import 'package:workmanager/workmanager.dart';
 import 'package:material_symbols_icons/symbols_map.dart';
 
 import 'src/app.dart';
+import 'src/config/theme_controller.dart';
+import 'src/screens/splash/splash_screen.dart';
 import 'src/utils/byte_format.dart';
 import 'services/cache_manager_service.dart';
 import 'services/auto_sync_worker.dart';
 
+/// Decodes the splash mark into the image cache before the first frame.
+/// Without this the splash paints its first frame without the logo and pops
+/// it in a frame later (the "jitter" on cold start); with it the Image
+/// widget finds the decoded bitmap synchronously.
+Future<void> _warmSplashLogo() {
+  final completer = Completer<void>();
+  final view = PlatformDispatcher.instance.implicitView;
+  final stream = const AssetImage(SplashScreen.logoAsset).resolve(
+    ImageConfiguration(devicePixelRatio: view?.devicePixelRatio ?? 1.0),
+  );
+  late final ImageStreamListener listener;
+  void done() {
+    stream.removeListener(listener);
+    if (!completer.isCompleted) completer.complete();
+  }
+
+  listener = ImageStreamListener(
+    (_, _) => done(),
+    onError: (_, _) => done(),
+  );
+  stream.addListener(listener);
+  return completer.future;
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Media-session + notification channel for background music playback.
-  await JustAudioBackground.init(
-    androidNotificationChannelId: 'com.ciphernest.vault.audio',
-    androidNotificationChannelName: 'Music playback',
-    androidNotificationOngoing: true,
-  );
+  // Everything awaited here delays the first frame (the flat pre-splash
+  // surface the OS shows). Each item is a platform round-trip, so they run
+  // CONCURRENTLY: the wait is the slowest one, not the sum. Awaited at all
+  // because each must precede the UI: the theme + decoded mark so the
+  // first frame is final (no re-theme, no re-layout), the audio session
+  // before any AudioPlayer exists (just_audio_background contract), the
+  // size-unit preference before any screen formats bytes.
+  await Future.wait([
+    ThemeController().load(),
+    _warmSplashLogo(),
+    JustAudioBackground.init(
+      androidNotificationChannelId: 'com.ciphernest.vault.audio',
+      androidNotificationChannelName: 'Music playback',
+      androidNotificationOngoing: true,
+    ),
+    ByteFormat.init(),
+  ]);
   Workmanager().initialize(callbackDispatcher, isInDebugMode: false);
-  // Size-unit preference (1000 vs 1024) — cached before any UI formats.
-  await ByteFormat.init();
   CacheManagerService().enforceCacheLimit();
   // Sweep file_picker's cache-copy directory on cold start. Per-attempt
   // cleanup happens in the upload flows' finally blocks; this catches

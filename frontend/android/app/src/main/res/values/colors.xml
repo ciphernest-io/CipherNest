@@ -2,4 +2,9 @@
 <resources>
     <!-- Launcher icon background; overridden in values-night. -->
     <color name="ic_launcher_background">#FFFFFFFF</color>
+    <!-- Pre-Flutter window color. MUST equal the Binary pack's `bg` token
+         (theme_packs.dart) so the OS splash, the launch window, and the
+         first Flutter frame are one continuous surface. Overridden in
+         values-night. -->
+    <color name="splash_background">#FFF4F4F3</color>
 </resources>
