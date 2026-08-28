@@ -403,6 +403,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: const Text('This account already has a CipherNest vault.'),
         content: const Text(
           "Good news: your files are safe. To read them, tap Restore and enter the recovery phrase from when you first signed up.\n\n"
@@ -434,6 +435,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: const Text('What about the old files?'),
         content: Text(
           "This account holds $fileCount encrypted $noun from the previous "
@@ -497,6 +499,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: const Text('No CipherNest data on this account.'),
         content: const Text(
           "If your vault lives on a different Google or Microsoft account, connect that one instead.\n\n"
@@ -527,6 +530,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
     return showDialog<_WrongPhraseExit>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: const Text("That phrase doesn't match this vault."),
         content: const Text(
           "Either the recovery phrase is wrong, or this is a different cloud account than the one you signed up with.",
@@ -581,6 +585,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: const Text('Restore an existing vault instead?'),
         content: const Text(
           'This abandons the new vault you just created. Nothing has been '
@@ -627,6 +632,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: const Text('Backup found on cloud'),
         content: const Text(
           'A vault index backup was found on your cloud. Restore it? This replaces your current local index.',
@@ -704,6 +710,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: const Text('Vault used on multiple devices'),
         content: const Text(
           'This vault is connected on another device too. Changes you make — '

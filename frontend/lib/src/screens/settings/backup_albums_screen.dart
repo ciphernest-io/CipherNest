@@ -160,8 +160,10 @@ Future<bool?> showBackupEnrollSheet(BuildContext context, String albumName,
   return showModalBottomSheet<bool>(
     context: context,
     showDragHandle: true,
+    isScrollControlled: true,
     builder: (ctx) => SafeArea(
-      child: Column(
+      child: SingleChildScrollView(
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Padding(
@@ -197,6 +199,7 @@ Future<bool?> showBackupEnrollSheet(BuildContext context, String albumName,
           ),
           const SizedBox(height: 8),
         ],
+        ),
       ),
     ),
   );
@@ -217,8 +220,10 @@ Future<bool> showBackupAlbumChoiceSheet(BuildContext context) async {
   final choice = await showModalBottomSheet<String>(
     context: context,
     showDragHandle: true,
+    isScrollControlled: true,
     builder: (ctx) => SafeArea(
-      child: Column(
+      child: SingleChildScrollView(
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Padding(
@@ -252,6 +257,7 @@ Future<bool> showBackupAlbumChoiceSheet(BuildContext context) async {
           ),
           const SizedBox(height: 8),
         ],
+        ),
       ),
     ),
   );

@@ -198,7 +198,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.album.name),
+        title: Text(widget.album.name,
+            maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
           if (!widget.album.isSmart) ...[
             IconButton(icon: ThemeIcon('imageSquare'), onPressed: _addPhotos),
@@ -214,9 +215,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                       style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(120))))
               : GridView.builder(
                   padding: EdgeInsets.zero,
+                  // 137 is load-bearing: full-bleed 411/138.5 -> 3 columns
+                  // (same as before), 320 -> 3, 891 landscape -> 7.
                   gridDelegate:
-                      const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
+                      const SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: 137,
                     crossAxisSpacing: 1.5,
                     mainAxisSpacing: 1.5,
                   ),
@@ -320,8 +323,9 @@ class _VaultPhotoPickerState extends State<_VaultPhotoPicker> {
       ),
       body: GridView.builder(
         padding: EdgeInsets.zero,
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
+        // 137 keeps 3 columns at 411 (and 320), 7 in 891 landscape.
+        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 137,
           mainAxisSpacing: 1.5,
           crossAxisSpacing: 1.5,
         ),

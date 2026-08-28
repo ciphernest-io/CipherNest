@@ -543,19 +543,35 @@ class _AlphabetRail extends StatelessWidget {
       child: Container(
         width: 22,
         padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            for (final letter in _letters)
-              Text(
-                letter,
-                style: TextStyle(
-                  color: cs.onSurface.withAlpha(120),
-                  fontSize: 9,
-                  fontWeight: FontWeight.w600,
-                ),
+        // minHeight = rail height keeps spaceEvenly spreading the letters
+        // over the whole rail exactly as before; FittedBox only scales down
+        // once the 27 letters are taller than the rail (landscape, or a
+        // small phone with the mini player). Drag mapping is by fraction of
+        // the rail height, so the scaled rail keeps the same letter mapping.
+        child: LayoutBuilder(
+          builder: (_, c) => FittedBox(
+            fit: BoxFit.scaleDown,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minWidth: c.maxWidth.isFinite ? c.maxWidth : 0.0,
+                minHeight: c.maxHeight.isFinite ? c.maxHeight : 0.0,
               ),
-          ],
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  for (final letter in _letters)
+                    Text(
+                      letter,
+                      style: TextStyle(
+                        color: cs.onSurface.withAlpha(120),
+                        fontSize: 9,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );

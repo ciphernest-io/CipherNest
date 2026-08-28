@@ -234,34 +234,40 @@ class _OtherFilesScreenState extends State<OtherFilesScreen> {
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: cs.onSurface.withAlpha(25),
-                            borderRadius: BorderRadius.circular(4),
+                    // Same scaleDown guard as documents_screen: the chip +
+                    // size + date row outgrows the tile on narrow phones.
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: cs.onSurface.withAlpha(25),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              ext,
+                              style: TextStyle(
+                                  color: cs.onSurface.withAlpha(180),
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold),
+                            ),
                           ),
-                          child: Text(
-                            ext,
-                            style: TextStyle(
-                                color: cs.onSurface.withAlpha(180),
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(_humanSize(file.sizeBytes),
-                            style: TextStyle(
-                                color: cs.onSurface.withAlpha(120),
-                                fontSize: 12)),
-                        const SizedBox(width: 8),
-                        Text('•  ${DateFormat.yMMMd().format(file.createdAt)}',
-                            style: TextStyle(
-                                color: cs.onSurface.withAlpha(120),
-                                fontSize: 12)),
-                      ],
+                          const SizedBox(width: 8),
+                          Text(_humanSize(file.sizeBytes),
+                              style: TextStyle(
+                                  color: cs.onSurface.withAlpha(120),
+                                  fontSize: 12)),
+                          const SizedBox(width: 8),
+                          Text('•  ${DateFormat.yMMMd().format(file.createdAt)}',
+                              style: TextStyle(
+                                  color: cs.onSurface.withAlpha(120),
+                                  fontSize: 12)),
+                        ],
+                      ),
                     ),
                   ],
                 ),

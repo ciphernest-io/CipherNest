@@ -183,6 +183,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
+      // Uncapped height: the rename field's keyboard inset must not push
+      // the device list past a 9/16-screen sheet.
+      isScrollControlled: true,
       builder: (ctx) => _DevicesSheet(
         devices: devices,
         currentName: currentName,
@@ -234,6 +237,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
       builder: (ctx) => _VaultHealthSheet(report: report!),
     );
   }
@@ -449,8 +453,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final picked = await showModalBottomSheet<int>(
       context: context,
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+        // shrinkWrap list: sizes like the Column when the tiles fit, scrolls
+        // inside the sheet's 9/16 cap when they don't (landscape).
+        child: ListView(
+          shrinkWrap: true,
+          padding: EdgeInsets.zero,
           children: [
             for (final m in options)
               ListTile(
@@ -647,8 +654,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final picked = await showModalBottomSheet<int>(
       context: context,
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+        // shrinkWrap list: sizes like the Column when the tiles fit, scrolls
+        // inside the sheet's 9/16 cap when they don't (landscape).
+        child: ListView(
+          shrinkWrap: true,
+          padding: EdgeInsets.zero,
           children: [
             for (final m in kAutoSyncIntervalChoices)
               ListTile(
@@ -907,7 +917,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     if (_hasChanges)
-                      Text("Unsaved changes", style: TextStyle(color: tokens.warning, fontSize: 12)),
+                      Flexible(
+                        child: Text("Unsaved changes",
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: tokens.warning, fontSize: 12)),
+                      ),
                     const SizedBox(width: 12),
                     ElevatedButton(
                       onPressed: _hasChanges ? _savePreferences : null,
@@ -1117,18 +1131,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             color: Theme.of(context).colorScheme.onSurface)),
                     subtitle: Padding(
                       padding: const EdgeInsets.only(top: 8),
-                      child: SegmentedButton<AppThemeMode>(
-                        segments: const [
-                          ButtonSegment(
-                              value: AppThemeMode.system,
-                              label: Text('System')),
-                          ButtonSegment(
-                              value: AppThemeMode.light, label: Text('Light')),
-                          ButtonSegment(
-                              value: AppThemeMode.dark, label: Text('Dark')),
-                        ],
-                        selected: {tc.mode},
-                        onSelectionChanged: (s) => tc.setMode(s.first),
+                      // scaleDown is a no-op until the three segments outgrow
+                      // the tile (narrow phones at large font scale).
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: SegmentedButton<AppThemeMode>(
+                          segments: const [
+                            ButtonSegment(
+                                value: AppThemeMode.system,
+                                label: Text('System')),
+                            ButtonSegment(
+                                value: AppThemeMode.light, label: Text('Light')),
+                            ButtonSegment(
+                                value: AppThemeMode.dark, label: Text('Dark')),
+                          ],
+                          selected: {tc.mode},
+                          onSelectionChanged: (s) => tc.setMode(s.first),
+                        ),
                       ),
                     ),
                   ),
@@ -1578,7 +1598,10 @@ class _VaultHealthSheet extends StatelessWidget {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-        child: Column(
+        // No-op while the report fits; a multi-finding report scrolls on
+        // short viewports instead of overflowing the sheet.
+        child: SingleChildScrollView(
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1633,6 +1656,7 @@ class _VaultHealthSheet extends StatelessWidget {
               ),
             ),
           ],
+          ),
         ),
       ),
     );
@@ -1699,7 +1723,10 @@ class _DevicesSheetState extends State<_DevicesSheet> {
       child: Padding(
         padding: EdgeInsets.fromLTRB(
             20, 0, 20, 20 + MediaQuery.of(context).viewInsets.bottom),
-        child: Column(
+        // Sheet is scroll-controlled (see _openDevices): the keyboard inset
+        // above shrinks the area, and this lets the list scroll inside it.
+        child: SingleChildScrollView(
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1756,6 +1783,7 @@ class _DevicesSheetState extends State<_DevicesSheet> {
                     : null,
               ),
           ],
+          ),
         ),
       ),
     );

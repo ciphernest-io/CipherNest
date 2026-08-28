@@ -523,8 +523,9 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
   Widget _buildAudioPlayer(ColorScheme cs) {
     final p = _audioPlayer;
     if (p == null) return const SizedBox.shrink();
+    // Scrolls only when the centered column has no room (landscape).
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -574,8 +575,9 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
   }
 
   Widget _buildGenericFile(ColorScheme cs, File f) {
+    // Scrolls only when the centered column has no room (landscape).
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -590,6 +592,8 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
               _sharedFilename ?? f.path.split(Platform.pathSeparator).last,
               style: TextStyle(color: cs.onSurface, fontSize: 14),
               textAlign: TextAlign.center,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 24),
             ElevatedButton.icon(
@@ -635,8 +639,9 @@ class _StatusView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    // Scrolls only when the centered column has no room (landscape).
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisSize: MainAxisSize.min,

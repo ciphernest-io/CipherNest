@@ -48,6 +48,7 @@ class _PasswordConfirmDialogState extends State<_PasswordConfirmDialog> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return AlertDialog(
+      scrollable: true,
       title: Text(widget.title),
       content: Column(
         mainAxisSize: MainAxisSize.min,

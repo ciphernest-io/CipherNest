@@ -184,10 +184,16 @@ class _AppState extends State<App> with WidgetsBindingObserver {
             const ActivityOverlay(),
           ],
         );
-        return Listener(
-          behavior: HitTestBehavior.translucent,
-          onPointerDown: (_) => AppLockService().recordActivity(),
-          child: content,
+        // Font-scale ceiling. Layouts are tuned for 1.0 and verified down
+        // to 320dp; beyond 1.3x the OS slider produces overflows in every
+        // fixed-height row. A no-op at the default scale.
+        return MediaQuery.withClampedTextScaling(
+          maxScaleFactor: 1.3,
+          child: Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: (_) => AppLockService().recordActivity(),
+            child: content,
+          ),
         );
       },
     );

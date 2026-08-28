@@ -89,7 +89,8 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(widget.playlist.name),
+            Text(widget.playlist.name,
+                maxLines: 1, overflow: TextOverflow.ellipsis),
             FutureBuilder<List<CnestFile>>(
               future: _filesFuture,
               builder: (context, snap) => Text(

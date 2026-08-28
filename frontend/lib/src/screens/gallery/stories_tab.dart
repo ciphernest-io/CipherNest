@@ -142,11 +142,15 @@ class _StoriesTabState extends State<StoriesTab> {
             children: [
               ThemeIcon('clockCounterClockwise', color: cs.primary, size: 20),
               const SizedBox(width: 8),
-              Text('On this day, one year ago',
-                  style: TextStyle(
-                      color: cs.onSurface,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 15)),
+              Expanded(
+                child: Text('On this day, one year ago',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: cs.onSurface,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 15)),
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -225,6 +229,8 @@ class _StoriesTabState extends State<StoriesTab> {
             Positioned(
               bottom: 12,
               left: 12,
+              // right bounds the width so the filename ellipsis can fire.
+              right: 12,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [

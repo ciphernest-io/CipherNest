@@ -142,10 +142,20 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
         scrolledUnderElevation: 0,
         automaticallyImplyLeading: false,
       ),
+      // ~620dp of content on phones that show the fingerprint row: fits a
+      // 411x891 body, not a 360x640 one. The scroll view is a no-op when
+      // there is room (minHeight + IntrinsicHeight keep the Spacer pinning
+      // the buttons to the bottom exactly as before) and scrolls otherwise.
       body: SafeArea(
         top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+        child: LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: constraints.maxHeight - 32,
+              ),
+              child: IntrinsicHeight(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -271,6 +281,9 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
                 ),
               ),
             ],
+          ),
+              ),
+            ),
           ),
         ),
       ),

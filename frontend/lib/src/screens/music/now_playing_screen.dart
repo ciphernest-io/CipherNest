@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 
@@ -81,7 +83,45 @@ class NowPlayingScreen extends StatelessWidget {
             }
             return Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Column(
+              child: LayoutBuilder(builder: (context, constraints) {
+                // Under 400dp of body height is landscape on every phone
+                // (portrait is >= 461 even at 320x533): shrink the transport
+                // chrome and let the art give way, then scroll if the chrome
+                // alone still does not fit. Portrait keeps the design values.
+                final compact = constraints.maxHeight < 400;
+                final gap = compact ? 8.0 : 24.0;
+                final playSize = compact ? 56.0 : 72.0;
+                final skipSize = compact ? 28.0 : 36.0;
+                final art = Center(
+                  child: AspectRatio(
+                    aspectRatio: 1,
+                    child: DocThumbnail(
+                      key: ValueKey('now_${current.id}'),
+                      file: current,
+                      borderRadius: BorderRadius.circular(t.rCardLg),
+                      fallback: Container(
+                        decoration: BoxDecoration(
+                          color: cs.surfaceContainerHighest,
+                          borderRadius:
+                              BorderRadius.circular(t.rCardLg),
+                        ),
+                        child: LayoutBuilder(
+                          builder: (_, box) => Center(
+                            child: ThemeIcon(
+                              'musicNote',
+                              // 120 whenever the art is >= 300dp wide
+                              // (every portrait phone); scales with a
+                              // smaller box instead of painting past it.
+                              size: math.min(120.0, box.maxWidth * 0.4),
+                              color: cs.onSurface.withAlpha(160),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+                final column = Column(
                 children: [
                   // --- Top chrome ---
                   Row(
@@ -118,33 +158,18 @@ class NowPlayingScreen extends StatelessWidget {
                   ),
 
                   // --- Art ---
-                  Expanded(
-                    child: Center(
-                      child: AspectRatio(
-                        aspectRatio: 1,
-                        child: DocThumbnail(
-                          key: ValueKey('now_${current.id}'),
-                          file: current,
-                          borderRadius: BorderRadius.circular(t.rCardLg),
-                          fallback: Container(
-                            decoration: BoxDecoration(
-                              color: cs.surfaceContainerHighest,
-                              borderRadius:
-                                  BorderRadius.circular(t.rCardLg),
-                            ),
-                            child: Center(
-                              child: ThemeIcon(
-                                'musicNote',
-                                size: 120,
-                                color: cs.onSurface.withAlpha(160),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
+                  // Flexible (not Expanded) so the art can shrink to zero
+                  // instead of throwing when the chrome needs the height.
+                  // Compact: a Stack of only positioned children reports
+                  // zero intrinsic height, so the IntrinsicHeight scroll
+                  // fallback below sizes the column by its chrome and the
+                  // art takes whatever is left (never a width-square art).
+                  Flexible(
+                    child: compact
+                        ? Stack(children: [Positioned.fill(child: art)])
+                        : art,
                   ),
-                  const SizedBox(height: 24),
+                  SizedBox(height: gap),
 
                   // --- Title block ---
                   Text(
@@ -257,9 +282,9 @@ class NowPlayingScreen extends StatelessWidget {
                         onPressed: service.toggleShuffle,
                       ),
                       IconButton(
-                        iconSize: 36,
-                        icon: const ThemeIcon('skipBack',
-                            selected: true, size: 36),
+                        iconSize: skipSize,
+                        icon: ThemeIcon('skipBack',
+                            selected: true, size: skipSize),
                         onPressed: service.previous,
                       ),
                       StreamBuilder<PlayerState>(
@@ -269,8 +294,8 @@ class NowPlayingScreen extends StatelessWidget {
                           return GestureDetector(
                             onTap: service.toggle,
                             child: Container(
-                              width: 72,
-                              height: 72,
+                              width: playSize,
+                              height: playSize,
                               decoration: BoxDecoration(
                                 color: cs.primary,
                                 shape: BoxShape.circle,
@@ -288,9 +313,9 @@ class NowPlayingScreen extends StatelessWidget {
                         },
                       ),
                       IconButton(
-                        iconSize: 36,
-                        icon: const ThemeIcon('skipForward',
-                            selected: true, size: 36),
+                        iconSize: skipSize,
+                        icon: ThemeIcon('skipForward',
+                            selected: true, size: skipSize),
                         onPressed: service.next,
                       ),
                       IconButton(
@@ -306,9 +331,18 @@ class NowPlayingScreen extends StatelessWidget {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 24),
+                  SizedBox(height: gap),
                 ],
-              ),
+                );
+                if (!compact) return column;
+                return SingleChildScrollView(
+                  child: ConstrainedBox(
+                    constraints:
+                        BoxConstraints(minHeight: constraints.maxHeight),
+                    child: IntrinsicHeight(child: column),
+                  ),
+                );
+              }),
             );
           },
         ),

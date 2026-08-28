@@ -229,8 +229,11 @@ class _AlbumsTabState extends State<AlbumsTab> {
   }
 
   Widget _grid(List<Widget> cards) {
-    return GridView.count(
-      crossAxisCount: 2,
+    // 210 is load-bearing: the ListView pads 12 each side, so 411 gives
+    // (387-10)/2 = 188.5 wide tiles -> still exactly 2 columns (320 too);
+    // 891 landscape gets 4 instead of two 428 px tiles.
+    return GridView.extent(
+      maxCrossAxisExtent: 210,
       crossAxisSpacing: 10,
       mainAxisSpacing: 10,
       childAspectRatio: 0.85,

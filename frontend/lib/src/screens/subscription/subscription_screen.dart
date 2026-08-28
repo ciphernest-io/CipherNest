@@ -272,7 +272,12 @@ class _PlusToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SegmentedButton<bool>(
+    // Both segments size to the widest label (~270dp total); the card's
+    // inner width is 252 at 320dp, so scale down there. No-op at 411.
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: SegmentedButton<bool>(
       segments: const [
         ButtonSegment(value: false, label: Text('Monthly')),
         ButtonSegment(value: true, label: Text('Annual · save 17%')),
@@ -283,6 +288,7 @@ class _PlusToggle extends StatelessWidget {
       style: ButtonStyle(
         visualDensity: VisualDensity.compact,
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
       ),
     );
   }
@@ -393,7 +399,10 @@ class _TierCard extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Container(
+                    // Flexible: the Founder's Edition badge is 224dp of a
+                    // 252dp row at 320dp; ellipsize rather than overflow.
+                    Flexible(
+                      child: Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 10,
                         vertical: 4,
@@ -406,11 +415,14 @@ class _TierCard extends StatelessWidget {
                       ),
                       child: Text(
                         badge,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: text.labelSmall?.copyWith(
                           color: recommended ? cs.primary : cs.onSurface,
                           fontWeight: FontWeight.w700,
                           letterSpacing: 0.8,
                         ),
+                      ),
                       ),
                     ),
                     if (recommended) ...[

@@ -464,7 +464,11 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     showModalBottomSheet(
       context: context,
       backgroundColor: cs.surface,
-      builder: (ctx) => Padding(
+      // Four tiles (320dp) exceed the default 9/16 cap in landscape.
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -519,6 +523,8 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
               },
             ),
           ],
+        ),
+          ),
         ),
       ),
     );

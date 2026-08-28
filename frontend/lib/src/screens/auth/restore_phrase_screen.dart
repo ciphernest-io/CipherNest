@@ -118,6 +118,7 @@ class _RestorePhraseScreenState extends State<RestorePhraseScreen> {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: Text(title),
         content: Text(body),
         actions: [
@@ -331,7 +332,11 @@ class _SlotGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    // Below 340dp (only the 320dp class; 411 portrait hands us 371) the
+    // slot chrome tightens so an 8-letter word stays visible while typed.
+    return LayoutBuilder(builder: (context, constraints) {
+      final compact = constraints.maxWidth < 340;
+      return Column(
       children: List.generate(4, (row) {
         return Padding(
           padding: EdgeInsets.only(bottom: row == 3 ? 0 : 8),
@@ -349,6 +354,7 @@ class _SlotGrid extends StatelessWidget {
                     isWrong: isWrongOf(i),
                     onChanged: (v) => onChanged(i, v),
                     isLast: i == slots.length - 1,
+                    compact: compact,
                   ),
                 ),
               );
@@ -356,7 +362,8 @@ class _SlotGrid extends StatelessWidget {
           ),
         );
       }),
-    );
+      );
+    });
   }
 }
 
@@ -369,6 +376,7 @@ class _Slot extends StatelessWidget {
     required this.isWrong,
     required this.onChanged,
     required this.isLast,
+    this.compact = false,
   });
 
   final int position;
@@ -378,6 +386,7 @@ class _Slot extends StatelessWidget {
   final bool isWrong;
   final ValueChanged<String> onChanged;
   final bool isLast;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -388,7 +397,7 @@ class _Slot extends StatelessWidget {
     if (isWrong) borderColor = t.danger;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: EdgeInsets.symmetric(horizontal: compact ? 5 : 8, vertical: 4),
       decoration: BoxDecoration(
         color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(t.rInput),
@@ -397,7 +406,7 @@ class _Slot extends StatelessWidget {
       child: Row(
         children: [
           SizedBox(
-            width: 18,
+            width: compact ? 14 : 18,
             child: Text(
               '$position',
               style: TextStyle(

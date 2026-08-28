@@ -836,60 +836,66 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     final canReplace = !isCameraRoll && !isUnsyncedVaultFile;
 
     // Surface + corner shape come from the theme's bottomSheetTheme.
+    // Scroll-controlled + scrollable: ~347 px of content beats the default
+    // 9/16 sheet cap on a 533 px screen and in landscape.
     return showModalBottomSheet<_SaveMode>(
       context: context,
+      isScrollControlled: true,
       builder: (ctx) {
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 4,
-                    margin: const EdgeInsets.only(bottom: 18),
-                    decoration: BoxDecoration(
-                      color: Theme.of(ctx).colorScheme.onSurface.withAlpha(60),
-                      borderRadius: BorderRadius.circular(2),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 18),
+                      decoration: BoxDecoration(
+                        color:
+                            Theme.of(ctx).colorScheme.onSurface.withAlpha(60),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
                   ),
-                ),
-                Text(
-                  'Save edit',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 16),
-                _SaveOptionTile(
-                  icon: 'copy',
-                  title: 'Save as copy',
-                  subtitle:
-                      'Keep the original. Recommended — original stays intact.',
-                  onTap: () => Navigator.pop(ctx, _SaveMode.copy),
-                ),
-                const SizedBox(height: 10),
-                _SaveOptionTile(
-                  icon: 'arrowsClockwise',
-                  title: 'Replace original',
-                  subtitle: canReplace
-                      ? 'Delete the original and keep only the edit.'
-                      : isCameraRoll
-                          ? 'Unavailable for camera-roll photos — we never '
-                              'overwrite your gallery.'
-                          : 'Unavailable — original isn\'t synced to cloud yet.',
-                  enabled: canReplace,
-                  onTap: canReplace
-                      ? () => Navigator.pop(ctx, _SaveMode.replace)
-                      : null,
-                ),
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('Cancel'),
-                ),
-              ],
+                  Text(
+                    'Save edit',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 16),
+                  _SaveOptionTile(
+                    icon: 'copy',
+                    title: 'Save as copy',
+                    subtitle:
+                        'Keep the original. Recommended: original stays intact.',
+                    onTap: () => Navigator.pop(ctx, _SaveMode.copy),
+                  ),
+                  const SizedBox(height: 10),
+                  _SaveOptionTile(
+                    icon: 'arrowsClockwise',
+                    title: 'Replace original',
+                    subtitle: canReplace
+                        ? 'Delete the original and keep only the edit.'
+                        : isCameraRoll
+                            ? 'Unavailable for camera-roll photos. We never '
+                                'overwrite your gallery.'
+                            : 'Unavailable. Original isn\'t synced to cloud yet.',
+                    enabled: canReplace,
+                    onTap: canReplace
+                        ? () => Navigator.pop(ctx, _SaveMode.replace)
+                        : null,
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('Cancel'),
+                  ),
+                ],
+              ),
             ),
           ),
         );
@@ -1045,61 +1051,67 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
 
   Future<int?> _showWallpaperLocationSheet() {
     // Surface + corner shape come from the theme's bottomSheetTheme.
+    // Scroll-controlled + scrollable: three tiles (~375 px) beat the
+    // default 9/16 sheet cap on a 640 px screen.
     return showModalBottomSheet<int>(
       context: context,
+      isScrollControlled: true,
       builder: (ctx) {
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 4,
-                    margin: const EdgeInsets.only(bottom: 18),
-                    decoration: BoxDecoration(
-                      color: Theme.of(ctx).colorScheme.onSurface.withAlpha(60),
-                      borderRadius: BorderRadius.circular(2),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 18),
+                      decoration: BoxDecoration(
+                        color:
+                            Theme.of(ctx).colorScheme.onSurface.withAlpha(60),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
                   ),
-                ),
-                Text(
-                  'Set as wallpaper',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 16),
-                _SaveOptionTile(
-                  icon: 'house',
-                  title: 'Home screen',
-                  subtitle: 'Apply only to the home screen.',
-                  onTap: () =>
-                      Navigator.pop(ctx, AsyncWallpaper.HOME_SCREEN),
-                ),
-                const SizedBox(height: 10),
-                _SaveOptionTile(
-                  icon: 'lockKey',
-                  title: 'Lock screen',
-                  subtitle: 'Apply only to the lock screen.',
-                  onTap: () =>
-                      Navigator.pop(ctx, AsyncWallpaper.LOCK_SCREEN),
-                ),
-                const SizedBox(height: 10),
-                _SaveOptionTile(
-                  icon: 'devices',
-                  title: 'Both',
-                  subtitle: 'Apply to both home and lock screens.',
-                  onTap: () =>
-                      Navigator.pop(ctx, AsyncWallpaper.BOTH_SCREENS),
-                ),
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('Cancel'),
-                ),
-              ],
+                  Text(
+                    'Set as wallpaper',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 16),
+                  _SaveOptionTile(
+                    icon: 'house',
+                    title: 'Home screen',
+                    subtitle: 'Apply only to the home screen.',
+                    onTap: () =>
+                        Navigator.pop(ctx, AsyncWallpaper.HOME_SCREEN),
+                  ),
+                  const SizedBox(height: 10),
+                  _SaveOptionTile(
+                    icon: 'lockKey',
+                    title: 'Lock screen',
+                    subtitle: 'Apply only to the lock screen.',
+                    onTap: () =>
+                        Navigator.pop(ctx, AsyncWallpaper.LOCK_SCREEN),
+                  ),
+                  const SizedBox(height: 10),
+                  _SaveOptionTile(
+                    icon: 'devices',
+                    title: 'Both',
+                    subtitle: 'Apply to both home and lock screens.',
+                    onTap: () =>
+                        Navigator.pop(ctx, AsyncWallpaper.BOTH_SCREENS),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('Cancel'),
+                  ),
+                ],
+              ),
             ),
           ),
         );
@@ -1193,6 +1205,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                   children: [
                     Text(
                       _currentFiles[_currentIndex].filename,
+                      // Two lines + counter still fit the 56 px toolbar.
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(fontSize: 14, color: overlayColor),
                     ),
                     if (!widget.standalone)
@@ -1273,9 +1288,11 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
           builder: (context, orientation) {
             final isLandscape = orientation == Orientation.landscape;
             // In landscape the controls live in a vertical rail on the right
-            // (80 px). Shrink the photo area so it never sits behind the rail.
-            final photoRightPadding =
-                isLandscape && _showControls ? 80.0 : 0.0;
+            // (80 px plus any right-mounted nav bar, which the rail absorbs).
+            // Shrink the photo area so it never sits behind the rail.
+            final photoRightPadding = isLandscape && _showControls
+                ? 80.0 + MediaQuery.paddingOf(context).right
+                : 0.0;
             return Stack(
               children: [
                 // --- MAIN PHOTO AREA ---
@@ -1556,42 +1573,108 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   // (uniform slots, no expansion) — landscape polish is post-launch scope.
   Widget _buildLandscapeControls(ThemeData theme, Color overlayColor) {
     final tokens = ThemeController().tokens;
+    // The SizedBox sits OUTSIDE the SafeArea, so a right-mounted nav bar
+    // must be added here or it eats into the 80 px content lane.
+    final railWidth = 80 + MediaQuery.paddingOf(context).right;
+    final actionBar = Container(
+      margin: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface.withValues(alpha: 0.88),
+        borderRadius: BorderRadius.circular(tokens.rPill),
+      ),
+      child: _buildActionButtons(
+        overlayColor: overlayColor,
+        vertical: true,
+      ),
+    );
     return Positioned(
       right: 0,
       top: 0,
       bottom: 0,
       child: SizedBox(
-        width: 80,
+        width: railWidth,
         child: SafeArea(
           left: false,
-          child: Column(
-            children: [
-              if (_currentIsVideo)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: _buildVideoPillRow(overlayColor, vertical: true),
-                ),
-              if (widget.standalone)
-                const Spacer()
-              else
-                Expanded(
-                  child: _buildFilmstrip(axis: Axis.vertical),
-                ),
-              Container(
-                margin: const EdgeInsets.fromLTRB(4, 4, 4, 8),
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.surface.withValues(alpha: 0.88),
-                  borderRadius: BorderRadius.circular(tokens.rPill),
-                ),
-                child: _buildActionButtons(
-                  overlayColor: overlayColor,
-                  vertical: true,
-                ),
-              ),
-            ],
+          // extendBodyBehindAppBar: start below the toolbar (SafeArea has
+          // already added the status bar) so the rail never sits under the
+          // AppBar's action icons.
+          child: Padding(
+            padding: const EdgeInsets.only(top: kToolbarHeight),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // Under 380 px (phone landscape) the pill row + action bar
+                // alone can exceed the rail, so go compact. Above it the
+                // tree is the original one.
+                if (constraints.maxHeight < 380) {
+                  return _buildCompactRail(
+                      theme, overlayColor, actionBar, constraints.maxHeight);
+                }
+                return Column(
+                  children: [
+                    if (_currentIsVideo)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child:
+                            _buildVideoPillRow(overlayColor, vertical: true),
+                      ),
+                    if (widget.standalone)
+                      const Spacer()
+                    else
+                      Expanded(
+                        child: _buildFilmstrip(axis: Axis.vertical),
+                      ),
+                    actionBar,
+                  ],
+                );
+              },
+            ),
           ),
         ),
+      ),
+    );
+  }
+
+  /// Phone-landscape rail: 40 px buttons, 2 px pill gaps, and the strip
+  /// sized to whatever is left. The fixed parts are ESTIMATED as generous
+  /// upper bounds: an overestimate only shortens the strip, an
+  /// underestimate only makes the rail scroll a few px. Nothing overflows.
+  Widget _buildCompactRail(ThemeData theme, Color overlayColor,
+      Widget actionBar, double maxHeight) {
+    // 8 top + pill (~71) + capture 38 + mute 38 + two 2 px gaps, rounded up.
+    const pillRowEstimate = 170.0;
+    final buttonCount =
+        widget.fromRecycleBin ? 3 : (_currentIsVideo ? 4 : 5);
+    // Margins 12 + padding 12 + 40 per compact IconButton, plus 8 slack.
+    final barEstimate = 32.0 + 40.0 * buttonCount;
+    final stripH =
+        maxHeight - barEstimate - (_currentIsVideo ? pillRowEstimate : 0.0);
+    final showStrip = !widget.standalone && stripH >= 48;
+    return SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_currentIsVideo)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: _buildVideoPillRow(overlayColor,
+                  vertical: true, verticalGap: 2),
+            ),
+          if (showStrip)
+            SizedBox(
+              height: stripH,
+              child: _buildFilmstrip(axis: Axis.vertical),
+            )
+          else
+            // Keeps the bar bottom-aligned when there is no strip.
+            SizedBox(height: stripH < 0 ? 0.0 : stripH),
+          // Compact density drops each IconButton's 48 px tap target to
+          // 40 px without touching the shared button builder.
+          Theme(
+            data: theme.copyWith(visualDensity: VisualDensity.compact),
+            child: actionBar,
+          ),
+        ],
       ),
     );
   }
@@ -1599,7 +1682,8 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   // ---- Samsung-style video controls: frame-capture on the left, the
   // play/pause + time pill centered, mute on the right. All translucent,
   // floating straight over the photo.
-  Widget _buildVideoPillRow(Color overlayColor, {required bool vertical}) {
+  Widget _buildVideoPillRow(Color overlayColor,
+      {required bool vertical, double verticalGap = 6}) {
     final pill = _VideoPill(
       controller: _activeVideo,
       durationHint: _videoDurationHint,
@@ -1624,10 +1708,10 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         children: [
           pill,
           if (capture != null) ...[
-            const SizedBox(height: 6),
+            SizedBox(height: verticalGap),
             capture,
           ],
-          const SizedBox(height: 6),
+          SizedBox(height: verticalGap),
           mute,
         ],
       );
@@ -2501,33 +2585,36 @@ class _EditInfoDialogState extends State<_EditInfoDialog> {
     final cs = Theme.of(context).colorScheme;
     return AlertDialog(
       title: const Text('Edit info'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          TextField(
-            controller: _nameCtrl,
-            autofocus: true,
-            decoration: const InputDecoration(
-              labelText: 'Name',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 14),
-          InkWell(
-            onTap: _pickDate,
-            child: InputDecorator(
+      // Scrollable so the keyboard in landscape can't overflow the dialog.
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: _nameCtrl,
+              autofocus: true,
               decoration: const InputDecoration(
-                labelText: 'Captured',
+                labelText: 'Name',
                 border: OutlineInputBorder(),
               ),
-              child: Text(
-                _fmtDateTime(_captured),
-                style: TextStyle(color: cs.onSurface, fontSize: 14),
+            ),
+            const SizedBox(height: 14),
+            InkWell(
+              onTap: _pickDate,
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'Captured',
+                  border: OutlineInputBorder(),
+                ),
+                child: Text(
+                  _fmtDateTime(_captured),
+                  style: TextStyle(color: cs.onSurface, fontSize: 14),
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
       actions: [
         TextButton(

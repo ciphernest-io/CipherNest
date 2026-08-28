@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 import '../../utils/byte_format.dart';
 import 'package:flutter/material.dart';
@@ -251,20 +252,34 @@ class _MigrationScreenState extends State<MigrationScreen> {
   Widget _buildBody() {
     switch (_phase) {
       case _MigrationPhase.choosing:
-        return _buildChoosing();
+        return _scrollable((_) => _buildChoosing());
       case _MigrationPhase.selectingAlbums:
+        // Owns its own ListView; must not sit inside another scroll view.
         return _buildAlbumSelector();
       case _MigrationPhase.scanning:
-        return _buildScanning();
+        return _scrollable((_) => _buildScanning());
       case _MigrationPhase.ready:
-        return _buildReady();
+        return _scrollable((_) => _buildReady());
       case _MigrationPhase.migrating:
       case _MigrationPhase.paused:
-        return _buildMigrating();
+        return _scrollable(_buildMigrating);
       case _MigrationPhase.complete:
-        return _buildComplete();
+        return _scrollable((_) => _buildComplete());
     }
   }
+
+  /// Scroll wrapper that is a no-op while a phase fits the body: minHeight +
+  /// IntrinsicHeight hand the Column the full height (so Spacer / Center
+  /// behave exactly as in a fixed-height body) and only add scrolling on
+  /// short or landscape viewports.
+  Widget _scrollable(Widget Function(BoxConstraints) phase) => LayoutBuilder(
+        builder: (context, constraints) => SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: IntrinsicHeight(child: phase(constraints)),
+          ),
+        ),
+      );
 
   // --- PHASE: Choosing migration mode ---
   Widget _buildChoosing() {
@@ -506,12 +521,15 @@ class _MigrationScreenState extends State<MigrationScreen> {
   }
 
   // --- PHASE: Migrating (and Paused) ---
-  Widget _buildMigrating() {
+  Widget _buildMigrating(BoxConstraints constraints) {
     final cs = Theme.of(context).colorScheme;
     final t = ThemeController().tokens;
     final p = _progress;
     final fraction = p != null && p.total > 0 ? p.current / p.total : 0.0;
     final percent = (fraction * 100).toStringAsFixed(0);
+    // 160 is the design size; 0.3 x body only bites below ~533dp of body
+    // height (landscape), where a fixed ring would crowd out the stats.
+    final ring = math.min(160.0, constraints.maxHeight * 0.3);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -529,12 +547,12 @@ class _MigrationScreenState extends State<MigrationScreen> {
         const SizedBox(height: 32),
         Center(
           child: SizedBox(
-            width: 160, height: 160,
+            width: ring, height: ring,
             child: Stack(
               alignment: Alignment.center,
               children: [
                 SizedBox(
-                  width: 160, height: 160,
+                  width: ring, height: ring,
                   child: CircularProgressIndicator(
                     value: fraction, strokeWidth: 8,
                     backgroundColor: cs.outline,

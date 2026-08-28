@@ -72,7 +72,9 @@ class _KeyManagementScreenState extends State<KeyManagementScreen> {
     };
     return Scaffold(
       appBar: AppBar(title: const Text('Security Center')),
-      body: Padding(
+      // Scroll view instead of Padding: a no-op while the content fits, so a
+      // long error result no longer overflows on short or landscape screens.
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,

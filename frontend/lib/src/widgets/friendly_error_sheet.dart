@@ -57,7 +57,10 @@ class _FriendlyErrorSheet extends StatelessWidget {
           ),
         ),
         padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
-        child: Column(
+        // Scroll-controlled sheet with no scroll view: a long message
+        // overflowed in landscape. No-op while the content fits.
+        child: SingleChildScrollView(
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -112,6 +115,7 @@ class _FriendlyErrorSheet extends StatelessWidget {
               ),
             ),
           ],
+          ),
         ),
       ),
     );

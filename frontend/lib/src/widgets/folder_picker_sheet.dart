@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../../services/database_service.dart';
@@ -67,8 +69,11 @@ Future<FolderPickResult?> showFolderPicker(
                     ),
                     for (final e in entries)
                       ListTile(
+                        // Indent caps at depth 5 (116dp) so a deep tree
+                        // still leaves room for the icon and name.
                         contentPadding: EdgeInsets.only(
-                            left: 16.0 + e.depth * 20.0, right: 16),
+                            left: 16.0 + math.min(e.depth, 5) * 20.0,
+                            right: 16),
                         leading: ThemeIcon('folder', color: cs.primary),
                         title: Text(e.folder.name,
                             maxLines: 1, overflow: TextOverflow.ellipsis),

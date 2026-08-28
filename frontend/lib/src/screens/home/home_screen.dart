@@ -347,46 +347,53 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// mode ("pick then place").
   void _showUploadSheet(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    // Scroll-controlled + scrollable so the three rows survive the
+    // landscape sheet cap (9/16 of a short screen) instead of overflowing.
     showModalBottomSheet(
       context: context,
       backgroundColor: cs.surface,
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: ThemeIcon('camera', color: cs.primary),
-              title: Text('Take photo',
-                  style: TextStyle(color: cs.onSurface)),
-              onTap: () {
-                Navigator.pop(ctx);
-                _handleCapture(video: false);
-              },
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: ThemeIcon('camera', color: cs.primary),
+                  title: Text('Take photo',
+                      style: TextStyle(color: cs.onSurface)),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _handleCapture(video: false);
+                  },
+                ),
+                ListTile(
+                  leading: ThemeIcon('videoCamera', color: cs.primary),
+                  title: Text('Record video',
+                      style: TextStyle(color: cs.onSurface)),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _handleCapture(video: true);
+                  },
+                ),
+                ListTile(
+                  leading: ThemeIcon('uploadSimple', color: cs.primary),
+                  title: Text('Upload files',
+                      style: TextStyle(color: cs.onSurface)),
+                  subtitle: Text('Photos, documents, music, anything, then '
+                      'choose the folder',
+                      style: TextStyle(
+                          color: cs.onSurface.withAlpha(140), fontSize: 11)),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _handleUpload();
+                  },
+                ),
+              ],
             ),
-            ListTile(
-              leading: ThemeIcon('videoCamera', color: cs.primary),
-              title: Text('Record video',
-                  style: TextStyle(color: cs.onSurface)),
-              onTap: () {
-                Navigator.pop(ctx);
-                _handleCapture(video: true);
-              },
-            ),
-            ListTile(
-              leading: ThemeIcon('uploadSimple', color: cs.primary),
-              title: Text('Upload files',
-                  style: TextStyle(color: cs.onSurface)),
-              subtitle: Text('Photos, documents, music, anything — then '
-                  'choose the folder',
-                  style: TextStyle(
-                      color: cs.onSurface.withAlpha(140), fontSize: 11)),
-              onTap: () {
-                Navigator.pop(ctx);
-                _handleUpload();
-              },
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -473,8 +480,14 @@ class _DashboardCard extends StatelessWidget {
           child: ThemeIcon(icon, color: color, size: 28),
         ),
         const SizedBox(width: 16),
-        Text(title, style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600, fontSize: 18)),
-        const Spacer(),
+        // Expanded (not Text + Spacer) so a narrow card ellipsizes instead
+        // of overflowing; identical layout when the title fits.
+        Expanded(
+          child: Text(title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600, fontSize: 18)),
+        ),
         ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(120)),
       ],
     );

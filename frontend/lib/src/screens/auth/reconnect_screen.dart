@@ -73,10 +73,19 @@ class _ReconnectScreenState extends State<ReconnectScreen> {
         elevation: 0,
         automaticallyImplyLeading: false,
       ),
+      // Scrolls only when the ~300dp column has no room (landscape); the
+      // minHeight + IntrinsicHeight pair keeps both Spacers centering the
+      // copy exactly as before whenever it fits.
       body: SafeArea(
         top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
+        child: LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: constraints.maxHeight - 40,
+              ),
+              child: IntrinsicHeight(
           child: Column(
             children: [
               const Spacer(),
@@ -116,6 +125,9 @@ class _ReconnectScreenState extends State<ReconnectScreen> {
                 ),
               ),
             ],
+          ),
+              ),
+            ),
           ),
         ),
       ),

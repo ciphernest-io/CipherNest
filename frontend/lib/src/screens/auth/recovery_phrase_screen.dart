@@ -85,6 +85,7 @@ class _RecoveryPhraseScreenState extends State<RecoveryPhraseScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: const Text('Restore an existing vault instead?'),
         content: const Text(
           'This abandons the new vault you just created, including the '
@@ -209,6 +210,7 @@ class _DisplayStage extends StatelessWidget {
     final proceed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: const Text('Sure about that?'),
         content: const Text(
           "Your clipboard is visible to every app on your phone. It probably syncs to Google's or Samsung's cloud clipboard. If you must copy, paste into a password manager RIGHT NOW and then wipe your clipboard. If you don't have a password manager, you probably shouldn't be copying this.",
@@ -241,11 +243,20 @@ class _WordGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final t = ThemeController().tokens;
-    return GridView.count(
+    // Tile HEIGHT is what must stay constant, not the aspect ratio: the
+    // original 2.6 was tuned at 411dp (tile 115.67 wide -> 44.5 tall).
+    // Deriving the ratio from the actual tile width keeps 44.5dp at every
+    // width, so an 8-letter word still gets a full text line at 320dp
+    // (2.6 there gave 32.8dp tiles and clipped the phrase).
+    return LayoutBuilder(builder: (context, constraints) {
+      const refTileWidth = (411.0 - 48 - 16) / 3;
+      const refTileHeight = refTileWidth / 2.6;
+      final tileWidth = (constraints.maxWidth - 16) / 3;
+      return GridView.count(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       crossAxisCount: 3,
-      childAspectRatio: 2.6,
+      childAspectRatio: tileWidth / refTileHeight,
       mainAxisSpacing: 8,
       crossAxisSpacing: 8,
       children: List.generate(words.length, (i) {
@@ -267,14 +278,20 @@ class _WordGrid extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 6),
+              // Never ellipsize a recovery word: below ~77dp of text width
+              // the glyphs shrink instead (no-op at 411, where every
+              // BIP-39 word fits at 14pt).
               Expanded(
-                child: Text(
-                  words[i],
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontFamily: t.monoFontFamily,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    words[i],
+                    style: TextStyle(
+                      fontFamily: t.monoFontFamily,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ),
@@ -282,7 +299,8 @@ class _WordGrid extends StatelessWidget {
           ),
         );
       }),
-    );
+      );
+    });
   }
 }
 

@@ -25,9 +25,13 @@ class ShareDialog extends StatefulWidget {
     return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (_) => Padding(
+      // The inset MUST be read from the sheet's own context: reading the
+      // caller's registered the dependency on the calling element, so the
+      // sheet never rebuilt when the keyboard opened and the password
+      // field sat under it.
+      builder: (ctx) => Padding(
         padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom,
+          bottom: MediaQuery.viewInsetsOf(ctx).bottom,
         ),
         child: ShareDialog(file: file),
       ),
@@ -102,8 +106,10 @@ class _ShareDialogState extends State<ShareDialog> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    // Shrink-wraps as before; the scroll view only engages when the sheet
+    // (up to ~490dp with password + upsell) meets a keyboard or landscape.
     return SafeArea(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -195,8 +201,11 @@ class _ShareDialogState extends State<ShareDialog> {
             },
           ),
           const SizedBox(width: 8),
-          Text('Require password',
-              style: TextStyle(color: cs.onSurface, fontSize: 14)),
+          Flexible(
+            child: Text('Require password',
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: cs.onSurface, fontSize: 14)),
+          ),
           if (!_isPlus) ...[
             const SizedBox(width: 6),
             ThemeIcon('lock', size: 13, color: cs.onSurface.withAlpha(120)),
@@ -285,10 +294,12 @@ class _ShareDialogState extends State<ShareDialog> {
           color: cs.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(t.rInput),
         ),
+        // No maxLines: a real share URL (payload + key fragment) runs
+        // 200-400 chars and was being cut off with no ellipsis, so the
+        // displayed link lied about what Copy puts on the clipboard.
         child: SelectableText(
           url,
           style: TextStyle(fontSize: 12, fontFamily: t.monoFontFamily),
-          maxLines: 4,
         ),
       ),
       const SizedBox(height: 12),

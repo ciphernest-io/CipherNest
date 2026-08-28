@@ -188,10 +188,20 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    // Centered while it fits; scrolls once the keyboard (or a landscape
+    // viewport) leaves less than the ~383dp the column needs. The
+    // minHeight + IntrinsicHeight pair keeps the centering identical
+    // whenever there is room.
     return Scaffold(
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
+        child: LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            padding: const EdgeInsets.all(24.0),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: constraints.maxHeight - 48,
+              ),
+              child: IntrinsicHeight(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -224,7 +234,11 @@ class _LoginScreenState extends State<LoginScreen> {
                   padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
                 child: _isLoading
-                  ? const CircularProgressIndicator()
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
                   : const Text('Unlock Vault'),
               ),
               if (_bioAvailable) ...[
@@ -248,6 +262,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ],
             ],
+          ),
+              ),
+            ),
           ),
         ),
       ),

@@ -461,10 +461,16 @@ class _FilesBinTabState extends State<_FilesBinTab> {
             IconButton(
                 icon: const ThemeIcon('x'), onPressed: _exitSelection),
             const SizedBox(width: 4),
-            Text('${_selectedIds.length} selected',
-                style: TextStyle(
-                    color: cs.onSurface, fontWeight: FontWeight.w600)),
-            const Spacer(),
+            // Expanded stands in for the old Text + Spacer pair: same left
+            // alignment and right-edge buttons, but the count now ellipsises
+            // instead of overflowing on narrow phones.
+            Expanded(
+              child: Text('${_selectedIds.length} selected',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      color: cs.onSurface, fontWeight: FontWeight.w600)),
+            ),
             TextButton(
               onPressed: _selectAll,
               child: const Text('All'),
@@ -651,7 +657,12 @@ class _BinSearchResultTile extends StatelessWidget {
           maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: FolderPathText(folderId: file.folderId),
       trailing: cause != null
-          ? _RestoreFolderCta(file: file, causeFolderId: cause)
+          // trailing gets loose constraints, so without a cap the button
+          // takes its natural width and the ellipsis never engages.
+          ? ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 150),
+              child: _RestoreFolderCta(file: file, causeFolderId: cause),
+            )
           : TextButton(
               onPressed: () async {
                 await DatabaseService().restoreFile(file.id);

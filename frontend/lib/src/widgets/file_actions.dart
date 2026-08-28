@@ -143,8 +143,11 @@ Future<void> showShareChoiceSheet(
   return showModalBottomSheet<void>(
     context: context,
     backgroundColor: cs.surface,
+    // Two subtitled tiles (~208dp) exceed the 9/16 cap in landscape.
+    isScrollControlled: true,
     builder: (ctx) => SafeArea(
-      child: Padding(
+      child: SingleChildScrollView(
+        child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -173,6 +176,7 @@ Future<void> showShareChoiceSheet(
               },
             ),
           ],
+        ),
         ),
       ),
     ),

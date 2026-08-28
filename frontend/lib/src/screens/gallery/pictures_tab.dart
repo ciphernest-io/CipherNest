@@ -799,14 +799,19 @@ class PicturesTabState extends State<PicturesTab> {
               onPressed: _exitSelection,
             ),
             const SizedBox(width: 4),
-            Text(
-              '${_selectedIds.length} selected',
-              style: TextStyle(
-                color: cs.onSurface,
-                fontWeight: FontWeight.w600,
+            // Expanded (not Text + Spacer) so a 320 dp screen ellipsizes
+            // the count instead of pushing the action icons off the edge.
+            Expanded(
+              child: Text(
+                '${_selectedIds.length} selected',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: cs.onSurface,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
-            const Spacer(),
             IconButton(
               tooltip: 'Move to folder',
               icon: ThemeIcon('folder'),
