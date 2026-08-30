@@ -2,11 +2,13 @@ import 'package:bip39/bip39.dart' as bip39;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../services/key_manager_service.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
 import '../../utils/wordlists.dart';
 import '../../widgets/bip39_autocomplete_row.dart';
 import '../../widgets/theme_icon.dart';
+import '../cloud_selection/cloud_selection_screen.dart' show CloudSelectionArgs;
 import 'master_password_screen.dart' show MasterPasswordArgs, MasterPasswordMode;
 
 /// Restore flow, phrase entry only. Password is collected on the next
@@ -178,7 +180,7 @@ class _RestorePhraseScreenState extends State<RestorePhraseScreen> {
   bool get _allSlotsInWordlist =>
       List.generate(_slotCount, _isSlotWordlist).every((b) => b);
 
-  void _continue() {
+  Future<void> _continue() async {
     if (!_allSlotsFilled) {
       setState(() => _phraseError = 'Fill in all 12 words to continue.');
       return;
@@ -198,6 +200,23 @@ class _RestorePhraseScreenState extends State<RestorePhraseScreen> {
     }
 
     setState(() => _phraseError = null);
+
+    // Reached from the phrase screen mid-signup: the user already chose a
+    // password minutes ago, so reuse it. The half-made signup vault is
+    // abandoned (nothing uploaded) and the phrase is staged; cloud
+    // selection's canary decides whether it commits.
+    if (KeyManagerService().hasSignupPassword) {
+      await KeyManagerService().abandonSignupForRestore(phrase);
+      if (!mounted) return;
+      Navigator.pushNamedAndRemoveUntil(
+        context,
+        AppRoutes.cloudSelection,
+        (route) => false,
+        arguments: CloudSelectionArgs.restore,
+      );
+      return;
+    }
+
     Navigator.pushNamed(
       context,
       AppRoutes.masterPassword,

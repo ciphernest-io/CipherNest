@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import '../../utils/byte_format.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -579,35 +580,6 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
     }
   }
 
-  /// F1 escape from the signup cloud picker: abandon this new vault's keys
-  /// (nothing is uploaded yet) and go restore with an existing phrase.
-  Future<void> _restoreExistingInstead() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        scrollable: true,
-        title: const Text('Restore an existing vault instead?'),
-        content: const Text(
-          'This abandons the new vault you just created. Nothing has been '
-          'uploaded yet, so nothing is lost. Its recovery phrase stops '
-          'working.',
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Keep setting up')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Restore instead')),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-    await KeyManagerService().wipeVault();
-    if (!mounted) return;
-    Navigator.pushReplacementNamed(context, AppRoutes.restore);
-  }
-
   /// Ownership probe for a blob-less vault: can the staged keys open any of
   /// the first few log objects? Snapshot-only vaults (no segments at all)
   /// pass without proof — the DB-restore step simply fails decryption on a
@@ -768,7 +740,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
               _CloudOption(
                 title: 'Google Drive',
                 subtitle: 'Sign in with Google',
-                icon: 'googleLogo',
+                logoAsset: 'assets/images/brands/google_drive.png',
                 enabled: !_isLoading,
                 onTap: () => _connectProvider(CloudAccount.providerGoogle),
               ),
@@ -776,7 +748,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
               _CloudOption(
                 title: 'OneDrive',
                 subtitle: 'Sign in with Microsoft',
-                icon: 'microsoftOutlookLogo',
+                logoAsset: 'assets/images/brands/microsoft.svg',
                 enabled: !_isLoading,
                 onTap: () => _connectProvider(CloudAccount.providerOneDrive),
               ),
@@ -784,14 +756,14 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
               _CloudOption(
                 title: 'Dropbox',
                 subtitle: 'Coming in v2',
-                icon: 'cloud',
+                logoAsset: 'assets/images/brands/dropbox.png',
                 enabled: false,
               ),
               const SizedBox(height: 12),
               _CloudOption(
                 title: 'pCloud',
                 subtitle: 'Coming in v2',
-                icon: 'cloud',
+                logoAsset: 'assets/images/brands/pcloud.png',
                 enabled: false,
               ),
               const SizedBox(height: 20),
@@ -803,20 +775,6 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
                   fontSize: 12,
                 ),
               ),
-              if (_mode == CloudSelectionMode.signup && !_isLoading) ...[
-                const SizedBox(height: 8),
-                // F1 escape: mid-signup (a lock-and-resume can land here
-                // too) the way back to restoring an existing vault must
-                // always be reachable — the in-progress signup keys are
-                // wiped after an explicit confirm, safe because nothing has
-                // been uploaded before the first cloud connect.
-                Center(
-                  child: TextButton(
-                    onPressed: _restoreExistingInstead,
-                    child: const Text('I already have a recovery phrase'),
-                  ),
-                ),
-              ],
               if (_isLoading) ...[
                 const SizedBox(height: 32),
                 const Center(child: CircularProgressIndicator()),
@@ -871,14 +829,18 @@ class _CloudOption extends StatelessWidget {
   const _CloudOption({
     required this.title,
     required this.subtitle,
-    required this.icon,
+    required this.logoAsset,
     required this.enabled,
     this.onTap,
   });
 
   final String title;
   final String subtitle;
-  final String icon;
+
+  /// The provider's official mark (assets/images/brands/, see its README).
+  /// Drawn untinted per each vendor's brand guidelines; disabled rows only
+  /// fade it.
+  final String logoAsset;
   final bool enabled;
   final VoidCallback? onTap;
 
@@ -904,12 +866,15 @@ class _CloudOption extends StatelessWidget {
         ),
         child: Row(
           children: [
-            ThemeIcon(
-              icon,
-              size: 26,
-              color: enabled
-                  ? cs.primary
-                  : cs.onSurface.withValues(alpha: 0.4),
+            Opacity(
+              opacity: enabled ? 1 : 0.4,
+              child: SizedBox(
+                width: 26,
+                height: 26,
+                child: logoAsset.endsWith('.svg')
+                    ? SvgPicture.asset(logoAsset, fit: BoxFit.contain)
+                    : Image.asset(logoAsset, fit: BoxFit.contain),
+              ),
             ),
             const SizedBox(width: 14),
             Expanded(

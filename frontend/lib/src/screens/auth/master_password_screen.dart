@@ -128,7 +128,7 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
         : 'Create your master password';
     final sub = isRestore
         ? 'A new local password for this device. Next you connect your cloud, and we check the phrase against your vault before anything is saved.'
-        : 'This password only locks CipherNest on this device. It is not your encryption key; that is the recovery phrase you get next. Forget the password, and the phrase sets a new one.';
+        : 'This password only locks CipherNest on this device. It is not your encryption key; that is the recovery phrase you get next.';
     final ctaText =
         isRestore ? 'Restore vault' : 'Continue to recovery phrase';
 

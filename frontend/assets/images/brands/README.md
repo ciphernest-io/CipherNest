@@ -1,0 +1,8 @@
+# Provider marks
+
+Official assets only, used solely to label the "connect to <provider>" rows on the cloud selection screen (nominative use). Resized only; never recolored or reshaped. Fetched 2026-08-30.
+
+- google_drive.png: Google Drive product icon from Google's Drive API branding guidelines, https://developers.google.com/workspace/drive/api/guides/branding (asset: https://www.gstatic.com/images/branding/productlogos/drive_2026/v2/web-64dp/logo_drive_2026_color_2x_web_64dp.png). Google's terms: may indicate an action with Google Drive, resize only, always write "Google Drive" in full. Attribution they ask for: "Google Drive is a trademark of Google Inc. Use of this trademark is subject to Google Permissions."
+- microsoft.svg: Microsoft logo from the "Sign in with Microsoft" branding guidelines, https://learn.microsoft.com/en-us/entra/identity-platform/howto-add-branding-in-apps. Microsoft licenses this mark to third-party apps for sign-in buttons; it does NOT license the OneDrive product icon, so the OneDrive row shows the Microsoft mark next to "Sign in with Microsoft". Do not alter.
+- dropbox.png: Dropbox glyph as published on Dropbox's brand portal, https://brand.dropbox.com/logo (legal terms: https://www.dropbox.com/branding, developer terms: https://www.dropbox.com/developers/reference/branding-guide). Permitted to identify a Dropbox integration; no edits, recolors or distortion.
+- pcloud.png: pCloud glyph as served by pCloud's own site (site icon, https://blog.pcloud.com/wp-content/uploads/2025/07/cropped-pcloud-logo-270x270.png). pCloud publishes no third-party brand guidelines; nominative use to label the integration row.

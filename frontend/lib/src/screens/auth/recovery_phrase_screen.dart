@@ -34,26 +34,25 @@ class _RecoveryPhraseScreenState extends State<RecoveryPhraseScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // Forward-only: the password is committed and the phrase is being
+      // shown, so there is nothing to go back to. Stage 2 returns to
+      // stage 1 only via "Show phrase again".
       appBar: AppBar(
         automaticallyImplyLeading: false,
         backgroundColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
-        leading: _stage == 2
-            ? IconButton(
-                icon: const ThemeIcon('arrowLeft'),
-                onPressed: () => setState(() => _stage = 1),
-              )
-            : null,
         actions: [
-          // F1 escape: the option to restore an existing vault stays
-          // reachable until the user lands in theirs. The just-minted
-          // signup keys are wiped after an explicit confirm (nothing is
-          // uploaded before the first cloud connect).
-          TextButton(
-            onPressed: _restoreExistingInstead,
-            child: const Text('Have a phrase?'),
-          ),
+          // F1 escape (stage 1 only): restoring an existing vault stays
+          // reachable until the phrase is proven. Pushed, not replaced, so
+          // the restore screen's back arrow returns here with this vault
+          // intact; the signup vault is abandoned only when the user
+          // actually continues with a phrase over there.
+          if (_stage == 1)
+            TextButton(
+              onPressed: () => Navigator.pushNamed(context, AppRoutes.restore),
+              child: const Text('Have a phrase?'),
+            ),
         ],
       ),
       body: SafeArea(
@@ -80,33 +79,6 @@ class _RecoveryPhraseScreenState extends State<RecoveryPhraseScreen> {
       ),
     );
   }
-
-  Future<void> _restoreExistingInstead() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        scrollable: true,
-        title: const Text('Restore an existing vault instead?'),
-        content: const Text(
-          'This abandons the new vault you just created, including the '
-          'phrase on this screen. Nothing has been uploaded yet, so nothing '
-          'is lost.',
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Keep this vault')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Restore instead')),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-    await KeyManagerService().wipeVault();
-    if (!mounted) return;
-    Navigator.pushReplacementNamed(context, AppRoutes.restore);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -124,83 +96,78 @@ class _DisplayStage extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Center(
-            child: ThemeIcon(
-              'shieldCheck',
-              selected: true,
-              size: 44,
-              color: cs.primary,
+    // ~594dp of content: a plain column on every FHD phone (body ~763),
+    // with the CTA pinned to the bottom by the Spacer. The scroll wrapper
+    // is a no-op there and only engages on 360x640-class bodies (~512).
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight - 32),
+          child: IntrinsicHeight(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Your recovery phrase',
+                  textAlign: TextAlign.center,
+                  style: text.headlineMedium
+                      ?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'These twelve words are the only key to your vault. Store them somewhere safe and offline. There is no reset: if they are lost, the files cannot be recovered.',
+                  textAlign: TextAlign.center,
+                  style: text.bodyMedium?.copyWith(
+                    color: cs.onSurface.withValues(alpha: 0.72),
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                _WordGrid(words: words),
+                const SizedBox(height: 8),
+                Center(
+                  child: TextButton.icon(
+                    icon: ThemeIcon('copy', size: 16, color: cs.primary),
+                    label: Text(
+                      'Copy to clipboard',
+                      style: TextStyle(color: cs.primary),
+                    ),
+                    onPressed: () => _confirmCopy(context, words.join(' ')),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const _AdviceRow(icon: 'notebook', text: 'Write it down on paper.'),
+                const SizedBox(height: 6),
+                const _AdviceRow(
+                  icon: 'key',
+                  text: 'Or keep it in a password manager.',
+                ),
+                const SizedBox(height: 6),
+                _AdviceRow(
+                  icon: 'warning',
+                  iconTint: ThemeController().tokens.warning,
+                  text: "We wouldn't recommend emailing or texting it to yourself.",
+                ),
+                const Spacer(),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: onContinue,
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                    ),
+                    child: const Text(
+                      "I saved it. Test me.",
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 12),
-          Text(
-            'Save this phrase. Seriously.',
-            textAlign: TextAlign.center,
-            style: text.headlineMedium?.copyWith(fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            "There is no 'forgot password' button after this. If you lose the phrase, the files are gone. We can't help you. That's kind of the whole point.",
-            textAlign: TextAlign.center,
-            style: text.bodyMedium?.copyWith(
-              color: cs.onSurface.withValues(alpha: 0.72),
-              height: 1.4,
-            ),
-          ),
-          const SizedBox(height: 24),
-          _WordGrid(words: words),
-          const SizedBox(height: 16),
-          Center(
-            child: TextButton.icon(
-              icon: ThemeIcon('copy', size: 16, color: cs.primary),
-              label: Text(
-                'Copy to clipboard',
-                style: TextStyle(color: cs.primary),
-              ),
-              onPressed: () => _confirmCopy(context, words.join(' ')),
-            ),
-          ),
-          const SizedBox(height: 16),
-          _AdviceCard(
-            icon: 'note',
-            title: 'Write it on paper.',
-            body: "Old-school wins. Paper doesn't sync to the cloud.",
-          ),
-          const SizedBox(height: 10),
-          _AdviceCard(
-            icon: 'key',
-            title: 'Or drop it in a password manager.',
-            body:
-                "Any password manager you already trust. Its own vault is encrypted; your phrase inherits that protection.",
-          ),
-          const SizedBox(height: 10),
-          _AdviceCard(
-            icon: 'xCircle',
-            iconTint: ThemeController().tokens.danger,
-            title: 'Do NOT email or text it to yourself.',
-            body:
-                "Emailing yourself the phrase is basically publishing it. That inbox lives on Google's servers, so does your phrase now. Cloud clipboards, cloud photo backups, cloud SMS all leak the same way. Every 'sync' is a copy you don't own. Kinda defeats the whole point.",
-          ),
-          const SizedBox(height: 28),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: onContinue,
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-              ),
-              child: const Text(
-                "I've saved it. Test me.",
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -211,26 +178,26 @@ class _DisplayStage extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         scrollable: true,
-        title: const Text('Sure about that?'),
+        title: const Text('Copy to clipboard?'),
         content: const Text(
-          "Your clipboard is visible to every app on your phone. It probably syncs to Google's or Samsung's cloud clipboard. If you must copy, paste into a password manager RIGHT NOW and then wipe your clipboard. If you don't have a password manager, you probably shouldn't be copying this.",
+          'Other apps can read the clipboard, and some phones sync it to the cloud. Paste it into your password manager right away, then clear the clipboard.',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Nevermind'),
+            child: const Text('Cancel'),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: TextButton.styleFrom(foregroundColor: cs.error),
-            child: const Text('Copy anyway'),
+            child: const Text('Copy'),
           ),
         ],
       ),
     );
     if (proceed == true) {
       await Clipboard.setData(ClipboardData(text: phrase));
-      Notify.info('Copied. Wipe your clipboard soon.');
+      Notify.info('Copied. Clear your clipboard once it is saved.');
     }
   }
 }
@@ -304,66 +271,34 @@ class _WordGrid extends StatelessWidget {
   }
 }
 
-class _AdviceCard extends StatelessWidget {
-  const _AdviceCard({
-    required this.icon,
-    required this.title,
-    required this.body,
-    this.iconTint,
-  });
+class _AdviceRow extends StatelessWidget {
+  const _AdviceRow({required this.icon, required this.text, this.iconTint});
 
   final String icon;
-  final String title;
-  final String body;
+  final String text;
   final Color? iconTint;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius:
-            BorderRadius.circular(ThemeController().tokens.rInput),
-        border: Border.all(color: cs.outline.withValues(alpha: 0.3)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: ThemeIcon(
-              icon,
-              size: 22,
-              color: iconTint ?? cs.primary,
-              selected: iconTint == null,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+    return Row(
+      children: [
+        ThemeIcon(
+          icon,
+          size: 20,
+          color: iconTint ?? cs.primary,
+          selected: iconTint == null,
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            text,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: cs.onSurface.withValues(alpha: 0.85),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  body,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: cs.onSurface.withValues(alpha: 0.7),
-                        height: 1.35,
-                      ),
-                ),
-              ],
-            ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -450,11 +385,13 @@ class _TypeBackStageState extends State<_TypeBackStage> {
         children: [
           Text(
             'Prove you saved it.',
+            textAlign: TextAlign.center,
             style: text.headlineMedium?.copyWith(fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 8),
           Text(
             'Type words #${_positions[0] + 1}, #${_positions[1] + 1}, and #${_positions[2] + 1} from your recovery phrase.',
+            textAlign: TextAlign.center,
             style: text.bodyMedium?.copyWith(
               color: cs.onSurface.withValues(alpha: 0.72),
               height: 1.4,

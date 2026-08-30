@@ -87,6 +87,16 @@ class _SplashScreenState extends State<SplashScreen>
     // Restore the cloud account registry from secure storage.
     await AccountRegistry().load();
 
+    // A kill between the password screen and the phrase test leaves a vault
+    // that holds nothing. Resuming it would demand a password the user may
+    // not remember a day later, for no benefit: wipe it and start over.
+    // The window closes at markRecoveryShown(), so a kill on cloud
+    // selection still resumes there after unlock.
+    if (await KeyManagerService().hasSignupInProgress()) {
+      await KeyManagerService().wipeVault();
+      return AppRoutes.onboarding;
+    }
+
     // Read the three signals that gate the initial route.
     final hasKey = await KeyManagerService().hasAccount();
     final prefs = await SharedPreferences.getInstance();

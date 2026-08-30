@@ -108,9 +108,9 @@ class _MasterPasswordFieldGroupState extends State<MasterPasswordFieldGroup> {
         ),
         const SizedBox(height: 20),
         _RuleRow(label: '8 to 20 characters', passed: rules.lengthOk),
-        _RuleRow(label: 'An uppercase letter', passed: rules.upperOk),
-        _RuleRow(label: 'A lowercase letter', passed: rules.lowerOk),
-        _RuleRow(label: 'A number or symbol', passed: rules.digitOrSymbolOk),
+        _RuleRow(label: 'At least one uppercase letter', passed: rules.upperOk),
+        _RuleRow(label: 'At least one lowercase letter', passed: rules.lowerOk),
+        _RuleRow(label: 'At least one number or special character', passed: rules.digitOrSymbolOk),
         _RuleRow(label: 'Passwords match', passed: rules.confirmOk),
       ],
     );

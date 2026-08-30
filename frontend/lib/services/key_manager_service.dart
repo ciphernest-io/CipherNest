@@ -141,7 +141,31 @@ class KeyManagerService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kSignupInProgress, true);
     await prefs.setBool(_kRecoveryShown, false);
+    _signupPassword = password;
     return mnemonic;
+  }
+
+  /// The password the user chose at signup, held in memory for the length
+  /// of the signup session so that "I already have a phrase" on the phrase
+  /// screen can stage a restore WITHOUT asking for it again (MTR#2 A3/A6).
+  /// Cleared on lock, wipe, and staged-recovery commit/discard. Never
+  /// logged.
+  String? _signupPassword;
+
+  /// True while [createAccount]'s password is still held for reuse.
+  bool get hasSignupPassword => _signupPassword != null;
+
+  /// Abandons the in-progress signup vault (nothing has been uploaded yet)
+  /// and stages [mnemonic] as a recovery candidate under the SAME password
+  /// the user just chose. Persists nothing: the caller's cloud canary
+  /// decides whether [commitStagedRecovery] runs.
+  Future<void> abandonSignupForRestore(String mnemonic) async {
+    final password = _signupPassword;
+    if (password == null) {
+      throw StateError('No signup password held to reuse.');
+    }
+    await wipeVault();
+    await stageRecovery(mnemonic, password);
   }
 
   /// Restores a vault from its mnemonic and sets a new password.
@@ -205,6 +229,7 @@ class KeyManagerService {
     seed.fillRange(0, seed.length, 0);
     _stagedSeed = null;
     _stagedPassword = null;
+    _signupPassword = null;
   }
 
   /// Drops a staged recovery and the in-memory keys derived from it.
@@ -233,6 +258,7 @@ class KeyManagerService {
   /// and prefs cleanup live in VaultResetService.
   Future<void> wipeVault() async {
     discardStagedRecovery();
+    _signupPassword = null;
     _vaultKeyPair = null;
     _vaultPublicKey = null;
     _kLocal = null;
@@ -316,6 +342,7 @@ class KeyManagerService {
   void lock() {
     _vaultKeyPair = null;
     _kLocal = null;
+    _signupPassword = null;
   }
 
   // ---------------------------------------------------------------------------

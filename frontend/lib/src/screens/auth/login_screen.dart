@@ -134,33 +134,14 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  /// After a successful unlock, decide where to land:
-  ///   - Signup was interrupted mid-flow (killed between password and
-  ///     recovery phrase) → resume with the recovery phrase screen.
-  ///   - Otherwise route to home if an active cloud account is registered,
-  ///     or to reconnect if not.
+  /// After a successful unlock, decide where to land: home if an active
+  /// cloud account is registered, reconnect if one was ever registered,
+  /// else the signup's cloud selection. (A kill between the password and
+  /// the phrase test never reaches here: the splash wipes that vault and
+  /// restarts onboarding.)
   Future<void> _routeAfterUnlock() async {
     // Vault is unlocked — start the inactivity countdown.
     AppLockService().recordActivity();
-    if (await KeyManagerService().hasSignupInProgress()) {
-      final mnemonic =
-          await KeyManagerService().retrieveMnemonicIfPending();
-      if (mnemonic != null) {
-        if (!mounted) return;
-        Navigator.pushReplacementNamed(
-          context,
-          AppRoutes.recoveryPhrase,
-          arguments: mnemonic,
-        );
-        return;
-      }
-      // Blob missing / corrupt — flag is stale. Clear it so we don't
-      // retry forever, then fall through to the normal routing below.
-      debugPrint(
-        'Signup-in-progress flag set but mnemonic irrecoverable — clearing.',
-      );
-      await KeyManagerService().markRecoveryShown();
-    }
 
     if (!mounted) return;
     final hasActive = AccountRegistry().activeAccount != null;

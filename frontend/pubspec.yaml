@@ -114,6 +114,7 @@ flutter:
     - assets/images/
     - assets/images/themes/
     - assets/images/illustrations/
+    - assets/images/brands/
     - assets/icons/
     - assets/wordlists/
 

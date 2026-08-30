@@ -74,6 +74,37 @@ void main() {
         reason: 'no blob left to unlock');
   });
 
+  test('abandonSignupForRestore reuses the signup password', () async {
+    final svc = KeyManagerService();
+    await svc.createAccount('signup-pw');
+    expect(svc.hasSignupPassword, isTrue);
+    expect(await svc.hasSignupInProgress(), isTrue);
+
+    final theirs = bip39.generateMnemonic();
+    await svc.abandonSignupForRestore(theirs);
+
+    expect(await svc.hasAccount(), isFalse, reason: 'signup vault wiped');
+    expect(await svc.hasSignupInProgress(), isFalse);
+    expect(svc.hasStagedRecovery, isTrue);
+    expect(svc.hasSignupPassword, isFalse,
+        reason: 'held only for the hand-off');
+
+    await svc.commitStagedRecovery();
+    svc.lock();
+    expect(await svc.unlock('signup-pw'), isTrue,
+        reason: 'the restored vault opens with the password chosen at signup');
+  });
+
+  test('signup password is dropped on lock', () async {
+    final svc = KeyManagerService();
+    await svc.createAccount('signup-pw');
+    expect(svc.hasSignupPassword, isTrue);
+    svc.lock();
+    expect(svc.hasSignupPassword, isFalse);
+    expect(() => svc.abandonSignupForRestore(bip39.generateMnemonic()),
+        throwsStateError);
+  });
+
   test('re-staging replaces a previous staged candidate cleanly', () async {
     final svc = KeyManagerService();
     await svc.stageRecovery(bip39.generateMnemonic(), 'pw-a');
