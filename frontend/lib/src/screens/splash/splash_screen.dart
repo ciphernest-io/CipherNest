@@ -75,7 +75,12 @@ class _SplashScreenState extends State<SplashScreen>
       _resolveTarget(),
     ]);
     if (!mounted) return;
-    Navigator.pushReplacementNamed(context, results[1]! as String);
+    // Cross-fade, not the platform slide: the wordmark has just finished
+    // settling and a slide reads as a jolt.
+    Navigator.pushReplacement(
+      context,
+      AppRoutes.fadeRoute(results[1]! as String),
+    );
   }
 
   Future<String> _resolveTarget() async {

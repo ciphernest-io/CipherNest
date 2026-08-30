@@ -50,6 +50,23 @@ class AppRoutes {
   static const String recycleBin = '/recycle-bin';
   static const String folders = '/folders';
 
+  /// The same screen [generateRoute] would build for [name], but entering
+  /// with a cross-fade instead of the platform slide. Used for the splash
+  /// hand-off, where a slide reads as a jolt after the brand reveal.
+  static Route<dynamic> fadeRoute(String name, {Object? arguments}) {
+    final settings = RouteSettings(name: name, arguments: arguments);
+    final source = generateRoute(settings) as MaterialPageRoute<dynamic>;
+    return PageRouteBuilder<dynamic>(
+      settings: settings,
+      transitionDuration: const Duration(milliseconds: 450),
+      pageBuilder: (context, _, _) => source.builder(context),
+      transitionsBuilder: (_, animation, _, child) => FadeTransition(
+        opacity: CurvedAnimation(parent: animation, curve: Curves.easeInOut),
+        child: child,
+      ),
+    );
+  }
+
   // CHANGED argument name to 'routeSettings' to avoid conflict
   static Route<dynamic> generateRoute(RouteSettings routeSettings) {
     switch (routeSettings.name) {

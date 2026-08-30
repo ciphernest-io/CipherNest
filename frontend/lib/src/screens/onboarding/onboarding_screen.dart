@@ -363,7 +363,7 @@ class _IllustrationPalette extends ColorMapper {
     final t = ThemeController().tokens;
     return _IllustrationPalette(
       ink: t.fgFaint,
-      hair: Color.lerp(t.fgFaint, t.bg, 0.35)!,
+      hair: Color.lerp(t.fgFaint, t.bg, 0.45)!,
     );
   }
 
