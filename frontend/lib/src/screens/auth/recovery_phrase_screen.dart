@@ -214,12 +214,14 @@ class _WordGrid extends StatelessWidget {
     // original 2.6 was tuned at 411dp (tile 115.67 wide -> 44.5 tall).
     // Deriving the ratio from the actual tile width keeps 44.5dp at every
     // width, so an 8-letter word still gets a full text line at 320dp
-    // (2.6 there gave 32.8dp tiles and clipped the phrase).
-    return LayoutBuilder(builder: (context, constraints) {
-      const refTileWidth = (411.0 - 48 - 16) / 3;
-      const refTileHeight = refTileWidth / 2.6;
-      final tileWidth = (constraints.maxWidth - 16) / 3;
-      return GridView.count(
+    // (2.6 there gave 32.8dp tiles and clipped the phrase). Width comes
+    // from MediaQuery, not a LayoutBuilder: the page sits inside an
+    // IntrinsicHeight (pinned CTA), which cannot measure a LayoutBuilder.
+    const refTileWidth = (411.0 - 48 - 16) / 3;
+    const refTileHeight = refTileWidth / 2.6;
+    final gridWidth = MediaQuery.sizeOf(context).width - 48;
+    final tileWidth = (gridWidth - 16) / 3;
+    return GridView.count(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       crossAxisCount: 3,
@@ -266,8 +268,7 @@ class _WordGrid extends StatelessWidget {
           ),
         );
       }),
-      );
-    });
+    );
   }
 }
 
