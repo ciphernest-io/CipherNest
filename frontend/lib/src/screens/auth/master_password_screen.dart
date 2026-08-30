@@ -103,6 +103,20 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
     }
   }
 
+  /// Signup has no back stack (onboarding cleared it), so back is an
+  /// explicit return to slide 1; restore keeps the normal pop.
+  void _back() {
+    if (_mode == MasterPasswordMode.restore && Navigator.canPop(context)) {
+      Navigator.pop(context);
+      return;
+    }
+    Navigator.pushNamedAndRemoveUntil(
+      context,
+      AppRoutes.onboarding,
+      (route) => false,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
@@ -110,26 +124,33 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
 
     final isRestore = _mode == MasterPasswordMode.restore;
     final heading = isRestore
-        ? 'Set a new master password.'
-        : 'Create your master password.';
+        ? 'Set a new master password'
+        : 'Create your master password';
     final sub = isRestore
-        ? 'Pick a new local password for this device. Next you connect your cloud, and we check the phrase against your vault before anything is saved.'
-        : 'The recovery phrase owns the vault. This password unlocks it on this device. Forget the password, use the phrase to set a new one. Lose both, and the files are gone.';
+        ? 'A new local password for this device. Next you connect your cloud, and we check the phrase against your vault before anything is saved.'
+        : 'This password only locks CipherNest on this device. It is not your encryption key; that is the recovery phrase you get next. Forget the password, and the phrase sets a new one.';
     final ctaText =
         isRestore ? 'Restore vault' : 'Continue to recovery phrase';
 
     return Scaffold(
+      // Title lives in the AppBar so it stays put while the body scrolls
+      // under the keyboard.
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
         automaticallyImplyLeading: false,
-        leading: Navigator.canPop(context)
-            ? IconButton(
-                icon: const ThemeIcon('arrowLeft'),
-                onPressed: () => Navigator.pop(context),
-              )
-            : null,
+        centerTitle: true,
+        leading: IconButton(
+          icon: const ThemeIcon('arrowLeft'),
+          onPressed: _isLoading ? null : _back,
+        ),
+        title: Text(
+          heading,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: textTheme.titleLarge,
+        ),
       ),
       body: SafeArea(
         child: Padding(
@@ -138,13 +159,6 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  heading,
-                  style: textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 12),
                 Text(
                   sub,
                   style: textTheme.bodyMedium?.copyWith(
@@ -184,22 +198,6 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
                           ),
                   ),
                 ),
-                if (!isRestore) ...[
-                  const SizedBox(height: 12),
-                  // The escape hatch lives where the user's mental model is:
-                  // they're making a new vault and realize they already hold
-                  // a phrase (new provider, existing key — or plain restore).
-                  Center(
-                    child: TextButton(
-                      onPressed: _isLoading
-                          ? null
-                          : () => Navigator.pushReplacementNamed(
-                              context, AppRoutes.restore),
-                      child:
-                          const Text('Use a recovery phrase I already have'),
-                    ),
-                  ),
-                ],
               ],
             ),
           ),

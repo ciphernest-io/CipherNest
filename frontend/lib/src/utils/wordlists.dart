@@ -1,26 +1,9 @@
 import 'package:flutter/services.dart' show rootBundle;
 
-/// Lazily-loaded asset-backed wordlists. Both files load exactly once per
-/// process and are held in memory thereafter.
+/// Lazily-loaded asset-backed wordlist. Loads exactly once per process and
+/// is held in memory thereafter.
 ///
 /// Assets registered in pubspec.yaml under `assets/wordlists/`.
-
-class PasswordBlacklist {
-  static Set<String>? _cache;
-
-  /// SecLists top-10k common passwords. Used by the master-password
-  /// validator to reject "password", "12345678", "qwerty12" and friends.
-  static Future<Set<String>> load() async {
-    if (_cache != null) return _cache!;
-    final raw = await rootBundle
-        .loadString('assets/wordlists/passwords_top10k.txt');
-    _cache = raw
-        .split(RegExp(r'\r?\n'))
-        .where((s) => s.isNotEmpty)
-        .toSet();
-    return _cache!;
-  }
-}
 
 class Bip39Wordlist {
   static List<String>? _list;
