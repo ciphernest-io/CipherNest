@@ -96,15 +96,14 @@ class _DisplayStage extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
 
-    // ~594dp of content: a plain column on every FHD phone (body ~763),
-    // with the CTA pinned to the bottom by the Spacer. The scroll wrapper
-    // is a no-op there and only engages on 360x640-class bodies (~512).
-    return LayoutBuilder(
-      builder: (context, constraints) => SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(minHeight: constraints.maxHeight - 32),
-          child: IntrinsicHeight(
+    // Content scrolls only when it must (360x640-class bodies); the CTA
+    // lives OUTSIDE the scroll view so it is pinned to the bottom without
+    // IntrinsicHeight, which cannot measure the grid's viewport.
+    return Column(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -137,7 +136,10 @@ class _DisplayStage extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 12),
-                const _AdviceRow(icon: 'notebook', text: 'Write it down on paper.'),
+                const _AdviceRow(
+                  icon: 'notebook',
+                  text: 'Write it down on paper.',
+                ),
                 const SizedBox(height: 6),
                 const _AdviceRow(
                   icon: 'key',
@@ -149,26 +151,27 @@ class _DisplayStage extends StatelessWidget {
                   iconTint: ThemeController().tokens.warning,
                   text: "We wouldn't recommend emailing or texting it to yourself.",
                 ),
-                const Spacer(),
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: onContinue,
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                    ),
-                    child: const Text(
-                      "I saved it. Test me.",
-                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                ),
               ],
             ),
           ),
         ),
-      ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
+          child: SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: onContinue,
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+              ),
+              child: const Text(
+                "I saved it. Test me.",
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
