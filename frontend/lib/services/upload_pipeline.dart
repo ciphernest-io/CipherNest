@@ -104,16 +104,21 @@ class UploadPipeline {
     if (await Permission.notification.isDenied) {
       await Permission.notification.request();
     }
+    // Drawer-cancel support: stops BEFORE the next file; the file in
+    // flight finishes (mid-file rollback is the failure path's job).
+    var cancelled = false;
     final task = trackActivity
         ? ActivityCenter().start(
             kind: ActivityKind.upload,
             label: 'Encrypting 0/${picks.length}…',
-            total: picks.length)
+            total: picks.length,
+            onCancel: () => cancelled = true)
         : null;
     await UploadForegroundGuard().begin();
     try {
       final outcomes = <UploadOutcome>[];
       for (var i = 0; i < picks.length; i++) {
+        if (cancelled) break;
         outcomes.add(await _uploadOne(picks[i],
             category: category,
             folderId: folderId,
@@ -122,7 +127,9 @@ class UploadPipeline {
             label: 'Encrypting ${i + 1}/${picks.length}…');
         onProgress?.call(i + 1, picks.length);
       }
-      final summary = summarizeOutcomes(outcomes);
+      final summary = cancelled
+          ? 'Upload stopped: ${outcomes.length} of ${picks.length} done'
+          : summarizeOutcomes(outcomes);
       if (outcomes.any((o) => !o.ok)) {
         task?.fail(summary);
       } else {
@@ -227,7 +234,11 @@ class UploadPipeline {
         } else if (type == CnestFileType.audio) {
           // Embedded cover art (ID3 APIC / m4a covr) becomes the track's
           // thumbnail — the downstream encrypt/upload path is type-blind.
-          final art = AudioArtParser.extract(fileBytes, filename);
+          // Full-buffer synchronous Dart scan — keep it off the UI
+          // isolate like the encrypt pass.
+          final fb = fileBytes;
+          final art =
+              await Isolate.run(() => AudioArtParser.extract(fb, filename));
           if (art != null) {
             try {
               thumbnailBytes = await FlutterImageCompress.compressWithList(
@@ -252,7 +263,7 @@ class UploadPipeline {
       // a second full read; their duplicate lands as "name (1)" as before.
       ({Uint8List encrypted, String hash})? preEncrypted;
       if (fileBytes != null) {
-        final hashed = await EncryptionService.encryptFileWithHash(fileBytes);
+        final hashed = await EncryptionService.encryptFileWithHashInBackground(fileBytes);
         preEncrypted = (encrypted: hashed.encrypted, hash: hashed.hash);
         if (skipDuplicates &&
             await DatabaseService().hasActiveContentHash(hashed.hash)) {
@@ -425,7 +436,7 @@ class UploadPipeline {
       Future<String?>? thumbUploadFuture;
       if (thumbnailBytes != null) {
         final encryptedThumbBytes =
-            await EncryptionService.encryptFile(thumbnailBytes);
+            await EncryptionService.encryptFileInBackground(thumbnailBytes);
         thumbUploadFuture = CloudService().uploadEncryptedFile(
           bytes: encryptedThumbBytes,
           filename: '${fileId}_thumb.cnest',

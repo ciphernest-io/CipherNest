@@ -505,9 +505,8 @@ class _DashboardCard extends StatelessWidget {
                   // readable.
                   Positioned.fill(
                     child: Opacity(
-                      // 0.44: half as faded as the original 0.22 (Aug 31),
-                      // still light enough for the label to read.
-                      opacity: 0.44,
+                      // Tuned on-device (Aug 31): 0.33.
+                      opacity: 0.33,
                       child: Image.asset(
                         tokens.cardArtAsset,
                         fit: BoxFit.cover,

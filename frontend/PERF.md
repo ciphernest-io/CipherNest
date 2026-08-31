@@ -112,3 +112,8 @@ the same 10 pages). Retention per visited page is gone; pages dispose on
 leave as designed. **PASS.** The high absolute floor (~850, Graphics ~540)
 is texture/decode footprint of full-res pages behind a 130-photo grid —
 FIX-5/FIX-6 territory (decode constraints), not retention.
+
+## FIX-6 — upload jank (Aug 31, 2026)
+Cause: package:cryptography resolves to pure-Dart DartAesGcm/DartSha256; their async APIs complete synchronously, so a whole-file encrypt+hash ran in ONE main-isolate event-loop turn (zero frames for the duration; a 20MB photo = SHA-256 pass + 40x512KB AES pass). Videos only stuttered because the stream path yields on file IO.
+Fix (wire-format identical): whole-file encrypt/encrypt+hash moved to a worker isolate (`encryptFile[WithHash]InBackground`; HPKE seal needs only the vault PUBLIC key, so nothing secret crosses the port and the per-file key is minted inside). Same hop for the EXIF walk and audio-art scan. Photos are now read from disk once (auto-sync/migration reused the thumbnail buffer). Chunk assembly preallocates instead of list-concat (2 fewer full copies per 512KB chunk).
+Still on the main isolate (known, acceptable for now): streaming video encrypt (yields between chunks), decrypt paths (viewer), share re-wrap. Measure on-device: scroll the gallery during a 20+ photo batch.

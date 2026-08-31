@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../utils/byte_format.dart';
+import '../../widgets/activity_sheet.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart'; // ENABLED
@@ -932,6 +933,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const Divider(),
 
+          // --- ACTIVITY ---
+          _SectionHeader(title: "Activity"),
+          ListTile(
+            leading: ThemeIcon('arrowsClockwise', color: cs.primary),
+            title: Text('Activity log', style: TextStyle(color: cs.onSurface)),
+            subtitle: Text('Running tasks and recent results',
+                style: TextStyle(color: cs.onSurface.withAlpha(140))),
+            onTap: () => showActivitySheet(context),
+          ),
+          const Divider(),
+
           // --- DATA MANAGEMENT ---
           _SectionHeader(title: "Data Management"),
           
@@ -1619,11 +1631,12 @@ class _ThemePackTile extends StatelessWidget {
                 ClipRRect(
                   borderRadius: BorderRadius.circular(t.rIc),
                   child: Image.asset(
-                    // Always the vivid (dark-mode) art: this is a preview
-                    // with no text over it, so the light-mode washed
-                    // variant just looks broken here.
-                    ThemePackTokens.forPackMode(pack, Brightness.dark)
-                        .cardArtAsset,
+                    // The ORIGINAL pack photo (assets/images/): this is a
+                    // preview with no text over it, so it never uses the
+                    // mode-tinted card art.
+                    'assets/images/'
+                        '${pack == ThemePack.hackerman ? 'hacker' : pack.name}'
+                        '.webp',
                     width: 76,
                     height: 76,
                     fit: BoxFit.cover,

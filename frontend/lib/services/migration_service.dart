@@ -322,6 +322,8 @@ class MigrationService {
     final folderId =
         await AutoSyncService().ensureSystemPath(bucketName: bucketName);
 
+    // Read once, reuse for encryption (was two full reads per photo).
+    Uint8List? imageBytes;
     Uint8List? thumbnailBytes;
 
     // Generate thumbnail
@@ -339,6 +341,7 @@ class MigrationService {
     } else if (isImage) {
       try {
         final bytes = await file.readAsBytes();
+        imageBytes = bytes;
         thumbnailBytes = await FlutterImageCompress.compressWithList(
           bytes,
           minHeight: 300,
@@ -392,8 +395,8 @@ class MigrationService {
         );
         contentHash = await hashed.hash;
       } else {
-        final fileBytes = await file.readAsBytes();
-        final hashed = await EncryptionService.encryptFileWithHash(fileBytes);
+        final fileBytes = imageBytes ?? await file.readAsBytes();
+        final hashed = await EncryptionService.encryptFileWithHashInBackground(fileBytes);
         contentHash = hashed.hash;
         mainCloudId = await CloudService().uploadEncryptedFile(
           filename: mainCloudFilename,
@@ -409,7 +412,7 @@ class MigrationService {
       String? thumbCloudId;
       if (thumbnailBytes != null) {
         final encryptedThumb =
-            await EncryptionService.encryptFile(thumbnailBytes);
+            await EncryptionService.encryptFileInBackground(thumbnailBytes);
         thumbCloudId = await CloudService().uploadEncryptedFile(
           filename: '${fileId}_thumb.cnest',
           type: CnestFileType.image,

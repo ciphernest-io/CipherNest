@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -75,9 +76,11 @@ class EncryptionService {
   // Header (HPKE seal / open)
   // ---------------------------------------------------------------------------
 
-  static Future<Uint8List> _buildHeader(Uint8List fileKeyBytes) async {
-    final sealed =
-        await Hpke.sealFileKey(KeyManagerService().vaultPublicKey, fileKeyBytes);
+  static Future<Uint8List> _buildHeader(
+    SimplePublicKey recipient,
+    Uint8List fileKeyBytes,
+  ) async {
+    final sealed = await Hpke.sealFileKey(recipient, fileKeyBytes);
     final out = BytesBuilder(copy: false);
     out.addByte(formatVersion);
     out.add(sealed.enc); // 32
@@ -114,10 +117,18 @@ class EncryptionService {
   // Whole-file (bytes) encrypt / decrypt
   // ---------------------------------------------------------------------------
 
-  static Future<Uint8List> encryptFile(Uint8List fileBytes) =>
-      trace('aesEncryptFile', () => _encryptFile(fileBytes));
+  static Future<Uint8List> encryptFile(Uint8List fileBytes) => trace(
+      'aesEncryptFile',
+      () => _encryptFileWith(fileBytes, KeyManagerService().vaultPublicKey));
 
-  static Future<Uint8List> _encryptFile(Uint8List fileBytes) async {
+  /// The whole-file body, parameterized on the recipient so it can run in a
+  /// worker isolate (which must never touch KeyManagerService — HPKE
+  /// sealing needs only the PUBLIC key; the per-file key is minted here and
+  /// never crosses a port).
+  static Future<Uint8List> _encryptFileWith(
+    Uint8List fileBytes,
+    SimplePublicKey recipient,
+  ) async {
     final fileKey = await AesGcm.with256bits().newSecretKey();
     final fileKeyBytes = Uint8List.fromList(await fileKey.extractBytes());
     final contentId = _randomBytes(16);
@@ -125,7 +136,7 @@ class EncryptionService {
         fileBytes.isEmpty ? 0 : (fileBytes.length / _chunkSize).ceil();
 
     final out = BytesBuilder(copy: false);
-    out.add(await _buildHeader(fileKeyBytes));
+    out.add(await _buildHeader(recipient, fileKeyBytes));
     out.add(_buildPreamble(contentId, totalChunks));
     for (var i = 0; i < totalChunks; i++) {
       final start = i * _chunkSize;
@@ -194,6 +205,37 @@ class EncryptionService {
     return (encrypted: encrypted, hash: hash);
   }
 
+  /// Isolate-offloaded [encryptFile]: pure-Dart AES-GCM completes
+  /// synchronously, so on the main isolate a whole file encrypts in ONE
+  /// event-loop turn and no frame renders (MTR jank). Same code, same wire
+  /// bytes — only the isolate changes. Needs nothing but the vault PUBLIC
+  /// key, captured here and rebuilt inside from its raw bytes.
+  static Future<Uint8List> encryptFileInBackground(Uint8List fileBytes) {
+    final pubBytes =
+        Uint8List.fromList(KeyManagerService().vaultPublicKey.bytes);
+    return trace(
+        'aesEncryptFileBg',
+        () => Isolate.run(() => _encryptFileWith(
+              fileBytes,
+              SimplePublicKey(pubBytes, type: KeyPairType.x25519),
+            )));
+  }
+
+  /// Isolate-offloaded [encryptFileWithHash] (hash + encrypt in the worker,
+  /// one hop per file).
+  static Future<({Uint8List encrypted, String hash})>
+      encryptFileWithHashInBackground(Uint8List fileBytes) {
+    final pubBytes =
+        Uint8List.fromList(KeyManagerService().vaultPublicKey.bytes);
+    return trace('aesEncryptHashBg', () => Isolate.run(() async {
+          final recipient =
+              SimplePublicKey(pubBytes, type: KeyPairType.x25519);
+          final hash = await _hashPlaintext(fileBytes);
+          final encrypted = await _encryptFileWith(fileBytes, recipient);
+          return (encrypted: encrypted, hash: hash);
+        }));
+  }
+
   /// Wraps [source] so the plaintext is hashed in the SAME pass that feeds
   /// encryption — the stream is read exactly once. Returns the encrypted
   /// stream plus a future that completes with the plaintext SHA-256 hex once
@@ -241,13 +283,14 @@ class EncryptionService {
     Stream<List<int>> source, {
     required int totalSize,
   }) async* {
+    final recipient = KeyManagerService().vaultPublicKey;
     final fileKey = await AesGcm.with256bits().newSecretKey();
     final fileKeyBytes = Uint8List.fromList(await fileKey.extractBytes());
     final contentId = _randomBytes(16);
     final totalChunks =
         totalSize == 0 ? 0 : (totalSize / _chunkSize).ceil();
 
-    yield await _buildHeader(fileKeyBytes);
+    yield await _buildHeader(recipient, fileKeyBytes);
     yield _buildPreamble(contentId, totalChunks);
 
     var buffer = <int>[];

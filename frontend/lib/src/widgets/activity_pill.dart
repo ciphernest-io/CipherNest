@@ -58,13 +58,17 @@ class InsetClaim {
 /// Text renders Flutter's missing-Material error style.
 ///
 /// The pill is a DYNAMIC component: a running task shows the full pill for
-/// a few seconds, then MORPHS (one continuously animated blob: position,
-/// size and content together) into a small floating ball on the screen
-/// edge showing only the loader. Tap the ball to morph it back out; tap
-/// the expanded pill to send it back; long-press either for the task
-/// sheet. The ball drags anywhere and snaps to the nearest edge — or the
-/// opposite one when flung. Completion never barges back in: minimized
-/// tasks finish as a check (or warning) inside the ball.
+/// a few seconds, then MORPHS (one continuously animated blob) into a
+/// small floating ball on the screen edge showing only the loader.
+/// Gestures, all visible ones:
+///   - TAP the pill  -> opens the activity drawer (controls + history).
+///   - SWIPE the pill -> throws it into the ball at the edge you swiped
+///     toward, at the default height.
+///   - TAP the ball  -> morphs it back out.
+///   - DRAG the ball -> place it anywhere; it snaps to the nearest edge,
+///     or the opposite one on a fling.
+/// Completion never barges back in: a minimized task finishes as a check
+/// (or warning) inside the ball.
 class ActivityOverlay extends StatefulWidget {
   const ActivityOverlay({super.key});
 
@@ -149,12 +153,6 @@ class _ActivityOverlayState extends State<ActivityOverlay> {
     setState(() {});
   }
 
-  void _minimizeNow() {
-    _holdTimer?.cancel();
-    _holdTimer = null;
-    setState(() => _minimized = true);
-  }
-
   void _openSheet() {
     final ctx = App.navigatorKey.currentContext;
     if (ctx != null) showActivitySheet(ctx);
@@ -207,6 +205,17 @@ class _ActivityOverlayState extends State<ActivityOverlay> {
     );
   }
 
+  double _textWidth(String text, TextStyle style) {
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+    )..layout();
+    final w = painter.width;
+    painter.dispose();
+    return w;
+  }
+
   /// The single morphing element. Expanded and minimized are two target
   /// rects of the SAME AnimatedPositioned container, so every state change
   /// is one continuous blob movement instead of a swap.
@@ -219,9 +228,25 @@ class _ActivityOverlayState extends State<ActivityOverlay> {
     final expanded = !_minimized;
     final dragging = _dragPos != null;
 
-    final expandedWidth = math.min(340.0, size.width - 32.0);
-    final maxTop = size.height - _ballSize - 96;
+    final label = terminal ? (task.resultMessage ?? task.label) : task.label;
+    final extra = terminal ? 0 : ActivityCenter().extraRunningCount;
 
+    // Shrink-wrap: measure the content instead of taking a fixed width
+    // (which read as a full-width bar).
+    final labelStyle = TextStyle(
+      fontSize: 13,
+      fontWeight: FontWeight.w600,
+      fontFamily: t.fontFamily,
+    );
+    var needed = 14 + 24 + 10 + _textWidth(label, labelStyle) + 14 + 2;
+    if (extra > 0) {
+      const chipStyle = TextStyle(fontSize: 11, fontWeight: FontWeight.w600);
+      needed += 8 + 14 + _textWidth('+$extra', chipStyle);
+    }
+    final expandedWidth =
+        needed.clamp(120.0, math.min(340.0, size.width - 32.0)).toDouble();
+
+    final maxTop = size.height - _ballSize - 96;
     final double width = expanded ? expandedWidth : _ballSize;
     final double height = expanded ? _pillHeight : _ballSize;
     final double left;
@@ -247,23 +272,22 @@ class _ActivityOverlayState extends State<ActivityOverlay> {
       width: width,
       height: height,
       child: GestureDetector(
-        onTap: () {
-          if (!expanded) {
-            _expand();
-          } else if (terminal) {
-            _openSheet();
-          } else {
-            _minimizeNow();
-          }
-        },
-        onLongPress: _openSheet,
-        // Swipe-away on the expanded pill (work continues); the ball uses
-        // pan for dragging instead.
+        // Tap: drawer from the pill (details + controls live there), morph
+        // back out from the ball.
+        onTap: expanded ? _openSheet : _expand,
+        // Swipe the pill toward an edge -> it becomes the ball on that
+        // edge, at the default height.
         onHorizontalDragEnd: expanded
             ? (d) {
-                if (d.velocity.pixelsPerSecond.dx.abs() > 300) {
-                  ActivityCenter().suppressPill();
-                }
+                final vx = d.velocity.pixelsPerSecond.dx;
+                if (vx.abs() < 150) return;
+                _holdTimer?.cancel();
+                _holdTimer = null;
+                setState(() {
+                  _onLeft = vx < 0;
+                  _ballTop = null;
+                  _minimized = true;
+                });
               }
             : null,
         onPanStart: expanded
@@ -314,7 +338,8 @@ class _ActivityOverlayState extends State<ActivityOverlay> {
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 180),
             child: expanded
-                ? _pillContent(context, task, terminal, failed, expandedWidth)
+                ? _pillContent(context, task, terminal, failed, expandedWidth,
+                    label, labelStyle, extra)
                 : _ballContent(context, task, terminal, failed),
           ),
         ),
@@ -351,13 +376,17 @@ class _ActivityOverlayState extends State<ActivityOverlay> {
     );
   }
 
-  Widget _pillContent(BuildContext context, ActivityTask task, bool terminal,
-      bool failed, double expandedWidth) {
-    final center = ActivityCenter();
+  Widget _pillContent(
+      BuildContext context,
+      ActivityTask task,
+      bool terminal,
+      bool failed,
+      double expandedWidth,
+      String label,
+      TextStyle labelStyle,
+      int extra) {
     final cs = Theme.of(context).colorScheme;
     final t = ThemeController().tokens;
-    final label = terminal ? (task.resultMessage ?? task.label) : task.label;
-    final extra = center.extraRunningCount;
 
     // OverflowBox pins the row at its full width during the morph, so the
     // shrinking container clips it instead of the Row overflowing.
@@ -378,14 +407,10 @@ class _ActivityOverlayState extends State<ActivityOverlay> {
                   label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: cs.onSurface,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: labelStyle.copyWith(color: cs.onSurface),
                 ),
               ),
-              if (!terminal && extra > 0) ...[
+              if (extra > 0) ...[
                 const SizedBox(width: 8),
                 Container(
                   padding:

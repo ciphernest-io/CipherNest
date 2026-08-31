@@ -560,6 +560,9 @@ class AutoSyncService {
         ? existingRow.folderId
         : await ensureSystemPath(bucketName: bucketName);
 
+    // The image is read ONCE: the thumbnail pass keeps the buffer and
+    // the encrypt pass reuses it (it was read twice per photo).
+    Uint8List? imageBytes;
     Uint8List? thumbnailBytes;
 
     // Generate thumbnail
@@ -577,6 +580,7 @@ class AutoSyncService {
     } else if (isImage) {
       try {
         final bytes = await file.readAsBytes();
+        imageBytes = bytes;
         thumbnailBytes = await FlutterImageCompress.compressWithList(
           bytes,
           minHeight: 300,
@@ -663,9 +667,9 @@ class AutoSyncService {
         );
         contentHash = await hashed.hash;
       } else {
-        final fileBytes = await file.readAsBytes();
+        final fileBytes = imageBytes ?? await file.readAsBytes();
         final hashed =
-            await EncryptionService.encryptFileWithHash(fileBytes);
+            await EncryptionService.encryptFileWithHashInBackground(fileBytes);
         contentHash = hashed.hash;
         mainCloudId = await CloudService().uploadEncryptedFile(
           filename: mainCloudFilename,
@@ -681,7 +685,7 @@ class AutoSyncService {
       String? thumbCloudId;
       if (thumbnailBytes != null) {
         final encryptedThumb =
-            await EncryptionService.encryptFile(thumbnailBytes);
+            await EncryptionService.encryptFileInBackground(thumbnailBytes);
         thumbCloudId = await CloudService().uploadEncryptedFile(
           filename: '${fileId}_thumb.cnest',
           type: CnestFileType.image,

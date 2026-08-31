@@ -1,3 +1,4 @@
+import 'dart:isolate';
 import 'dart:io';
 
 import 'package:exif/exif.dart';
@@ -91,13 +92,19 @@ class FileMetadataService {
   /// back to the op's HLC wall, which is also identical across devices.
   static Future<int?> captureEpochFromImageBytes(Uint8List bytes) async {
     try {
-      final tags = await readExifFromBytes(bytes);
-      final raw = tags['EXIF DateTimeOriginal']?.printable ??
-          tags['Image DateTime']?.printable;
-      return _parseExifDate(raw);
+      // The EXIF walk is a synchronous full-buffer Dart scan; run it in a
+      // worker isolate so a batch upload cannot jank the UI with it.
+      return await Isolate.run(() => _exifEpoch(bytes));
     } catch (_) {
       return null;
     }
+  }
+
+  static Future<int?> _exifEpoch(Uint8List bytes) async {
+    final tags = await readExifFromBytes(bytes);
+    final raw = tags['EXIF DateTimeOriginal']?.printable ??
+        tags['Image DateTime']?.printable;
+    return _parseExifDate(raw);
   }
 
   /// Parses the EXIF datetime shape `YYYY:MM:DD HH:MM:SS` into epoch ms, or

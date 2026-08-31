@@ -16,10 +16,9 @@ class AesGcmCipher {
       nonce: nonce,
     );
 
-    // Combine: nonce + ciphertext + mac
-    return Uint8List.fromList(
-      nonce + secretBox.cipherText + secretBox.mac.bytes,
-    );
+    // Combine: nonce + ciphertext + mac (preallocated; the list-concat
+    // form built a growable intermediate and copied it again).
+    return _assemble(nonce, secretBox.cipherText, secretBox.mac.bytes);
   }
 
   /// Decrypts data using a SPECIFIC key.
@@ -62,7 +61,21 @@ class AesGcmCipher {
       nonce: nonce,
       aad: aad,
     );
-    return Uint8List.fromList(nonce + box.cipherText + box.mac.bytes);
+    return _assemble(nonce, box.cipherText, box.mac.bytes);
+  }
+
+  /// nonce(12) || ciphertext || tag(16) into one preallocated buffer — two
+  /// fewer full-buffer copies per 512 KiB chunk than `fromList(a + b + c)`.
+  static Uint8List _assemble(
+    List<int> nonce,
+    List<int> cipherText,
+    List<int> mac,
+  ) {
+    final out = Uint8List(nonce.length + cipherText.length + mac.length);
+    out.setRange(0, nonce.length, nonce);
+    out.setRange(nonce.length, nonce.length + cipherText.length, cipherText);
+    out.setRange(nonce.length + cipherText.length, out.length, mac);
+    return out;
   }
 
   /// Decrypt one body chunk. Verifies the inline nonce equals [expectedNonce]

@@ -106,7 +106,7 @@ class DatabaseBackupService {
       }
       final dbBytes = await dbFile.readAsBytes();
 
-      final encrypted = await EncryptionService.encryptFile(dbBytes);
+      final encrypted = await EncryptionService.encryptFileInBackground(dbBytes);
       final ownName = await _thisDeviceBackupName();
 
       // Replace our own previous snapshot only.
