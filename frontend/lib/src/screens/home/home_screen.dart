@@ -244,14 +244,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         color: cs.primary,
         onTap: () => Navigator.pushNamed(context, AppRoutes.audio),
       ),
-      _DashboardCard(
-        title: 'Other Files',
-        // Archive box, not a folder — 'folder' collided with the Folders
-        // card one row up.
-        icon: 'archiveBox',
-        color: cs.primary,
-        onTap: () => Navigator.pushNamed(context, AppRoutes.otherFiles),
-      ),
+      // Other Files has no card (Aug 31 ruling): loose files live in the
+      // Folders view; the route stays for deep entries.
     ];
 
     return Scaffold(
@@ -557,11 +551,15 @@ class _VaultUsageCard extends StatelessWidget {
     final count = stats?['total_count'] ?? 0;
 
     final tokens = ThemeController().tokens;
+    // A monotone ramp of the pack accent, not semantic colors: warning
+    // orange next to a blue accent read as two unrelated charts. Steps of
+    // ~0.28 toward the background stay distinguishable in every pack.
+    Color shade(double f) => Color.lerp(cs.primary, tokens.bg, f)!;
     final segments = <_UsageSegment>[
-      _UsageSegment('Photos & Videos', images, cs.primary),
-      _UsageSegment('Documents', docs, tokens.warning),
-      _UsageSegment('Audio', audio, tokens.info),
-      _UsageSegment('Other', other, tokens.fgMuted),
+      _UsageSegment('Photos & Videos', images, shade(0)),
+      _UsageSegment('Documents', docs, shade(0.28)),
+      _UsageSegment('Audio', audio, shade(0.52)),
+      _UsageSegment('Other', other, shade(0.72)),
       if (trashBytes > 0)
         _UsageSegment('Recycle Bin', trashBytes, cs.onSurface.withAlpha(90)),
     ].where((s) => s.bytes > 0).toList();
@@ -579,7 +577,7 @@ class _VaultUsageCard extends StatelessWidget {
           Row(
             children: [
               ThemeIcon(
-                'cloudCheck',
+                'data_usage',
                 color: cs.primary,
                 size: 20,
               ),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'theme_icon.dart';
 import '../config/routes.dart';
 import '../config/theme_controller.dart';
@@ -14,17 +15,34 @@ import '../../services/sync_service.dart';
 class AccountSwitcher extends StatelessWidget {
   const AccountSwitcher({super.key});
 
-  String _providerIcon(int providerType) {
+  /// Official provider mark (assets/images/brands/, see its README), or
+  /// null for providers without one; callers fall back to a ThemeIcon.
+  String? _providerLogo(int providerType) {
     switch (providerType) {
       case CloudAccount.providerGoogle:
-        return 'googleLogo';
+        return 'assets/images/brands/google_drive.png';
       case CloudAccount.providerOneDrive:
-        return 'microsoftOutlookLogo';
+        return 'assets/images/brands/microsoft.svg';
       case CloudAccount.providerDropbox:
-        return 'dropboxLogo';
+        return 'assets/images/brands/dropbox.png';
       default:
-        return 'cloud';
+        return null;
     }
+  }
+
+  /// Untinted brand mark at [size] (brand guidelines forbid recoloring).
+  Widget _providerMark(int providerType, double size) {
+    final asset = _providerLogo(providerType);
+    if (asset == null) {
+      return ThemeIcon('cloud', size: size);
+    }
+    return SizedBox(
+      width: size,
+      height: size,
+      child: asset.endsWith('.svg')
+          ? SvgPicture.asset(asset, fit: BoxFit.contain)
+          : Image.asset(asset, fit: BoxFit.contain),
+    );
   }
 
   Future<void> _handleSelect(BuildContext context, String? value) async {
@@ -75,8 +93,7 @@ class AccountSwitcher extends StatelessWidget {
                 value: a.id,
                 child: Row(
                   children: [
-                    ThemeIcon(_providerIcon(a.providerType),
-                        size: 20, color: cs.onSurface),
+                    _providerMark(a.providerType, 20),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -123,12 +140,12 @@ class AccountSwitcher extends StatelessWidget {
                   width: 28,
                   height: 28,
                   decoration: BoxDecoration(
-                    color: cs.primary.withAlpha(60),
+                    // Neutral chip: brand marks keep their own colors.
+                    color: cs.surfaceContainerHighest,
                     shape: BoxShape.circle,
                   ),
                   alignment: Alignment.center,
-                  child: ThemeIcon(_providerIcon(active.providerType),
-                      size: 16, color: cs.primary),
+                  child: _providerMark(active.providerType, 16),
                 ),
                 const SizedBox(width: 6),
                 ThemeIcon('caretDown',

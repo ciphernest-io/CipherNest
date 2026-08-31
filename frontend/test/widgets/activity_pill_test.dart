@@ -26,7 +26,7 @@ void main() {
   testWidgets('hidden at rest -> active on start -> +N chip -> terminal '
       'flash -> gone after 4s', (tester) async {
     await tester.pumpWidget(_host());
-    expect(find.byType(ActivityPill), findsOneWidget);
+    expect(find.byType(ActivityOverlay), findsOneWidget);
     expect(find.textContaining('Encrypting'), findsNothing);
 
     final a = center.start(
@@ -70,6 +70,9 @@ void main() {
     // with the newcomer in the +N count.
     expect(find.text('Working…'), findsOneWidget);
     expect(find.text('+1'), findsOneWidget);
+
+    // Drain the auto-minimize hold timer (tasks are still running).
+    await tester.pump(const Duration(seconds: 5));
   });
 
   testWidgets('quiet tasks never render the pill', (tester) async {
@@ -97,5 +100,8 @@ void main() {
     final claimed = tester.getTopLeft(find.text('Working…')).dy;
     expect(claimed, greaterThanOrEqualTo(unclaimed + 48),
         reason: 'a TabBar/selection-bar claim must push the pill below it');
+
+    // Drain the auto-minimize hold timer (the task is still running).
+    await tester.pump(const Duration(seconds: 5));
   });
 }
