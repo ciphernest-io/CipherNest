@@ -805,7 +805,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       case CloudSelectionMode.attach:
         return 'Connect a cloud to your vault';
       case CloudSelectionMode.signup:
-        return 'Where should your files live?';
+        return 'Choose your provider';
     }
   }
 
@@ -820,7 +820,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       case CloudSelectionMode.attach:
         return "Your vault is on this device but no cloud is connected. Pick where its files should sync.";
       case CloudSelectionMode.signup:
-        return "Your files stay encrypted end-to-end. Your cloud provider only ever sees scrambled data.";
+        return "Pick where your encrypted files will live. You can add more accounts later, and one recovery phrase unlocks them all.";
     }
   }
 }
