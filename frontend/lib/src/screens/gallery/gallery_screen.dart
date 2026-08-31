@@ -1,10 +1,21 @@
 import 'package:flutter/material.dart';
-import '../../widgets/theme_icon.dart';
+
 import '../../config/routes.dart';
-import 'pictures_tab.dart';
+import '../../config/theme_controller.dart';
+import '../../widgets/theme_icon.dart';
 import 'albums_tab.dart';
+import 'gallery_chrome.dart';
+import 'gallery_search_screen.dart';
+import 'pictures_tab.dart';
 import 'stories_tab.dart';
 
+/// OneUI-style gallery shell: no app bar, no header text. Floating chrome
+/// over full-bleed content — search + overflow buttons top-left (their
+/// translucent pill fades in once content scrolls under them), a
+/// translucent bottom pill with the four tabs, and a back-to-top button
+/// that appears while the grid is in motion. The big "Gallery" title lives
+/// INSIDE the Pictures scroll view (revealed by swiping down at the top);
+/// see PicturesTab.
 class GalleryScreen extends StatefulWidget {
   const GalleryScreen({super.key});
 
@@ -15,52 +26,295 @@ class GalleryScreen extends StatefulWidget {
 class _GalleryScreenState extends State<GalleryScreen> {
   int _bottomNavIndex = 0;
   final _picturesKey = GlobalKey<PicturesTabState>();
+  final _chrome = GalleryChrome();
+
+  @override
+  void dispose() {
+    _chrome.dispose();
+    super.dispose();
+  }
+
+  void _selectTab(int index) {
+    if (index == _bottomNavIndex) return;
+    setState(() => _bottomNavIndex = index);
+    // Tab content changes under the overlays: reset scroll-driven state so
+    // pills are visible and back-to-top is gone.
+    _chrome.chromeHidden.value = false;
+    _chrome.showBackToTop.value = false;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final safeTop = MediaQuery.paddingOf(context).top;
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
+
     return Scaffold(
-      appBar: AppBar(
-        title: Text(_tabTitle),
-        elevation: 0,
-      ),
-      body: IndexedStack(
-        index: _bottomNavIndex,
+      body: Stack(
         children: [
-          PicturesTab(key: _picturesKey),
-          const AlbumsTab(),
-          const StoriesTab(),
-          _buildMenuTab(),
-        ],
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        type: BottomNavigationBarType.fixed,
-        currentIndex: _bottomNavIndex,
-        onTap: (index) => setState(() => _bottomNavIndex = index),
-        items: [
-          BottomNavigationBarItem(icon: ThemeIcon('image'), label: 'Pictures'),
-          BottomNavigationBarItem(
-              icon: ThemeIcon('folderSimple'), label: 'Albums'),
-          BottomNavigationBarItem(icon: ThemeIcon('clockCounterClockwise'), label: 'Stories'),
-          BottomNavigationBarItem(icon: ThemeIcon('list'), label: 'Menu'),
+          Positioned.fill(
+            child: IndexedStack(
+              index: _bottomNavIndex,
+              children: [
+                PicturesTab(key: _picturesKey, chrome: _chrome),
+                SafeArea(bottom: false, child: const AlbumsTab()),
+                SafeArea(bottom: false, child: const StoriesTab()),
+                SafeArea(bottom: false, child: _buildMenuTab()),
+              ],
+            ),
+          ),
+          _topButtons(safeTop),
+          _backToTop(safeBottom),
+          _bottomPill(safeBottom),
         ],
       ),
     );
   }
 
-  String get _tabTitle {
-    switch (_bottomNavIndex) {
-      case 0:
-        return 'Encrypted Gallery';
-      case 1:
-        return 'Albums';
-      case 2:
-        return 'Stories';
-      case 3:
-        return 'Menu';
-      default:
-        return 'Gallery';
-    }
+  // ---- top-left: search + overflow, translucent pill when scrolled ----
+
+  Widget _topButtons(double safeTop) {
+    final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
+    return Positioned(
+      top: safeTop + 6,
+      left: 10,
+      child: ValueListenableBuilder<bool>(
+        valueListenable: _chrome.selectionActive,
+        builder: (context, selection, _) => ValueListenableBuilder<bool>(
+          valueListenable: _chrome.chromeHidden,
+          builder: (context, hidden, _) => ValueListenableBuilder<bool>(
+            valueListenable: _chrome.scrolledUnder,
+            builder: (context, under, _) {
+              final visible = !hidden && !selection;
+              // Off the Pictures tab there is no big header, so content is
+              // always "under" the buttons.
+              final pillBg = _bottomNavIndex == 0 ? under : true;
+              return IgnorePointer(
+                ignoring: !visible,
+                child: AnimatedOpacity(
+                  opacity: visible ? 1 : 0,
+                  duration: const Duration(milliseconds: 180),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 220),
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    decoration: BoxDecoration(
+                      color: cs.surfaceContainerHigh
+                          .withValues(alpha: pillBg ? 0.82 : 0),
+                      borderRadius: BorderRadius.circular(t.rPill),
+                      border: Border.all(
+                        color: cs.outline.withValues(
+                            alpha: pillBg ? 0.35 : 0),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: 'Search',
+                          icon: ThemeIcon('magnifyingGlass',
+                              color: cs.onSurface),
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) =>
+                                    const GallerySearchScreen()),
+                          ),
+                        ),
+                        _overflowMenu(cs),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
   }
+
+  Widget _overflowMenu(ColorScheme cs) {
+    final t = ThemeController().tokens;
+    return PopupMenuButton<String>(
+      tooltip: 'More',
+      icon: ThemeIcon('dotsThreeVertical', color: cs.onSurface),
+      color: cs.surface,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(t.rInput)),
+      onSelected: (v) {
+        final pictures = _picturesKey.currentState;
+        switch (v) {
+          case 'select':
+            pictures?.startSelection();
+          case 'favorites':
+            pictures?.setFavoritesOnly(!(pictures.favoritesOnly));
+          case 'sync':
+            pictures?.handleSync();
+          case 'settings':
+            Navigator.pushNamed(context, AppRoutes.settings);
+        }
+      },
+      itemBuilder: (ctx) {
+        final favs = _picturesKey.currentState?.favoritesOnly ?? false;
+        return [
+          if (_bottomNavIndex == 0) ...[
+            const PopupMenuItem(value: 'select', child: Text('Select')),
+            PopupMenuItem(
+              value: 'favorites',
+              child: Text(favs ? 'Show all' : 'Favorites only'),
+            ),
+            const PopupMenuItem(value: 'sync', child: Text('Sync now')),
+          ],
+          const PopupMenuItem(value: 'settings', child: Text('Settings')),
+        ];
+      },
+    );
+  }
+
+  // ---- bottom: translucent nav pill ----
+
+  Widget _bottomPill(double safeBottom) {
+    final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: safeBottom + 12,
+      child: ValueListenableBuilder<bool>(
+        valueListenable: _chrome.chromeHidden,
+        builder: (context, hidden, child) => IgnorePointer(
+          ignoring: hidden,
+          child: AnimatedSlide(
+            offset: hidden ? const Offset(0, 0.4) : Offset.zero,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+            child: AnimatedOpacity(
+              opacity: hidden ? 0 : 1,
+              duration: const Duration(milliseconds: 180),
+              child: child,
+            ),
+          ),
+        ),
+        child: Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerHigh.withValues(alpha: 0.86),
+              borderRadius: BorderRadius.circular(t.rPill),
+              border:
+                  Border.all(color: cs.outline.withValues(alpha: 0.35)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.18),
+                  blurRadius: 12,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _navItem(0, 'image', 'Pictures'),
+                _navItem(1, 'folderSimple', 'Albums'),
+                _navItem(2, 'clockCounterClockwise', 'Stories'),
+                _navItem(3, 'list', 'Menu'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _navItem(int index, String icon, String label) {
+    final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
+    final selected = _bottomNavIndex == index;
+    return InkWell(
+      onTap: () => _selectTab(index),
+      borderRadius: BorderRadius.circular(t.rPill),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected
+              ? cs.primary.withValues(alpha: 0.14)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(t.rPill),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ThemeIcon(
+              icon,
+              size: 20,
+              selected: selected,
+              color: selected
+                  ? cs.primary
+                  : cs.onSurface.withValues(alpha: 0.65),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected
+                    ? cs.primary
+                    : cs.onSurface.withValues(alpha: 0.65),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ---- back to top ----
+
+  Widget _backToTop(double safeBottom) {
+    final cs = Theme.of(context).colorScheme;
+    return Positioned(
+      left: 0,
+      right: 0,
+      // Clears the bottom pill (~64) plus a gap.
+      bottom: safeBottom + 12 + 64 + 10,
+      child: ValueListenableBuilder<bool>(
+        valueListenable: _chrome.showBackToTop,
+        builder: (context, show, child) => IgnorePointer(
+          ignoring: !show || _bottomNavIndex != 0,
+          child: AnimatedOpacity(
+            opacity: show && _bottomNavIndex == 0 ? 1 : 0,
+            duration: const Duration(milliseconds: 180),
+            child: child,
+          ),
+        ),
+        child: Center(
+          child: Material(
+            color: cs.surfaceContainerHigh.withValues(alpha: 0.9),
+            shape: CircleBorder(
+              side: BorderSide(
+                  color: cs.outline.withValues(alpha: 0.35)),
+            ),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: () => _picturesKey.currentState?.scrollToTop(),
+              child: SizedBox(
+                width: 42,
+                height: 42,
+                child: Center(
+                  child: ThemeIcon('keyboard_arrow_up',
+                      size: 24, color: cs.onSurface),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ---- menu tab (unchanged content; bottom clearance for the pill) ----
 
   Widget _buildMenuTab() {
     final cs = Theme.of(context).colorScheme;
@@ -85,30 +339,31 @@ class _GalleryScreenState extends State<GalleryScreen> {
         ListTile(
           leading: ThemeIcon('gear', color: cs.onSurface.withAlpha(120)),
           title: Text('Settings', style: TextStyle(color: cs.onSurface)),
-          trailing:
-              ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(120)),
+          trailing: ThemeIcon('caretRight',
+              size: 16, color: cs.onSurface.withAlpha(120)),
           onTap: () => Navigator.pushNamed(context, AppRoutes.settings),
         ),
         ListTile(
           leading: ThemeIcon('key', color: cs.onSurface.withAlpha(120)),
-          title: Text('Key Management',
-              style: TextStyle(color: cs.onSurface)),
-          trailing:
-              ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(120)),
+          title:
+              Text('Key Management', style: TextStyle(color: cs.onSurface)),
+          trailing: ThemeIcon('caretRight',
+              size: 16, color: cs.onSurface.withAlpha(120)),
           onTap: () => Navigator.pushNamed(context, AppRoutes.keyManagement),
         ),
         ListTile(
           leading: ThemeIcon('images', color: cs.onSurface.withAlpha(120)),
-          title: Text('Migrate Gallery',
-              style: TextStyle(color: cs.onSurface)),
-          trailing:
-              ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(120)),
+          title:
+              Text('Migrate Gallery', style: TextStyle(color: cs.onSurface)),
+          trailing: ThemeIcon('caretRight',
+              size: 16, color: cs.onSurface.withAlpha(120)),
           onTap: () => Navigator.pushNamed(context, AppRoutes.migration),
         ),
         const SizedBox(height: 40),
         Center(
             child: Text('CipherNest v0.5.0 Beta',
                 style: TextStyle(color: cs.onSurface.withAlpha(60)))),
+        const SizedBox(height: 120),
       ],
     );
   }

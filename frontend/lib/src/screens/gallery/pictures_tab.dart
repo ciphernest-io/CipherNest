@@ -27,10 +27,15 @@ import '../../../services/notify.dart';
 import '../../utils/bulk_ops.dart';
 import '../../../services/sync_service.dart';
 import '../share/share_dialog.dart';
+import 'gallery_chrome.dart';
 import 'image_viewer_screen.dart';
 
 class PicturesTab extends StatefulWidget {
-  const PicturesTab({super.key});
+  /// Scroll-driven chrome bridge to GalleryScreen's floating overlays.
+  /// Null (tests, embedding elsewhere) disables all reporting.
+  final GalleryChrome? chrome;
+
+  const PicturesTab({super.key, this.chrome});
 
   @override
   State<PicturesTab> createState() => PicturesTabState();
@@ -64,7 +69,7 @@ class PicturesTabState extends State<PicturesTab> {
     _ZoomLevel(3, _Grouping.day),
     _ZoomLevel(0, _Grouping.day), // justified
   ];
-  static const int _defaultZoomIndex = 4; // classic 3-column day grid
+  static const int _defaultZoomIndex = 3; // 4-column day grid (OneUI)
 
   late Future<List<CnestFile>> _filesFuture;
   bool _favoritesOnly = false;
@@ -72,6 +77,13 @@ class PicturesTabState extends State<PicturesTab> {
   final Set<String> _selectedIds = {};
 
   int _zoomIndex = _defaultZoomIndex;
+
+  // OneUI header: the big "Gallery" title lives at the top of the scroll
+  // view, hidden by the initial offset; swiping down at the top reveals it
+  // with a fade. The controller is created once the screen height is known.
+  ScrollController? _scrollCtrl;
+  double _headerH = 0;
+  Timer? _motionTimer;
 
   // Pinch detection runs on RAW pointer events, not a GestureDetector.
   // A scale recognizer has to win the gesture arena against the scroll
@@ -95,6 +107,76 @@ class PicturesTabState extends State<PicturesTab> {
   // too — retrying every build would hammer the disk.
   static final Map<String, double> _ratioCache = {};
   bool _resolvingRatios = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_scrollCtrl == null) {
+      _headerH = MediaQuery.sizeOf(context).height * 0.30;
+      _scrollCtrl = ScrollController(initialScrollOffset: _headerH)
+        ..addListener(_onScrollTick);
+    }
+  }
+
+  void _onScrollTick() {
+    final chrome = widget.chrome;
+    final ctrl = _scrollCtrl;
+    if (chrome == null || ctrl == null || !ctrl.hasClients) return;
+    final under = ctrl.offset > _headerH - 4;
+    if (chrome.scrolledUnder.value != under) {
+      chrome.scrolledUnder.value = under;
+    }
+  }
+
+  /// Chrome hide/show + back-to-top, from raw scroll notifications:
+  /// downward motion hides the pills, upward brings them back, and any
+  /// motion far from the top shows back-to-top; a short quiet period
+  /// restores everything.
+  bool _onScrollNotification(ScrollNotification n) {
+    final chrome = widget.chrome;
+    if (chrome == null || n.metrics.axis != Axis.vertical) return false;
+    if (n is ScrollUpdateNotification) {
+      final delta = n.scrollDelta ?? 0;
+      if (delta > 1) {
+        chrome.chromeHidden.value = true;
+      } else if (delta < -1) {
+        chrome.chromeHidden.value = false;
+      }
+      if (delta.abs() > 1 && n.metrics.pixels > _headerH + 400) {
+        chrome.showBackToTop.value = true;
+      }
+      _motionTimer?.cancel();
+      _motionTimer = Timer(const Duration(milliseconds: 700), () {
+        chrome.chromeHidden.value = false;
+        chrome.showBackToTop.value = false;
+      });
+    }
+    return false;
+  }
+
+  /// Back-to-top target: the collapsed position (grid top, header hidden).
+  void scrollToTop() {
+    final ctrl = _scrollCtrl;
+    if (ctrl == null || !ctrl.hasClients) return;
+    ctrl.animateTo(
+      _headerH,
+      duration: const Duration(milliseconds: 450),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  bool get favoritesOnly => _favoritesOnly;
+  void setFavoritesOnly(bool v) {
+    if (_favoritesOnly == v) return;
+    setState(() => _favoritesOnly = v);
+    _refresh();
+  }
+
+  /// Overflow-menu entry: selection with nothing picked yet.
+  void startSelection() {
+    setState(() => _selectionMode = true);
+    _updateSelectionClaim();
+  }
 
   @override
   void initState() {
@@ -267,6 +349,8 @@ class PicturesTabState extends State<PicturesTab> {
 
   @override
   void dispose() {
+    _motionTimer?.cancel();
+    _scrollCtrl?.dispose();
     SyncService().syncNotifier.removeListener(_onSyncComplete);
     DatabaseService().removeListener(_onDatabaseChanged);
     _selectionClaim?.release();
@@ -331,6 +415,7 @@ class PicturesTabState extends State<PicturesTab> {
   // shows.
   InsetClaim? _selectionClaim;
   void _updateSelectionClaim() {
+    widget.chrome?.selectionActive.value = _selectionMode;
     if (_selectionMode && _selectionClaim == null) {
       _selectionClaim = ActivityPillInset.claim(60);
     } else if (!_selectionMode) {
@@ -562,11 +647,23 @@ class PicturesTabState extends State<PicturesTab> {
                   onPointerMove: _onPointerMove,
                   onPointerUp: _onPointerEnd,
                   onPointerCancel: _onPointerEnd,
-                  child: CustomScrollView(
+                  child: NotificationListener<ScrollNotification>(
+                    onNotification: _onScrollNotification,
+                    child: CustomScrollView(
+                    controller: _scrollCtrl,
                     physics: _pinchActive
                         ? const NeverScrollableScrollPhysics()
                         : const AlwaysScrollableScrollPhysics(),
                     slivers: [
+                      SliverToBoxAdapter(child: _bigHeader(files.length)),
+                      // Collapsed state: the grid starts BELOW the floating
+                      // search/overflow buttons.
+                      SliverToBoxAdapter(
+                        child: SizedBox(
+                          height:
+                              MediaQuery.paddingOf(context).top + 56,
+                        ),
+                      ),
                       for (int s = 0; s < sections.length; s++) ...[
                         SliverPersistentHeader(
                           pinned: false,
@@ -603,7 +700,13 @@ class PicturesTabState extends State<PicturesTab> {
                             ),
                           ),
                       ],
+                      SliverToBoxAdapter(
+                        child: SizedBox(
+                          height: MediaQuery.paddingOf(context).bottom + 96,
+                        ),
+                      ),
                     ],
+                  ),
                   ),
                 ),
               ),
@@ -788,8 +891,10 @@ class PicturesTabState extends State<PicturesTab> {
 
   Widget _buildToolbar(List<CnestFile> all) {
     final cs = Theme.of(context).colorScheme;
-    if (_selectionMode) {
-      return Container(
+    if (!_selectionMode) return const SizedBox.shrink();
+    return SafeArea(
+      bottom: false,
+      child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         color: cs.surfaceContainerHighest,
         child: Row(
@@ -835,35 +940,50 @@ class PicturesTabState extends State<PicturesTab> {
             ),
           ],
         ),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-      child: Row(
-        children: [
-          FilterChip(
-            label: const Text('Favorites'),
-            avatar: ThemeIcon(
-              'heart',
-              selected: _favoritesOnly,
-              size: 14,
-              color: _favoritesOnly ? cs.error : cs.onSurface,
+      ),
+    );
+  }
+
+  /// The revealed 30%-height header: centered title + item count, fading
+  /// in with the reveal (opacity follows the scroll offset).
+  Widget _bigHeader(int count) {
+    final ctrl = _scrollCtrl;
+    if (ctrl == null) return const SizedBox.shrink();
+    return SizedBox(
+      height: _headerH,
+      child: AnimatedBuilder(
+        animation: ctrl,
+        builder: (context, _) {
+          final cs = Theme.of(context).colorScheme;
+          final off = ctrl.hasClients ? ctrl.offset : _headerH;
+          final frac = (1 - off / _headerH).clamp(0.0, 1.0);
+          return Opacity(
+            opacity: Curves.easeIn.transform(frac),
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    'Gallery',
+                    style: TextStyle(
+                      color: cs.onSurface,
+                      fontSize: 30,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '$count item${count == 1 ? '' : 's'}',
+                    style: TextStyle(
+                      color: cs.onSurface.withValues(alpha: 0.55),
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
             ),
-            selected: _favoritesOnly,
-            onSelected: (v) {
-              setState(() => _favoritesOnly = v);
-              _refresh();
-            },
-          ),
-          const Spacer(),
-          Text(
-            '${all.length} photo${all.length == 1 ? '' : 's'}',
-            style: TextStyle(
-              color: cs.onSurface.withAlpha(140),
-              fontSize: 12,
-            ),
-          ),
-        ],
+          );
+        },
       ),
     );
   }

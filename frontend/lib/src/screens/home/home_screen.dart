@@ -218,7 +218,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final cards = <Widget>[
       _DashboardCard(
-        title: 'Photos & Videos',
+        title: 'Gallery',
         icon: 'images',
         color: cs.primary,
         showCardArt: true,
