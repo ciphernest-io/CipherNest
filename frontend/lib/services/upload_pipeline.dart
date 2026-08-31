@@ -1,3 +1,4 @@
+import 'dart:isolate';
 import 'dart:io';
 import 'dart:ui' as ui;
 
