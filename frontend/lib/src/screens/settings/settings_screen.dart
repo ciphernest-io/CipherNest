@@ -751,6 +751,62 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _handleRemoveAccount(String accountId) async {
     final accounts = AccountRegistry().accounts;
     final account = accounts.firstWhere((a) => a.id == accountId);
+
+    // Disconnecting the LAST account is a sign-out of the whole app: a
+    // vault with no cloud is a dead end for most users, so the ruling
+    // (Aug 31) is a full local reset back to onboarding. Files stay
+    // encrypted in the cloud; the phrase restores them. Anything that
+    // never finished uploading dies with the local index, so count it
+    // and say so before asking.
+    if (accounts.length == 1) {
+      int pendingUploads = 0;
+      try {
+        pendingUploads = (await DatabaseService().getPendingUploads()).length;
+      } catch (_) {}
+      if (!mounted) return;
+      final pendingLine = pendingUploads == 0
+          ? ''
+          : '
+
+$pendingUploads file${pendingUploads == 1 ? ' has' : 's have'} '
+              'not finished uploading and will be lost.';
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          scrollable: true,
+          title: Text('Disconnect ${account.email}?'),
+          content: Text(
+            'This is your only connected account, so disconnecting it also '
+            'signs you out: the vault is removed from this phone (keys, '
+            'local index, cached files) and the app starts fresh.
+
+'
+            'Your encrypted files stay on ${account.providerName}. Your '
+            '12-word recovery phrase brings everything back, here or on '
+            'any device.$pendingLine',
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(
+                'Disconnect and sign out',
+                style: TextStyle(color: Theme.of(ctx).colorScheme.error),
+              ),
+            ),
+          ],
+        ),
+      );
+      if (confirm != true || !mounted) return;
+      await VaultResetService().forgetVaultOnDevice();
+      if (!mounted) return;
+      Navigator.pushNamedAndRemoveUntil(
+          context, AppRoutes.onboarding, (r) => false);
+      return;
+    }
+
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -789,8 +845,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (newActive != null) {
         DatabaseService().setCurrentAccount(newActive.id);
       } else if (mounted) {
-        // No accounts left, but the vault LIVES here — attach mode, never
-        // the signup picker.
+        // Unreachable since the last-account branch above resets the app,
+        // but if a race ever lands here: attach mode, never the signup
+        // picker (the vault still lives on this device).
         Navigator.pushNamedAndRemoveUntil(
             context, AppRoutes.cloudSelection, (r) => false,
             arguments: CloudSelectionArgs.attach);
