@@ -85,7 +85,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
 
   String get _priceSub => switch (_plan) {
         _Plan.monthly => 'Cancel anytime.',
-        _Plan.annual => r'About $1.66 a month. Two months free.',
+        _Plan.annual => 'Save 17% vs monthly.',
         _Plan.lifetime =>
           "Founder's Edition. Limited to the first 1,000 supporters.",
       };
@@ -132,16 +132,6 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  'Free stores your first 1,000 files with the same '
-                  'encryption. Plus removes the cap and turns everything on.',
-                  textAlign: TextAlign.center,
-                  style: text.bodyMedium?.copyWith(
-                    color: cs.onSurface.withValues(alpha: 0.72),
-                    height: 1.4,
-                  ),
-                ),
                 const SizedBox(height: 20),
                 Container(
                   padding: const EdgeInsets.all(18),
@@ -180,12 +170,14 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                           ),
                         ),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 18),
+                      // The price IS the card: display-class size.
                       Text(
                         _priceLine,
                         textAlign: TextAlign.center,
-                        style: text.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.w700,
+                        style: text.headlineLarge?.copyWith(
+                          fontSize: 38,
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
                       const SizedBox(height: 4),
@@ -196,8 +188,25 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                           color: cs.onSurface.withValues(alpha: 0.6),
                         ),
                       ),
-                      const SizedBox(height: 16),
-                      const _FeatureRow('Unlimited encrypted uploads'),
+                      const SizedBox(height: 14),
+                      // The cap is the pitch: keep it inside the card,
+                      // impossible to miss.
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: cs.primary.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(t.rInput),
+                        ),
+                        child: Text(
+                          'Free stops at 1,000 uploads. Plus has no limit.',
+                          textAlign: TextAlign.center,
+                          style: text.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
                       const _FeatureRow(
                           'Auto-sync every album in the background'),
                       const _FeatureRow('In-app photo editor'),
@@ -245,16 +254,6 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                         fontSize: 12,
                       ),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Prices in USD. Billed through Google Play. Cancel anytime '
-                  'in your Play Store subscriptions.',
-                  textAlign: TextAlign.center,
-                  style: text.bodySmall?.copyWith(
-                    color: cs.onSurface.withValues(alpha: 0.45),
-                    fontSize: 11,
                   ),
                 ),
               ],

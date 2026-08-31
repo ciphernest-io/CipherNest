@@ -13,7 +13,11 @@ import '../../widgets/theme_icon.dart';
 /// rows toggle, and enrolling one asks "from now" vs "include existing"
 /// (the latter queues a bucket-scoped backfill).
 class BackupAlbumsScreen extends StatefulWidget {
-  const BackupAlbumsScreen({super.key});
+  const BackupAlbumsScreen({super.key, this.deferBackfill = false});
+
+  /// Quick-settings path: enrollments queue their backfill but nothing
+  /// uploads until onboarding actually enters the app (MTR#2 A11).
+  final bool deferBackfill;
 
   @override
   State<BackupAlbumsScreen> createState() => _BackupAlbumsScreenState();
@@ -50,7 +54,11 @@ class _BackupAlbumsScreenState extends State<BackupAlbumsScreen> {
           existingCount: album.count);
       if (backfill == null) return; // dismissed = don't enroll
       await BackupSelectionService().enroll(album.name, backfill: backfill);
-      if (backfill) unawaited(BackupBackfillRunner().runPending());
+      // Deferred (quick settings): the queue is persisted; the onboarding
+      // finish fires runPending once the user actually enters.
+      if (backfill && !widget.deferBackfill) {
+        unawaited(BackupBackfillRunner().runPending());
+      }
     } else {
       await BackupSelectionService().unenroll(album.name);
     }
@@ -285,7 +293,8 @@ Future<bool> showBackupAlbumChoiceSheet(
   if (!context.mounted) return true;
   await Navigator.push(
     context,
-    MaterialPageRoute(builder: (_) => const BackupAlbumsScreen()),
+    MaterialPageRoute(
+        builder: (_) => BackupAlbumsScreen(deferBackfill: deferBackfill)),
   );
   return true;
 }
