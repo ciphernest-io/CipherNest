@@ -26,6 +26,7 @@ class GalleryScreen extends StatefulWidget {
 class _GalleryScreenState extends State<GalleryScreen> {
   int _bottomNavIndex = 0;
   final _picturesKey = GlobalKey<PicturesTabState>();
+  final _albumsKey = GlobalKey<AlbumsTabState>();
   final _chrome = GalleryChrome();
 
   @override
@@ -38,9 +39,18 @@ class _GalleryScreenState extends State<GalleryScreen> {
     if (index == _bottomNavIndex) return;
     setState(() => _bottomNavIndex = index);
     // Tab content changes under the overlays: reset scroll-driven state so
-    // pills are visible and back-to-top is gone.
+    // pills are visible and back-to-top is gone, then let the now-visible
+    // tab re-publish its own scrolled-under state.
     _chrome.chromeHidden.value = false;
     _chrome.showBackToTop.value = false;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      switch (_bottomNavIndex) {
+        case 0:
+          _picturesKey.currentState?.reportChrome();
+        case 1:
+          _albumsKey.currentState?.reportChrome();
+      }
+    });
   }
 
   @override
@@ -56,7 +66,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
               index: _bottomNavIndex,
               children: [
                 PicturesTab(key: _picturesKey, chrome: _chrome),
-                SafeArea(bottom: false, child: const AlbumsTab()),
+                AlbumsTab(key: _albumsKey, chrome: _chrome),
                 SafeArea(bottom: false, child: const StoriesTab()),
                 SafeArea(bottom: false, child: _buildMenuTab()),
               ],
@@ -86,9 +96,11 @@ class _GalleryScreenState extends State<GalleryScreen> {
             valueListenable: _chrome.scrolledUnder,
             builder: (context, under, _) {
               final visible = !hidden && !selection;
-              // Off the Pictures tab there is no big header, so content is
-              // always "under" the buttons.
-              final pillBg = _bottomNavIndex == 0 ? under : true;
+              // Pictures and Albums have the reveal header; the other
+              // tabs' content is always "under" the buttons.
+              final pillBg = (_bottomNavIndex == 0 || _bottomNavIndex == 1)
+                  ? under
+                  : true;
               return IgnorePointer(
                 ignoring: !visible,
                 child: AnimatedOpacity(
@@ -109,6 +121,13 @@ class _GalleryScreenState extends State<GalleryScreen> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        if (_bottomNavIndex == 1)
+                          IconButton(
+                            tooltip: 'New album',
+                            icon: ThemeIcon('plus', color: cs.onSurface),
+                            onPressed: () =>
+                                _albumsKey.currentState?.createAlbum(),
+                          ),
                         IconButton(
                           tooltip: 'Search',
                           icon: ThemeIcon('magnifyingGlass',
@@ -215,7 +234,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 _navItem(0, 'image', 'Pictures'),
-                _navItem(1, 'folderSimple', 'Albums'),
+                _navItem(1, 'photo_album', 'Albums'),
                 _navItem(2, 'clockCounterClockwise', 'Stories'),
                 _navItem(3, 'list', 'Menu'),
               ],

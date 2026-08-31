@@ -16,15 +16,111 @@ import '../../../services/encryption_service.dart';
 import '../../../services/migration_service.dart';
 import '../../../services/sync_service.dart';
 import '../settings/backup_albums_screen.dart';
+import 'gallery_chrome.dart';
 
 class AlbumsTab extends StatefulWidget {
-  const AlbumsTab({super.key});
+  const AlbumsTab({super.key, this.chrome});
+
+  /// Scroll-driven chrome bridge to GalleryScreen's floating overlays.
+  final GalleryChrome? chrome;
 
   @override
-  State<AlbumsTab> createState() => _AlbumsTabState();
+  State<AlbumsTab> createState() => AlbumsTabState();
 }
 
-class _AlbumsTabState extends State<AlbumsTab> {
+class AlbumsTabState extends State<AlbumsTab> {
+  // OneUI header: same reveal pattern as PicturesTab.
+  ScrollController? _scrollCtrl;
+  double _headerH = 0;
+  Timer? _motionTimer;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_scrollCtrl == null) {
+      _headerH = MediaQuery.sizeOf(context).height * 0.30;
+      _scrollCtrl = ScrollController(initialScrollOffset: _headerH)
+        ..addListener(_onScrollTick);
+    }
+  }
+
+  void _onScrollTick() {
+    final chrome = widget.chrome;
+    final ctrl = _scrollCtrl;
+    if (chrome == null || ctrl == null || !ctrl.hasClients) return;
+    final under = ctrl.offset > _headerH + 8;
+    if (chrome.scrolledUnder.value != under) {
+      chrome.scrolledUnder.value = under;
+    }
+  }
+
+  /// Re-publish scroll-derived chrome state (used after tab switches).
+  void reportChrome() => _onScrollTick();
+
+  bool _onScrollNotification(ScrollNotification n) {
+    final chrome = widget.chrome;
+    if (chrome == null || n.metrics.axis != Axis.vertical) return false;
+    if (n is ScrollUpdateNotification) {
+      final delta = n.scrollDelta ?? 0;
+      if (delta > 1) {
+        chrome.chromeHidden.value = true;
+      } else if (delta < -1) {
+        chrome.chromeHidden.value = false;
+      }
+      _motionTimer?.cancel();
+      _motionTimer = Timer(const Duration(milliseconds: 700), () {
+        chrome.chromeHidden.value = false;
+      });
+    }
+    return false;
+  }
+
+  /// Shell entry (the + button in the floating top bar).
+  void createAlbum() => _createAlbum();
+
+  Widget _bigHeader() {
+    final ctrl = _scrollCtrl;
+    if (ctrl == null) return const SizedBox.shrink();
+    final count = _albums.length + _deviceAlbums.length;
+    return SizedBox(
+      height: _headerH,
+      child: AnimatedBuilder(
+        animation: ctrl,
+        builder: (context, _) {
+          final cs = Theme.of(context).colorScheme;
+          final off = ctrl.hasClients ? ctrl.offset : _headerH;
+          final frac = (1 - off / _headerH).clamp(0.0, 1.0);
+          return Opacity(
+            opacity: Curves.easeIn.transform(frac),
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    'Albums',
+                    style: TextStyle(
+                      color: cs.onSurface,
+                      fontSize: 30,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '$count album${count == 1 ? '' : 's'}',
+                    style: TextStyle(
+                      color: cs.onSurface.withValues(alpha: 0.55),
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   List<CnestAlbum> _albums = [];
   List<CnestAlbum> _deviceAlbums = [];
   bool _loading = true;
@@ -48,6 +144,8 @@ class _AlbumsTabState extends State<AlbumsTab> {
 
   @override
   void dispose() {
+    _motionTimer?.cancel();
+    _scrollCtrl?.dispose();
     SyncService().syncNotifier.removeListener(_reload);
     DatabaseService().removeListener(_reload);
     super.dispose();
@@ -133,9 +231,15 @@ class _AlbumsTabState extends State<AlbumsTab> {
 
     final cs = Theme.of(context).colorScheme;
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+    return NotificationListener<ScrollNotification>(
+      onNotification: _onScrollNotification,
+      child: ListView(
+      controller: _scrollCtrl,
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 120),
       children: [
+        _bigHeader(),
+        // Collapsed state: content starts below the floating buttons.
+        SizedBox(height: MediaQuery.paddingOf(context).top + 56),
         if (_deviceAlbums.isNotEmpty) ...[
           _sectionHeader('On this phone', cs),
           _grid([
@@ -193,6 +297,7 @@ class _AlbumsTabState extends State<AlbumsTab> {
             ]),
         ],
       ],
+      ),
     );
   }
 

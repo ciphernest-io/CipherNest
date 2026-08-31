@@ -54,7 +54,8 @@ class _ZoomLevel {
 
 enum _Grouping { year, month, day }
 
-class PicturesTabState extends State<PicturesTab> {
+class PicturesTabState extends State<PicturesTab>
+    with TickerProviderStateMixin {
   static const String _zoomLevelPrefKey = 'gallery_zoom_level';
   static const String _legacyColumnPrefKey = 'gallery_column_count';
 
@@ -101,6 +102,21 @@ class PicturesTabState extends State<PicturesTab> {
   bool _pinchActive = false;
   double? _pinchSpanBaseline;
 
+  // Continuous pinch: a live scale between ladder steps plus a settle/fade
+  // animation on each step, so one motion glides across levels instead of
+  // snapping at every threshold.
+  final ValueNotifier<double> _pinchScale = ValueNotifier(1.0);
+  late final AnimationController _settleCtrl = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 240));
+  double _settleFrom = 1.0;
+  bool _fadeOnSettle = false;
+
+  /// Visual column density of a ladder rung; the justified level behaves
+  /// like ~2.2 columns for scale-continuity math.
+  double _effCols(int idx) => _zoomLevels[idx].isJustified
+      ? 2.2
+      : _zoomLevels[idx].columns.toDouble();
+
   // Aspect ratios (w/h) for the justified layout, resolved lazily off the
   // MediaStore entry / local file / cached thumb. Static so ratios survive
   // tab remounts. Files we couldn't measure get a neutral fallback cached
@@ -122,7 +138,7 @@ class PicturesTabState extends State<PicturesTab> {
     final chrome = widget.chrome;
     final ctrl = _scrollCtrl;
     if (chrome == null || ctrl == null || !ctrl.hasClients) return;
-    final under = ctrl.offset > _headerH - 4;
+    final under = ctrl.offset > _headerH + 8;
     if (chrome.scrolledUnder.value != under) {
       chrome.scrolledUnder.value = under;
     }
@@ -153,6 +169,9 @@ class PicturesTabState extends State<PicturesTab> {
     }
     return false;
   }
+
+  /// Re-publish scroll-derived chrome state (used after tab switches).
+  void reportChrome() => _onScrollTick();
 
   /// Back-to-top target: the collapsed position (grid top, header hidden).
   void scrollToTop() {
@@ -245,14 +264,31 @@ class PicturesTabState extends State<PicturesTab> {
     }
     final relative = span / baseline;
     if (relative > 1.25 && _zoomIndex < _zoomLevels.length - 1) {
-      setState(() => _zoomIndex += 1); // spread → zoom in, bigger tiles
-      _pinchSpanBaseline = span;
+      _stepZoom(1, relative, span); // spread → zoom in, bigger tiles
       return;
     }
     if (relative < 0.8 && _zoomIndex > 0) {
-      setState(() => _zoomIndex -= 1); // pinch → zoom out, denser grid
-      _pinchSpanBaseline = span;
+      _stepZoom(-1, relative, span); // pinch → zoom out, denser grid
+      return;
     }
+    // Between steps the grid follows the fingers directly (paint-only).
+    _pinchScale.value = relative.clamp(0.78, 1.32);
+  }
+
+  /// Commit one ladder step and hand the accumulated finger scale to the
+  /// new grid: the new level enters at the visually-equivalent scale and
+  /// settles to 1 while its tiles fade in — one continuous motion can walk
+  /// the whole ladder without a visible stop.
+  void _stepZoom(int direction, double relative, double span) {
+    final oldEff = _effCols(_zoomIndex);
+    final newIdx = _zoomIndex + direction;
+    final newEff = _effCols(newIdx);
+    setState(() => _zoomIndex = newIdx);
+    _pinchSpanBaseline = span;
+    _pinchScale.value = 1.0;
+    _settleFrom = (relative * newEff / oldEff).clamp(0.6, 1.6);
+    _fadeOnSettle = true;
+    _settleCtrl.forward(from: 0);
   }
 
   void _onPointerEnd(PointerEvent event) {
@@ -262,6 +298,13 @@ class PicturesTabState extends State<PicturesTab> {
     // remains after a pinch shouldn't fling the list.
     if (_pinchPointers.isEmpty && _pinchActive) {
       setState(() => _pinchActive = false);
+      // Release any leftover between-step scale without a snap.
+      if ((_pinchScale.value - 1).abs() > 0.01) {
+        _settleFrom = _pinchScale.value;
+        _fadeOnSettle = false;
+        _pinchScale.value = 1.0;
+        _settleCtrl.forward(from: 0);
+      }
       _persistZoomLevel();
     }
   }
@@ -351,6 +394,8 @@ class PicturesTabState extends State<PicturesTab> {
   void dispose() {
     _motionTimer?.cancel();
     _scrollCtrl?.dispose();
+    _settleCtrl.dispose();
+    _pinchScale.dispose();
     SyncService().syncNotifier.removeListener(_onSyncComplete);
     DatabaseService().removeListener(_onDatabaseChanged);
     _selectionClaim?.release();
@@ -647,7 +692,29 @@ class PicturesTabState extends State<PicturesTab> {
                   onPointerMove: _onPointerMove,
                   onPointerUp: _onPointerEnd,
                   onPointerCancel: _onPointerEnd,
-                  child: NotificationListener<ScrollNotification>(
+                  child: AnimatedBuilder(
+                    animation: Listenable.merge([_pinchScale, _settleCtrl]),
+                    builder: (context, child) {
+                      final settle = _settleFrom +
+                          (1 - _settleFrom) *
+                              Curves.easeOutCubic
+                                  .transform(_settleCtrl.value);
+                      final scale = _pinchScale.value * settle;
+                      final fade = _fadeOnSettle
+                          ? 0.35 +
+                              0.65 *
+                                  Curves.easeOut.transform(_settleCtrl.value)
+                          : 1.0;
+                      return Opacity(
+                        opacity: fade.clamp(0.0, 1.0),
+                        child: Transform.scale(
+                          scale: scale,
+                          alignment: Alignment.center,
+                          child: child,
+                        ),
+                      );
+                    },
+                    child: NotificationListener<ScrollNotification>(
                     onNotification: _onScrollNotification,
                     child: CustomScrollView(
                     controller: _scrollCtrl,
@@ -706,6 +773,7 @@ class PicturesTabState extends State<PicturesTab> {
                         ),
                       ),
                     ],
+                  ),
                   ),
                   ),
                 ),
