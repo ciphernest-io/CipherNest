@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -56,14 +57,14 @@ class InsetClaim {
 /// LOAD-BEARING: this tree lives above the Navigator, so without it every
 /// Text renders Flutter's missing-Material error style.
 ///
-/// The pill is a DYNAMIC component (Aug 31 ruling): a running task shows
-/// the full pill for a few seconds, then minimizes into a small floating
-/// ball on the screen edge that shows only the loader. Tapping the ball
-/// re-expands (for another few seconds); tapping the expanded pill
-/// minimizes it immediately; long-press opens the task sheet. The ball can
-/// be dragged anywhere and snaps to the nearest edge on release — or to
-/// the opposite edge when flung. Terminal results always show the full
-/// pill (ActivityCenter hides them on its own clock).
+/// The pill is a DYNAMIC component: a running task shows the full pill for
+/// a few seconds, then MORPHS (one continuously animated blob: position,
+/// size and content together) into a small floating ball on the screen
+/// edge showing only the loader. Tap the ball to morph it back out; tap
+/// the expanded pill to send it back; long-press either for the task
+/// sheet. The ball drags anywhere and snaps to the nearest edge — or the
+/// opposite one when flung. Completion never barges back in: minimized
+/// tasks finish as a check (or warning) inside the ball.
 class ActivityOverlay extends StatefulWidget {
   const ActivityOverlay({super.key});
 
@@ -74,7 +75,9 @@ class ActivityOverlay extends StatefulWidget {
 class _ActivityOverlayState extends State<ActivityOverlay> {
   /// How long the full pill stays before minimizing into the ball.
   static const _expandedHold = Duration(seconds: 4);
+  static const _morph = Duration(milliseconds: 340);
   static const _ballSize = 44.0;
+  static const _pillHeight = 48.0;
   static const _edgePad = 8.0;
 
   bool _minimized = false;
@@ -112,10 +115,10 @@ class _ActivityOverlayState extends State<ActivityOverlay> {
       _minimized = false;
       _lastRunningId = null;
     } else if (mode == PillMode.terminal) {
-      // Results are always shown in full.
+      // Results stay wherever the pill already is: a minimized task
+      // finishes as a check inside the ball instead of barging back in.
       _holdTimer?.cancel();
       _holdTimer = null;
-      _minimized = false;
     } else {
       if (task.id != _lastRunningId) {
         // A new task announces itself expanded.
@@ -142,7 +145,7 @@ class _ActivityOverlayState extends State<ActivityOverlay> {
 
   void _expand() {
     _minimized = false;
-    _armHoldTimer();
+    if (ActivityCenter().pillMode == PillMode.active) _armHoldTimer();
     setState(() {});
   }
 
@@ -169,18 +172,16 @@ class _ActivityOverlayState extends State<ActivityOverlay> {
         final topY =
             MediaQuery.paddingOf(context).top + kToolbarHeight + 10 + inset;
 
-        final pillVisible =
-            mode != PillMode.hidden && task != null && !_minimized;
-        final ballVisible =
-            mode == PillMode.active && task != null && _minimized;
+        final visible = mode != PillMode.hidden && task != null;
+        final expanded = visible && !_minimized;
 
         return Positioned.fill(
           child: Material(
             type: MaterialType.transparency,
             child: Stack(
               children: [
-                // Pill FIRST: it is the long-lived element and keeps a
-                // stable y regardless of toast lifecycle.
+                // Toast: fixed top slot; slides down while the expanded
+                // pill occupies the row above it.
                 Positioned(
                   left: 0,
                   right: 0,
@@ -188,13 +189,16 @@ class _ActivityOverlayState extends State<ActivityOverlay> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (pillVisible) _buildPill(context, mode, task),
-                      if (pillVisible) const SizedBox(height: 8),
+                      AnimatedContainer(
+                        duration: _morph,
+                        curve: Curves.easeInOutCubic,
+                        height: expanded ? _pillHeight + 8 : 0,
+                      ),
                       const ToastPill(),
                     ],
                   ),
                 ),
-                if (ballVisible) _buildBall(context, task, size, topY),
+                if (visible) _buildBlob(context, mode, task, size, topY),
               ],
             ),
           ),
@@ -203,117 +207,171 @@ class _ActivityOverlayState extends State<ActivityOverlay> {
     );
   }
 
-  Widget _buildBall(
-      BuildContext context, ActivityTask task, Size size, double topY) {
+  /// The single morphing element. Expanded and minimized are two target
+  /// rects of the SAME AnimatedPositioned container, so every state change
+  /// is one continuous blob movement instead of a swap.
+  Widget _buildBlob(BuildContext context, PillMode mode, ActivityTask task,
+      Size size, double topY) {
     final cs = Theme.of(context).colorScheme;
-    final maxTop = size.height - _ballSize - 96;
+    final t = ThemeController().tokens;
+    final terminal = mode == PillMode.terminal;
+    final failed = task.state == ActivityState.failure;
+    final expanded = !_minimized;
     final dragging = _dragPos != null;
-    final top = (dragging ? _dragPos!.dy - _ballSize / 2 : (_ballTop ?? topY))
-        .clamp(topY, maxTop)
-        .toDouble();
-    final left = dragging
-        ? (_dragPos!.dx - _ballSize / 2)
-            .clamp(0.0, size.width - _ballSize)
-            .toDouble()
-        : (_onLeft ? _edgePad : size.width - _ballSize - _edgePad);
+
+    final expandedWidth = math.min(340.0, size.width - 32.0);
+    final maxTop = size.height - _ballSize - 96;
+
+    final double width = expanded ? expandedWidth : _ballSize;
+    final double height = expanded ? _pillHeight : _ballSize;
+    final double left;
+    final double top;
+    if (expanded) {
+      left = (size.width - expandedWidth) / 2;
+      top = topY;
+    } else if (dragging) {
+      left = (_dragPos!.dx - _ballSize / 2)
+          .clamp(0.0, size.width - _ballSize)
+          .toDouble();
+      top = (_dragPos!.dy - _ballSize / 2).clamp(topY, maxTop).toDouble();
+    } else {
+      left = _onLeft ? _edgePad : size.width - _ballSize - _edgePad;
+      top = (_ballTop ?? topY).clamp(topY, maxTop).toDouble();
+    }
 
     return AnimatedPositioned(
-      duration: dragging ? Duration.zero : const Duration(milliseconds: 220),
-      curve: Curves.easeOutCubic,
+      duration: dragging ? Duration.zero : _morph,
+      curve: Curves.easeInOutCubic,
       left: left,
       top: top,
+      width: width,
+      height: height,
       child: GestureDetector(
-        onTap: _expand,
-        onLongPress: _openSheet,
-        onPanStart: (d) => setState(() => _dragPos = d.globalPosition),
-        onPanUpdate: (d) => setState(() => _dragPos = d.globalPosition),
-        onPanEnd: (d) {
-          final at = _dragPos;
-          if (at == null) return;
-          final vx = d.velocity.pixelsPerSecond.dx;
-          setState(() {
-            // A real fling beats position: throw it to the edge it points
-            // at (which may be the opposite one).
-            _onLeft = vx.abs() > 500 ? vx < 0 : at.dx < size.width / 2;
-            _ballTop = (at.dy - _ballSize / 2).clamp(topY, maxTop).toDouble();
-            _dragPos = null;
-          });
+        onTap: () {
+          if (!expanded) {
+            _expand();
+          } else if (terminal) {
+            _openSheet();
+          } else {
+            _minimizeNow();
+          }
         },
-        child: Container(
-          width: _ballSize,
-          height: _ballSize,
+        onLongPress: _openSheet,
+        // Swipe-away on the expanded pill (work continues); the ball uses
+        // pan for dragging instead.
+        onHorizontalDragEnd: expanded
+            ? (d) {
+                if (d.velocity.pixelsPerSecond.dx.abs() > 300) {
+                  ActivityCenter().suppressPill();
+                }
+              }
+            : null,
+        onPanStart: expanded
+            ? null
+            : (d) => setState(() => _dragPos = d.globalPosition),
+        onPanUpdate: expanded
+            ? null
+            : (d) => setState(() => _dragPos = d.globalPosition),
+        onPanEnd: expanded
+            ? null
+            : (d) {
+                final at = _dragPos;
+                if (at == null) return;
+                final vx = d.velocity.pixelsPerSecond.dx;
+                setState(() {
+                  // A real fling beats position: throw it to the edge it
+                  // points at (which may be the opposite one).
+                  _onLeft =
+                      vx.abs() > 500 ? vx < 0 : at.dx < size.width / 2;
+                  _ballTop =
+                      (at.dy - _ballSize / 2).clamp(topY, maxTop).toDouble();
+                  _dragPos = null;
+                });
+              },
+        child: AnimatedContainer(
+          duration: dragging ? Duration.zero : _morph,
+          curve: Curves.easeInOutCubic,
           decoration: BoxDecoration(
             color: cs.surfaceContainerHigh,
-            shape: BoxShape.circle,
-            border: Border.all(color: cs.outline.withAlpha(90)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withAlpha(40),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-            ],
+            // rPill (999) rounds both shapes: pill when wide, circle at 44.
+            borderRadius: BorderRadius.circular(t.rPill),
+            border: Border.all(
+                color: failed && terminal
+                    ? t.danger.withAlpha(160)
+                    : cs.outline.withAlpha(90)),
+            boxShadow: expanded
+                ? const []
+                : [
+                    BoxShadow(
+                      color: Colors.black.withAlpha(40),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
           ),
+          clipBehavior: Clip.antiAlias,
           alignment: Alignment.center,
-          child: SizedBox(
-            width: 22,
-            height: 22,
-            child: CircularProgressIndicator(
-              value: task.fraction,
-              strokeWidth: 3,
-            ),
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 180),
+            child: expanded
+                ? _pillContent(context, task, terminal, failed, expandedWidth)
+                : _ballContent(context, task, terminal, failed),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildPill(BuildContext context, PillMode mode, ActivityTask task) {
+  Widget _leadingFor(BuildContext context, ActivityTask task, bool terminal,
+      bool failed, double dim) {
+    final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
+    if (terminal) {
+      return ThemeIcon(failed ? 'warning' : 'check',
+          color: failed ? t.danger : cs.primary, size: dim);
+    }
+    return SizedBox(
+      width: dim,
+      height: dim,
+      child: CircularProgressIndicator(
+        value: task.fraction,
+        strokeWidth: 3,
+        // A faint full track so 0% still reads as a loader filling in,
+        // not an empty hole.
+        backgroundColor: cs.onSurface.withAlpha(31),
+      ),
+    );
+  }
+
+  Widget _ballContent(
+      BuildContext context, ActivityTask task, bool terminal, bool failed) {
+    return KeyedSubtree(
+      key: const ValueKey('ball'),
+      child: _leadingFor(context, task, terminal, failed, 22),
+    );
+  }
+
+  Widget _pillContent(BuildContext context, ActivityTask task, bool terminal,
+      bool failed, double expandedWidth) {
     final center = ActivityCenter();
     final cs = Theme.of(context).colorScheme;
     final t = ThemeController().tokens;
-    final terminal = mode == PillMode.terminal;
-    final failed = task.state == ActivityState.failure;
     final label = terminal ? (task.resultMessage ?? task.label) : task.label;
     final extra = center.extraRunningCount;
 
-    final Widget leading = terminal
-        ? ThemeIcon(failed ? 'warning' : 'check',
-            color: failed ? t.danger : cs.primary, size: 22)
-        : SizedBox(
-            width: 24,
-            height: 24,
-            child: CircularProgressIndicator(
-              value: task.fraction,
-              strokeWidth: 3,
-            ),
-          );
-
-    return Dismissible(
-      key: ValueKey('activity-pill-${task.id}-${mode.name}'),
-      direction: DismissDirection.horizontal,
-      onDismissed: (_) => center.suppressPill(),
-      child: GestureDetector(
-        // Running: tap toggles down to the ball (the sheet moved to
-        // long-press). Terminal: tap opens the sheet as before.
-        onTap: terminal ? _openSheet : _minimizeNow,
-        onLongPress: _openSheet,
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 340),
-          height: 48,
+    // OverflowBox pins the row at its full width during the morph, so the
+    // shrinking container clips it instead of the Row overflowing.
+    return KeyedSubtree(
+      key: const ValueKey('pill'),
+      child: OverflowBox(
+        minWidth: expandedWidth,
+        maxWidth: expandedWidth,
+        child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14),
-          decoration: BoxDecoration(
-            color: cs.surfaceContainerHigh,
-            borderRadius: BorderRadius.circular(t.rPill),
-            border: Border.all(
-                color: failed && terminal
-                    ? t.danger.withAlpha(160)
-                    : cs.outline.withAlpha(90)),
-          ),
           child: Row(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              leading,
+              _leadingFor(context, task, terminal, failed, 24),
               const SizedBox(width: 10),
               Flexible(
                 child: Text(

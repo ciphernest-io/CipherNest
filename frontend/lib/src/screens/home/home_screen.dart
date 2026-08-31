@@ -244,8 +244,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         color: cs.primary,
         onTap: () => Navigator.pushNamed(context, AppRoutes.audio),
       ),
-      // Other Files has no card (Aug 31 ruling): loose files live in the
-      // Folders view; the route stays for deep entries.
+      // Other Files is gone entirely (Aug 31 ruling): loose files are
+      // reachable through the Folders view.
     ];
 
     return Scaffold(
@@ -505,7 +505,9 @@ class _DashboardCard extends StatelessWidget {
                   // readable.
                   Positioned.fill(
                     child: Opacity(
-                      opacity: 0.22,
+                      // 0.44: half as faded as the original 0.22 (Aug 31),
+                      // still light enough for the label to read.
+                      opacity: 0.44,
                       child: Image.asset(
                         tokens.cardArtAsset,
                         fit: BoxFit.cover,

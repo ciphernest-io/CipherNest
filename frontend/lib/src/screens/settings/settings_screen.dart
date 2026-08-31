@@ -1619,7 +1619,11 @@ class _ThemePackTile extends StatelessWidget {
                 ClipRRect(
                   borderRadius: BorderRadius.circular(t.rIc),
                   child: Image.asset(
-                    t.cardArtAsset,
+                    // Always the vivid (dark-mode) art: this is a preview
+                    // with no text over it, so the light-mode washed
+                    // variant just looks broken here.
+                    ThemePackTokens.forPackMode(pack, Brightness.dark)
+                        .cardArtAsset,
                     width: 76,
                     height: 76,
                     fit: BoxFit.cover,

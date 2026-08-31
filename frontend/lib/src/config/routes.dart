@@ -13,7 +13,6 @@ import '../screens/cloud_selection/cloud_selection_screen.dart';
 import '../screens/home/home_screen.dart';
 import '../screens/gallery/gallery_screen.dart';
 import '../screens/documents/documents_screen.dart';
-import '../screens/documents/other_files_screen.dart';
 import '../screens/settings/settings_screen.dart';
 import '../screens/settings/key_management_screen.dart';
 import '../screens/settings/recycle_bin_screen.dart';
@@ -39,7 +38,6 @@ class AppRoutes {
   static const String home = '/home';
   static const String gallery = '/gallery';
   static const String documents = '/documents';
-  static const String otherFiles = '/other-files';
   static const String settings = '/settings'; 
   static const String keyManagement = '/key-management';
   static const String migration = '/migration';
@@ -131,9 +129,6 @@ class AppRoutes {
 
       case documents:
         return MaterialPageRoute(builder: (_) => const DocumentsScreen());
-
-      case otherFiles:
-        return MaterialPageRoute(builder: (_) => const OtherFilesScreen());
 
       case settings: // Now this correctly refers to the static String
         return MaterialPageRoute(builder: (_) => const SettingsScreen());
