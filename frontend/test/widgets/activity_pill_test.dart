@@ -97,6 +97,8 @@ void main() {
     final claim = ActivityPillInset.claim(48);
     addTearDown(claim.release);
     await tester.pump();
+    // The pill MOVES there now (morph animation); settle it first.
+    await tester.pump(const Duration(milliseconds: 400));
     final claimed = tester.getTopLeft(find.text('Working…')).dy;
     expect(claimed, greaterThanOrEqualTo(unclaimed + 48),
         reason: 'a TabBar/selection-bar claim must push the pill below it');
