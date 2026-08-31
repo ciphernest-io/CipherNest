@@ -254,17 +254,26 @@ class _RestorePhraseScreenState extends State<RestorePhraseScreen> {
     final phraseComplete = _allSlotsFilled && _allSlotsInWordlist;
 
     return Scaffold(
+      // Title lives in the AppBar (same pattern as the password screen) so
+      // it stays put while the body scrolls under the keyboard.
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
         automaticallyImplyLeading: false,
+        centerTitle: true,
         leading: Navigator.canPop(context)
             ? IconButton(
                 icon: const ThemeIcon('arrowLeft'),
                 onPressed: () => Navigator.pop(context),
               )
             : null,
+        title: Text(
+          'Enter your recovery phrase',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: text.titleLarge,
+        ),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -273,14 +282,7 @@ class _RestorePhraseScreenState extends State<RestorePhraseScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                'Enter your recovery phrase.',
-                style: text.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Twelve words in the order you saved them. Autocomplete will help. Tap Paste if you copied the whole phrase from a password manager.',
+                'Twelve words in the order you saved them. Autocomplete will help.',
                 style: text.bodyMedium?.copyWith(
                   color: cs.onSurface.withValues(alpha: 0.72),
                   height: 1.4,
