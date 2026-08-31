@@ -766,9 +766,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       final pendingLine = pendingUploads == 0
           ? ''
-          : '
-
-$pendingUploads file${pendingUploads == 1 ? ' has' : 's have'} '
+          : '\n\n$pendingUploads file${pendingUploads == 1 ? ' has' : 's have'} '
               'not finished uploading and will be lost.';
       final confirm = await showDialog<bool>(
         context: context,
@@ -778,9 +776,7 @@ $pendingUploads file${pendingUploads == 1 ? ' has' : 's have'} '
           content: Text(
             'This is your only connected account, so disconnecting it also '
             'signs you out: the vault is removed from this phone (keys, '
-            'local index, cached files) and the app starts fresh.
-
-'
+            'local index, cached files) and the app starts fresh.\n\n'
             'Your encrypted files stay on ${account.providerName}. Your '
             '12-word recovery phrase brings everything back, here or on '
             'any device.$pendingLine',
