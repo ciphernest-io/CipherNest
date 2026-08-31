@@ -5,11 +5,11 @@ import '../../../services/auto_sync_worker.dart';
 import '../../../services/biometric_unlock_service.dart';
 import '../../../services/key_manager_service.dart';
 import '../../../services/notify.dart';
-import '../../config/flags.dart';
+import 'dart:async' show unawaited;
+
+import '../../../services/backup_backfill_runner.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
-import '../subscription/subscription_screen.dart'
-    show SubscriptionScreenArgs;
 import '../../widgets/password_confirm_dialog.dart';
 import '../../widgets/theme_icon.dart';
 import '../settings/backup_albums_screen.dart';
@@ -101,7 +101,12 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
     setState(() => _autoSyncOn = v);
     // Which albums? All vs a checklist, with the include-existing shortcut.
     if (v) {
-      final chose = await showBackupAlbumChoiceSheet(context);
+      // deferBackfill: nothing uploads while the user is still on this
+      // screen; _finish (Enter CipherNest / Skip) starts the queued work.
+      final chose = await showBackupAlbumChoiceSheet(
+        context,
+        deferBackfill: true,
+      );
       if (!chose) {
         // Dismissed without choosing: revert. An absent selection reads as
         // ALL albums, so leaving the toggle on would commit the most
@@ -115,19 +120,13 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
   Future<void> _finish() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kShownFlag, true);
+    // Backfills chosen above were queued, not started: onboarding must not
+    // upload behind the user's back. They begin the moment the user enters.
+    unawaited(BackupBackfillRunner().runPending());
     if (!mounted) return;
-    // Value-first paywall slot: the single skippable pitch sits at the END
-    // of onboarding, after the vault is real — never before the password
-    // screen. Mock CTAs until the payments project lands.
-    if (kPaywallEnabled) {
-      Navigator.pushReplacementNamed(
-        context,
-        AppRoutes.subscription,
-        arguments: SubscriptionScreenArgs.onboardingTail,
-      );
-    } else {
-      Navigator.pushReplacementNamed(context, AppRoutes.home);
-    }
+    // The paywall no longer sits here: it shows right after the phrase
+    // step (Aug 31 ruling), so finishing quick settings goes straight home.
+    Navigator.pushReplacementNamed(context, AppRoutes.home);
   }
 
   @override
@@ -161,12 +160,14 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
             children: [
               Text(
                 'A few quick settings.',
+                textAlign: TextAlign.center,
                 style: text.headlineMedium
                     ?.copyWith(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 8),
               Text(
-                'You can change these anytime in Settings.',
+                'You can change these anytime.',
+                textAlign: TextAlign.center,
                 style: text.bodyMedium?.copyWith(
                   color: cs.onSurface.withValues(alpha: 0.72),
                   height: 1.4,

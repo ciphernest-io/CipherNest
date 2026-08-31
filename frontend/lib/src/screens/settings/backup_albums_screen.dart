@@ -215,7 +215,10 @@ Future<bool?> showBackupEnrollSheet(BuildContext context, String albumName,
 /// selection pref reads as BackupMode.all, so a silent dismissal used to
 /// commit the most aggressive setting (all albums, background) by
 /// not-choosing (MTR#1 F8).
-Future<bool> showBackupAlbumChoiceSheet(BuildContext context) async {
+Future<bool> showBackupAlbumChoiceSheet(
+  BuildContext context, {
+  bool deferBackfill = false,
+}) async {
   final cs = Theme.of(context).colorScheme;
   final choice = await showModalBottomSheet<String>(
     context: context,
@@ -271,7 +274,9 @@ Future<bool> showBackupAlbumChoiceSheet(BuildContext context) async {
       final albums = await MigrationService().getAlbums();
       await BackupSelectionService().queueBackfills(
           albums.where((a) => !a.path.isAll).map((a) => a.name));
-      unawaited(BackupBackfillRunner().runPending());
+      // deferBackfill (quick settings): the queue is persisted; the caller
+      // fires runPending when the user actually enters the app.
+      if (!deferBackfill) unawaited(BackupBackfillRunner().runPending());
     }
     return true;
   }

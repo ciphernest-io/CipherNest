@@ -3,12 +3,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../services/key_manager_service.dart';
+import '../../config/flags.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
 import '../../utils/wordlists.dart';
 import '../../widgets/bip39_autocomplete_row.dart';
 import '../../widgets/theme_icon.dart';
 import '../cloud_selection/cloud_selection_screen.dart' show CloudSelectionArgs;
+import '../subscription/subscription_screen.dart'
+    show SubscriptionScreenArgs;
 import 'master_password_screen.dart' show MasterPasswordArgs, MasterPasswordMode;
 
 /// Restore flow, phrase entry only. Password is collected on the next
@@ -208,12 +211,25 @@ class _RestorePhraseScreenState extends State<RestorePhraseScreen> {
     if (KeyManagerService().hasSignupPassword) {
       await KeyManagerService().abandonSignupForRestore(phrase);
       if (!mounted) return;
-      Navigator.pushNamedAndRemoveUntil(
-        context,
-        AppRoutes.cloudSelection,
-        (route) => false,
-        arguments: CloudSelectionArgs.restore,
-      );
+      // Paywall slot (Aug 31 ruling): moving ahead from phrase entry.
+      if (kPaywallEnabled) {
+        Navigator.pushNamedAndRemoveUntil(
+          context,
+          AppRoutes.subscription,
+          (route) => false,
+          arguments: const SubscriptionScreenArgs(
+            nextRoute: AppRoutes.cloudSelection,
+            nextArguments: CloudSelectionArgs.restore,
+          ),
+        );
+      } else {
+        Navigator.pushNamedAndRemoveUntil(
+          context,
+          AppRoutes.cloudSelection,
+          (route) => false,
+          arguments: CloudSelectionArgs.restore,
+        );
+      }
       return;
     }
 

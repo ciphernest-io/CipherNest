@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../services/key_manager_service.dart';
-import '../../../services/notify.dart';
+import '../../config/flags.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
 import '../../utils/wordlists.dart';
 import '../../widgets/bip39_autocomplete_row.dart';
 import '../../widgets/theme_icon.dart';
+import '../subscription/subscription_screen.dart'
+    show SubscriptionScreenArgs;
 
 /// Signup step 2 of 2. Two internal stages:
 ///  1. Display: numbered grid of the 12 mnemonic words + advice cards.
@@ -69,10 +71,23 @@ class _RecoveryPhraseScreenState extends State<RecoveryPhraseScreen> {
                   // to cloud selection — the recovery obligation is met.
                   await KeyManagerService().markRecoveryShown();
                   if (!context.mounted) return;
-                  Navigator.pushReplacementNamed(
-                    context,
-                    AppRoutes.cloudSelection,
-                  );
+                  // Paywall slot (Aug 31 ruling): right after the phrase
+                  // is proven, before the cloud picker. Skippable; every
+                  // exit lands on the same next step.
+                  if (kPaywallEnabled) {
+                    Navigator.pushReplacementNamed(
+                      context,
+                      AppRoutes.subscription,
+                      arguments: const SubscriptionScreenArgs(
+                        nextRoute: AppRoutes.cloudSelection,
+                      ),
+                    );
+                  } else {
+                    Navigator.pushReplacementNamed(
+                      context,
+                      AppRoutes.cloudSelection,
+                    );
+                  }
                 },
                 onShowAgain: () => setState(() => _stage = 1),
               ),
@@ -199,8 +214,8 @@ class _DisplayStage extends StatelessWidget {
       ),
     );
     if (proceed == true) {
+      // No toast: Android 13+ shows its own "copied" overlay.
       await Clipboard.setData(ClipboardData(text: phrase));
-      Notify.info('Copied. Clear your clipboard once it is saved.');
     }
   }
 }
@@ -286,6 +301,9 @@ class _AdviceRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Row(
+      // Top-aligned: on narrow phones the third punchline wraps to two
+      // lines and a centered icon floats between them.
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         ThemeIcon(
           icon,

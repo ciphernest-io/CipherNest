@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 
 import '../../../services/cnest_errors.dart';
 import '../../../services/key_manager_service.dart';
+import '../../config/flags.dart';
 import '../../config/routes.dart';
 import '../../widgets/friendly_error_sheet.dart';
 import '../../widgets/master_password_field_group.dart';
 import '../../widgets/theme_icon.dart';
+import '../subscription/subscription_screen.dart'
+    show SubscriptionScreenArgs;
 import '../cloud_selection/cloud_selection_screen.dart' show CloudSelectionArgs;
 
 /// Which flow entered the master-password screen.
@@ -80,14 +83,27 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
           }
           await KeyManagerService().stageRecovery(mnemonic, _password);
           if (!mounted) return;
-          Navigator.pushNamedAndRemoveUntil(
-            context,
-            AppRoutes.cloudSelection,
-            // Clear the whole stack deliberately (the old splash-predicate
-            // never matched — splash pushReplacement'd itself away).
-            (route) => false,
-            arguments: CloudSelectionArgs.restore,
-          );
+          // Paywall slot (Aug 31 ruling): this password step follows the
+          // phrase entry, so moving ahead passes the paywall. The whole
+          // stack clears either way.
+          if (kPaywallEnabled) {
+            Navigator.pushNamedAndRemoveUntil(
+              context,
+              AppRoutes.subscription,
+              (route) => false,
+              arguments: const SubscriptionScreenArgs(
+                nextRoute: AppRoutes.cloudSelection,
+                nextArguments: CloudSelectionArgs.restore,
+              ),
+            );
+          } else {
+            Navigator.pushNamedAndRemoveUntil(
+              context,
+              AppRoutes.cloudSelection,
+              (route) => false,
+              arguments: CloudSelectionArgs.restore,
+            );
+          }
       }
     } catch (e, s) {
       if (!mounted) return;

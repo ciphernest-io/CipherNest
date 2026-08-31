@@ -16,6 +16,7 @@ import 'cloud/cloud_service.dart';
 import 'cnest_errors.dart';
 import 'database_backup_service.dart';
 import 'database_service.dart';
+import 'subscription_service.dart';
 import 'encryption_service.dart';
 import 'key_manager_service.dart';
 import 'migration_service.dart';
@@ -531,6 +532,11 @@ class AutoSyncService {
   /// so the gallery tile never flashes.
   Future<bool> _syncAsset(AssetEntity asset,
       {CnestFile? existingRow, String? bucketName}) async {
+    // Free-tier cap: past the limit only Plus stores more. Quietly skips
+    // (the asset stays eligible for after an upgrade); never touches
+    // anything already stored.
+    if (!await FreeTierGuard.canStoreMore()) return false;
+
     final account = AccountRegistry().activeAccount;
     if (account == null) {
       // Transient (sign-out mid-run). Must throw, not return false: false

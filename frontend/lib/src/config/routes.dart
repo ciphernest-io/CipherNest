@@ -77,10 +77,12 @@ class AppRoutes {
         return MaterialPageRoute(builder: (_) => const OnboardingScreen());
 
       case subscription:
-        final tail =
-            routeSettings.arguments == SubscriptionScreenArgs.onboardingTail;
+        final rawArgs = routeSettings.arguments;
+        final subArgs = rawArgs is SubscriptionScreenArgs
+            ? rawArgs
+            : const SubscriptionScreenArgs();
         return MaterialPageRoute(
-          builder: (_) => SubscriptionScreen(onboardingTail: tail),
+          builder: (_) => SubscriptionScreen(args: subArgs),
         );
 
       case masterPassword:

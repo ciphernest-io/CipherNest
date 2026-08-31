@@ -1349,6 +1349,16 @@ class DatabaseService extends ChangeNotifier {
     return maps.map((m) => CnestFile.fromMap(m)).toList();
   }
 
+  /// Vault-wide live file count, ALL accounts. The free-tier cap counts
+  /// everything that occupies a slot: uploaded or still pending, any type.
+  /// Deleted (recycled) rows do not count; purging frees the slot.
+  Future<int> countActiveFiles() async {
+    final db = await database;
+    final rows = await db
+        .rawQuery('SELECT COUNT(*) AS n FROM files WHERE is_deleted = 0');
+    return (rows.first['n'] as int?) ?? 0;
+  }
+
   /// Index the auto-sync scan uses to decide "is this gallery asset already
   /// in the vault?". Three sets with distinct semantics:
   ///

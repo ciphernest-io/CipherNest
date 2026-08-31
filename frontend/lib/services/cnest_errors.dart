@@ -265,3 +265,21 @@ final class UnexpectedError extends CnestError {
   @override String? get primaryActionLabel => 'Try again';
   @override String get iconName => 'warningCircle';
 }
+
+/// Free-tier storage cap reached (see FreeTierGuard). Uploads are blocked
+/// until the user upgrades or deletes something; nothing already stored is
+/// ever held back.
+final class FreeLimitReachedError extends CnestError {
+  const FreeLimitReachedError();
+  @override
+  String get title => 'Your Free vault is full.';
+  @override
+  String get message =>
+      'Free stores up to 1,000 files, and this vault just reached it. '
+      'Upgrade to Plus for unlimited uploads, or delete files you no '
+      'longer need.';
+  @override
+  String? get primaryActionLabel => null;
+  @override
+  String get iconName => 'lockKey';
+}

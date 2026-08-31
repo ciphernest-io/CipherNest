@@ -1,57 +1,57 @@
 import 'package:flutter/material.dart';
 
 import '../../../services/notify.dart';
+import '../../../services/subscription_service.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 
-/// Route-argument sentinel: the onboarding-tail slot (quick settings ->
-/// paywall -> home). Exits go HOME. Any other entry (upsells push normally)
-/// pops back where it came from.
+/// Route arguments. A non-null [nextRoute] means the paywall is a STEP in a
+/// flow (the post-phrase slot): every exit, paid or free, advances there
+/// with the stack cleared. Absent = pushed as a contextual upsell; exits
+/// pop back.
 class SubscriptionScreenArgs {
-  const SubscriptionScreenArgs._();
-  static const String onboardingTail = 'onboarding-tail';
+  const SubscriptionScreenArgs({this.nextRoute, this.nextArguments});
+
+  final String? nextRoute;
+  final Object? nextArguments;
 }
 
-/// Three-tier paywall (Free / Plus / Lifetime). In v1.0 the CTAs are mock:
-/// purchases don't touch billing — the full payments workstream (RevenueCat,
-/// entitlements, lapse behavior, restore) is its own project. Position: the
-/// single skippable slot at the END of onboarding (value-first; it used to
-/// block signup before the password screen), plus normal pushes from
-/// contextual upsells.
+/// Single-screen paywall (Aug 31 revamp): one plan card with a
+/// Monthly / Annual / Lifetime switcher, and "Continue on Free" as the only
+/// mention of the free tier. Position: right after the phrase step, in
+/// every flow that has one (signup type-back, restore phrase entry).
 ///
-/// Guarded upstream by `kPaywallEnabled` in `flags.dart`. When that flag is
-/// off, the onboarding tail skips this screen entirely.
+/// Billing is stubbed until the payments project lands: the CTA grants the
+/// LOCAL entitlement (SubscriptionService seam) so Free/Plus gates are
+/// testable end to end; RevenueCat replaces only the CTA body.
+/// `kPaywallEnabled` in flags.dart gates whether flows route here at all.
 class SubscriptionScreen extends StatefulWidget {
-  const SubscriptionScreen({super.key, this.onboardingTail = false});
+  const SubscriptionScreen({super.key, this.args = const SubscriptionScreenArgs()});
 
-  /// True when shown as the last onboarding step — exits advance to home.
-  final bool onboardingTail;
+  final SubscriptionScreenArgs args;
 
   @override
   State<SubscriptionScreen> createState() => _SubscriptionScreenState();
 }
 
-enum _TierKind { free, plus, lifetime }
+enum _Plan { monthly, annual, lifetime }
 
 class _SubscriptionScreenState extends State<SubscriptionScreen> {
-  bool _annual = true;
+  _Plan _plan = _Plan.annual;
 
-  /// Which card is expanded, if any. Only one at a time; tapping the current
-  /// one collapses it. Default is null (all collapsed) so the initial paint
-  /// shows 3 compact cards side-by-side, all fitting on one screen.
-  _TierKind? _expanded;
-
-  void _toggleExpanded(_TierKind kind) {
-    setState(() => _expanded = _expanded == kind ? null : kind);
-  }
-
-  /// Every exit converges here. Onboarding-tail advances to home (the vault
-  /// already exists at this point); upsell pushes pop; the home fallback
-  /// covers a bare stack.
+  /// Every exit converges here: flow steps advance to [SubscriptionScreenArgs.nextRoute]
+  /// (stack cleared — the phrase screens must not survive beneath), upsell
+  /// pushes pop, and a bare stack falls back to home.
   void _leave() {
-    if (widget.onboardingTail) {
-      Navigator.pushReplacementNamed(context, AppRoutes.home);
+    final next = widget.args.nextRoute;
+    if (next != null) {
+      Navigator.pushNamedAndRemoveUntil(
+        context,
+        next,
+        (route) => false,
+        arguments: widget.args.nextArguments,
+      );
       return;
     }
     if (Navigator.canPop(context)) {
@@ -63,9 +63,13 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
 
   void _continueFree() => _leave();
 
-  void _mockPurchase() {
-    // Placeholder for RevenueCat.purchase(). Billing is a separate project;
-    // the tier UI is here for design + walkthrough only.
+  Future<void> _purchase() async {
+    // Billing stub: grants the LOCAL entitlement so the Free/Plus gates
+    // (including the 1,000-file cap) are testable end to end. RevenueCat's
+    // purchase flow replaces this body; the screen and call site stay.
+    await SubscriptionService().setPlusEntitlement(true);
+    Notify.info('Plus unlocked on this device. Billing arrives with v1.1.');
+    if (!mounted) return;
     _leave();
   }
 
@@ -73,14 +77,30 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     Notify.info('Purchase restore lands with billing in v1.1.');
   }
 
+  String get _priceLine => switch (_plan) {
+        _Plan.monthly => r'$1.99 / month',
+        _Plan.annual => r'$19.99 / year',
+        _Plan.lifetime => r'$39 one-time',
+      };
+
+  String get _priceSub => switch (_plan) {
+        _Plan.monthly => 'Cancel anytime.',
+        _Plan.annual => r'About $1.66 a month. Two months free.',
+        _Plan.lifetime =>
+          "Founder's Edition. Limited to the first 1,000 supporters.",
+      };
+
+  String get _ctaLabel =>
+      _plan == _Plan.lifetime ? 'Buy Lifetime' : 'Start Plus';
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
+    final t = ThemeController().tokens;
 
-    // System back (Android hardware / gesture) mirrors the X-close. Without
-    // this, canPop is false from the onboarding stack and the OS back-press
-    // is silently swallowed — the paywall appears "stuck."
+    // System back mirrors Continue on Free. Without this, canPop is false
+    // on the flow stack and the OS back-press is silently swallowed.
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -88,471 +108,193 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
         _continueFree();
       },
       child: Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: ThemeIcon('x', color: cs.onSurface),
-          onPressed: _continueFree,
-          tooltip: 'Close',
-        ),
-      ),
-      body: SafeArea(
-        top: false,
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'Three ways to lock down your files.',
-                style: text.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Same encryption on all of them. Different levels of convenience.',
-                style: text.bodyMedium?.copyWith(
-                  color: cs.onSurface.withValues(alpha: 0.72),
-                  height: 1.4,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Tap a plan to see what it includes.',
-                style: text.bodySmall?.copyWith(
-                  color: cs.onSurface.withValues(alpha: 0.5),
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
-              const SizedBox(height: 18),
-              _FreeCard(
-                expanded: _expanded == _TierKind.free,
-                onToggle: () => _toggleExpanded(_TierKind.free),
-              ),
-              const SizedBox(height: 12),
-              _PlusCard(
-                annual: _annual,
-                onSelectAnnual: (v) => setState(() => _annual = v),
-                onPurchase: _mockPurchase,
-                expanded: _expanded == _TierKind.plus,
-                onToggle: () => _toggleExpanded(_TierKind.plus),
-              ),
-              const SizedBox(height: 12),
-              _LifetimeCard(
-                onPurchase: _mockPurchase,
-                expanded: _expanded == _TierKind.lifetime,
-                onToggle: () => _toggleExpanded(_TierKind.lifetime),
-              ),
-              const SizedBox(height: 20),
-              Center(
-                child: TextButton(
-                  onPressed: _continueFree,
-                  child: Text(
-                    'Continue on Free',
-                    style: TextStyle(
-                      color: cs.onSurface.withValues(alpha: 0.72),
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-              ),
-              Center(
-                child: TextButton(
-                  onPressed: _restorePurchase,
-                  child: Text(
-                    'Restore purchase',
-                    style: TextStyle(
-                      color: cs.onSurface.withValues(alpha: 0.5),
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Prices in USD. Billed through Google Play. Cancel anytime in your Play Store subscriptions.',
-                textAlign: TextAlign.center,
-                style: text.bodySmall?.copyWith(
-                  color: cs.onSurface.withValues(alpha: 0.45),
-                  fontSize: 11,
-                ),
-              ),
-            ],
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          leading: IconButton(
+            icon: ThemeIcon('x', color: cs.onSurface),
+            onPressed: _continueFree,
+            tooltip: 'Continue on Free',
           ),
         ),
-      ),
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// FREE card
-// ---------------------------------------------------------------------------
-
-class _FreeCard extends StatelessWidget {
-  const _FreeCard({required this.expanded, required this.onToggle});
-
-  final bool expanded;
-  final VoidCallback onToggle;
-
-  @override
-  Widget build(BuildContext context) {
-    return _TierCard(
-      badge: 'FREE',
-      price: r'$0 forever',
-      priceSub: null,
-      features: const [
-        'Unlimited encrypted files',
-        '1 cloud at a time',
-        'Basic magic-link sharing',
-        'Full manual control',
-      ],
-      cta: null,
-      recommended: false,
-      expanded: expanded,
-      onToggle: onToggle,
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// PLUS card
-// ---------------------------------------------------------------------------
-
-class _PlusCard extends StatelessWidget {
-  const _PlusCard({
-    required this.annual,
-    required this.onSelectAnnual,
-    required this.onPurchase,
-    required this.expanded,
-    required this.onToggle,
-  });
-
-  final bool annual;
-  final ValueChanged<bool> onSelectAnnual;
-  final VoidCallback onPurchase;
-  final bool expanded;
-  final VoidCallback onToggle;
-
-  @override
-  Widget build(BuildContext context) {
-    final priceLine = annual ? r'$19.99/year' : r'$1.99/month';
-    final priceSub =
-        annual ? r'That is about $1.66/month. 17% off monthly.' : null;
-    final ctaLabel = annual ? 'Start 7-day free trial' : 'Start Plus';
-
-    return _TierCard(
-      badge: 'PLUS',
-      priceHeader: _PlusToggle(annual: annual, onChanged: onSelectAnnual),
-      price: priceLine,
-      priceSub: priceSub,
-      features: const [
-        'Everything in Free, and:',
-        'Auto-sync new photos in the background',
-        'In-app photo editor',
-        'Password-protected shares with custom expiry',
-        '30-day recycle bin',
-        'Multiple clouds, no soft cap, extra viewer actions',
-      ],
-      cta: _TierCta(label: ctaLabel, onPressed: onPurchase),
-      recommended: true,
-      expanded: expanded,
-      onToggle: onToggle,
-    );
-  }
-}
-
-class _PlusToggle extends StatelessWidget {
-  const _PlusToggle({required this.annual, required this.onChanged});
-  final bool annual;
-  final ValueChanged<bool> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    // Both segments size to the widest label (~270dp total); the card's
-    // inner width is 252 at 320dp, so scale down there. No-op at 411.
-    return FittedBox(
-      fit: BoxFit.scaleDown,
-      alignment: Alignment.centerLeft,
-      child: SegmentedButton<bool>(
-      segments: const [
-        ButtonSegment(value: false, label: Text('Monthly')),
-        ButtonSegment(value: true, label: Text('Annual · save 17%')),
-      ],
-      selected: {annual},
-      onSelectionChanged: (s) => onChanged(s.first),
-      showSelectedIcon: false,
-      style: ButtonStyle(
-        visualDensity: VisualDensity.compact,
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      ),
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// LIFETIME card
-// ---------------------------------------------------------------------------
-
-class _LifetimeCard extends StatelessWidget {
-  const _LifetimeCard({
-    required this.onPurchase,
-    required this.expanded,
-    required this.onToggle,
-  });
-  final VoidCallback onPurchase;
-  final bool expanded;
-  final VoidCallback onToggle;
-
-  @override
-  Widget build(BuildContext context) {
-    return _TierCard(
-      badge: 'LIFETIME · Founder\'s Edition',
-      price: r'$39 one-time',
-      priceStrikethrough: r'$79',
-      priceSub: 'Limited to the first 1,000 supporters.',
-      featuresIntro: null,
-      features: const [
-        'Every Plus feature. Forever.',
-        "Yours whether we're still around in five years or not.",
-      ],
-      cta: _TierCta(label: 'Buy Lifetime', onPressed: onPurchase),
-      recommended: false,
-      expanded: expanded,
-      onToggle: onToggle,
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Shared card scaffold
-// ---------------------------------------------------------------------------
-
-class _TierCta {
-  const _TierCta({required this.label, required this.onPressed});
-  final String label;
-  final VoidCallback onPressed;
-}
-
-class _TierCard extends StatelessWidget {
-  const _TierCard({
-    required this.badge,
-    required this.price,
-    required this.priceSub,
-    required this.features,
-    required this.cta,
-    required this.recommended,
-    required this.expanded,
-    required this.onToggle,
-    this.priceHeader,
-    this.priceStrikethrough,
-    this.featuresIntro,
-  });
-
-  final String badge;
-  final Widget? priceHeader;
-  final String price;
-  final String? priceStrikethrough;
-  final String? priceSub;
-  final String? featuresIntro;
-  final List<String> features;
-  final _TierCta? cta;
-  final bool recommended;
-  final bool expanded;
-  final VoidCallback onToggle;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final t = ThemeController().tokens;
-    final text = Theme.of(context).textTheme;
-    final borderColor = recommended
-        ? cs.primary
-        : cs.outline.withValues(alpha: 0.4);
-    return Material(
-      color: recommended
-          ? cs.surface
-          : cs.surfaceContainerHighest.withValues(alpha: 0.5),
-      borderRadius: BorderRadius.circular(t.rCard),
-      child: InkWell(
-        onTap: onToggle,
-        borderRadius: BorderRadius.circular(t.rCard),
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(t.rCard),
-            border: Border.all(
-              color: borderColor,
-              width: recommended ? 1.6 : 1,
-            ),
-          ),
-          child: AnimatedSize(
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOutCubic,
-            alignment: Alignment.topCenter,
+        body: SafeArea(
+          top: false,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Row(
-                  children: [
-                    // Flexible: the Founder's Edition badge is 224dp of a
-                    // 252dp row at 320dp; ellipsize rather than overflow.
-                    Flexible(
-                      child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: recommended
-                            ? cs.primary.withValues(alpha: 0.14)
-                            : cs.onSurface.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(t.rCardLg),
-                      ),
-                      child: Text(
-                        badge,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: text.labelSmall?.copyWith(
-                          color: recommended ? cs.primary : cs.onSurface,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.8,
-                        ),
-                      ),
-                      ),
-                    ),
-                    if (recommended) ...[
-                      const SizedBox(width: 8),
-                      Text(
-                        'Recommended',
-                        style: text.labelSmall?.copyWith(
-                          color: cs.primary.withValues(alpha: 0.85),
-                          fontStyle: FontStyle.italic,
-                        ),
-                      ),
-                    ],
-                    const Spacer(),
-                    AnimatedRotation(
-                      turns: expanded ? 0.5 : 0,
-                      duration: const Duration(milliseconds: 200),
-                      child: ThemeIcon(
-                        'caretDown',
-                        size: 18,
-                        color: cs.onSurface.withValues(alpha: 0.55),
-                      ),
-                    ),
-                  ],
+                Text(
+                  'Unlock unlimited uploads',
+                  textAlign: TextAlign.center,
+                  style: text.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-                const SizedBox(height: 10),
-                if (priceHeader != null) ...[
-                  priceHeader!,
-                  const SizedBox(height: 8),
-                ],
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    Text(
-                      price,
-                      style: text.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    if (priceStrikethrough != null) ...[
-                      const SizedBox(width: 8),
-                      Text(
-                        priceStrikethrough!,
-                        style: text.titleMedium?.copyWith(
-                          color: cs.onSurface.withValues(alpha: 0.5),
-                          decoration: TextDecoration.lineThrough,
-                        ),
-                      ),
-                    ],
-                  ],
+                const SizedBox(height: 8),
+                Text(
+                  'Free stores your first 1,000 files with the same '
+                  'encryption. Plus removes the cap and turns everything on.',
+                  textAlign: TextAlign.center,
+                  style: text.bodyMedium?.copyWith(
+                    color: cs.onSurface.withValues(alpha: 0.72),
+                    height: 1.4,
+                  ),
                 ),
-                if (priceSub != null) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    priceSub!,
-                    style: text.bodySmall?.copyWith(
-                      color: cs.onSurface.withValues(alpha: 0.68),
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: cs.surface,
+                    borderRadius: BorderRadius.circular(t.rCardLg),
+                    border: Border.all(
+                      color: cs.primary.withValues(alpha: 0.45),
                     ),
                   ),
-                ],
-                if (expanded) ...[
-                  const SizedBox(height: 12),
-                  if (featuresIntro != null) ...[
-                    Text(
-                      featuresIntro!,
-                      style: text.labelMedium?.copyWith(
-                        color: cs.onSurface.withValues(alpha: 0.7),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Three segments ~ 250dp; scale down on 320dp-class
+                      // cards. No-op at 411.
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: SegmentedButton<_Plan>(
+                          segments: const [
+                            ButtonSegment(
+                                value: _Plan.monthly,
+                                label: Text('Monthly')),
+                            ButtonSegment(
+                                value: _Plan.annual, label: Text('Annual')),
+                            ButtonSegment(
+                                value: _Plan.lifetime,
+                                label: Text('Lifetime')),
+                          ],
+                          selected: {_plan},
+                          onSelectionChanged: (s) =>
+                              setState(() => _plan = s.first),
+                          showSelectedIcon: false,
+                          style: ButtonStyle(
+                            visualDensity: VisualDensity.compact,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        _priceLine,
+                        textAlign: TextAlign.center,
+                        style: text.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _priceSub,
+                        textAlign: TextAlign.center,
+                        style: text.bodySmall?.copyWith(
+                          color: cs.onSurface.withValues(alpha: 0.6),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      const _FeatureRow('Unlimited encrypted uploads'),
+                      const _FeatureRow(
+                          'Auto-sync every album in the background'),
+                      const _FeatureRow('In-app photo editor'),
+                      const _FeatureRow(
+                          'Password-protected shares, custom expiry'),
+                      const _FeatureRow('30-day recycle bin'),
+                      const _FeatureRow('Multiple cloud accounts'),
+                      const SizedBox(height: 16),
+                      FilledButton(
+                        onPressed: _purchase,
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        child: Text(
+                          _ctaLabel,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Center(
+                  child: TextButton(
+                    onPressed: _continueFree,
+                    child: Text(
+                      'Continue on Free',
+                      style: TextStyle(
+                        color: cs.onSurface.withValues(alpha: 0.72),
                         fontWeight: FontWeight.w500,
                       ),
                     ),
-                    const SizedBox(height: 8),
-                  ],
-                  for (final f in features)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.only(top: 2),
-                            child: ThemeIcon(
-                              'checkCircle',
-                              selected: true,
-                              size: 16,
-                              color: recommended
-                                  ? cs.primary
-                                  : t.success,
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              f,
-                              style: text.bodyMedium?.copyWith(
-                                color: cs.onSurface.withValues(alpha: 0.92),
-                                height: 1.35,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
-                if (cta != null) ...[
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: cta!.onPressed,
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        backgroundColor: recommended
-                            ? cs.primary
-                            : cs.primary.withValues(alpha: 0.9),
-                        foregroundColor: cs.onPrimary,
-                      ),
-                      child: Text(
-                        cta!.label,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
+                  ),
+                ),
+                Center(
+                  child: TextButton(
+                    onPressed: _restorePurchase,
+                    child: Text(
+                      'Restore purchase',
+                      style: TextStyle(
+                        color: cs.onSurface.withValues(alpha: 0.5),
+                        fontSize: 12,
                       ),
                     ),
                   ),
-                ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Prices in USD. Billed through Google Play. Cancel anytime '
+                  'in your Play Store subscriptions.',
+                  textAlign: TextAlign.center,
+                  style: text.bodySmall?.copyWith(
+                    color: cs.onSurface.withValues(alpha: 0.45),
+                    fontSize: 11,
+                  ),
+                ),
               ],
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _FeatureRow extends StatelessWidget {
+  const _FeatureRow(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ThemeIcon(
+            'checkCircle',
+            size: 18,
+            selected: true,
+            color: ThemeController().tokens.success,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              label,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: cs.onSurface.withValues(alpha: 0.85),
+                  ),
+            ),
+          ),
+        ],
       ),
     );
   }

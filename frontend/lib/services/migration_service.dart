@@ -11,6 +11,7 @@ import 'system_folders.dart';
 import 'cloud/cloud_service.dart';
 import 'database_backup_service.dart';
 import 'database_service.dart';
+import 'subscription_service.dart';
 import 'encryption_service.dart';
 
 class MigrationService {
@@ -300,6 +301,11 @@ class MigrationService {
 
   Future<bool> _migrateAsset(AssetEntity asset, String email,
       {String? bucketName}) async {
+    // Free-tier cap: past the limit only Plus stores more. Quietly skips
+    // (the asset stays eligible for after an upgrade); never touches
+    // anything already stored.
+    if (!await FreeTierGuard.canStoreMore()) return false;
+
     final file = await asset.file;
     if (file == null) return false;
 

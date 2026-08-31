@@ -1,6 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../src/config/flags.dart';
+import 'database_service.dart';
 
 /// Entitlement gate for Plus features (custom share expiry, password shares,
 /// auto-sync, in-app editor, recycle bin, multi-cloud, extra viewer actions).
@@ -41,5 +42,25 @@ class SubscriptionService {
     await prefs.setBool(_entitlementKey, value);
     _plusCached = value;
     _loaded = true;
+  }
+}
+
+/// The Free tier's storage cap and its single enforcement question. Both
+/// upload funnels (manual UploadPipeline; auto-sync / migration per-asset)
+/// ask here, so the payments project only ever swaps the entitlement
+/// source. Reading, decrypting, and deleting are NEVER gated.
+class FreeTierGuard {
+  FreeTierGuard._();
+
+  /// D-P1 groundwork: Free stores this many files; Plus is unlimited.
+  static const int freeFileLimit = 1000;
+
+  /// Whether [adding] more files fits the tier. Counts every live row in
+  /// the vault (all accounts, pending included; recycled rows freed).
+  static Future<bool> canStoreMore({int adding = 1}) async {
+    await SubscriptionService().init();
+    if (SubscriptionService().isPlus) return true;
+    final count = await DatabaseService().countActiveFiles();
+    return count + adding <= freeFileLimit;
   }
 }

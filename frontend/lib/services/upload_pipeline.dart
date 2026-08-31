@@ -25,6 +25,7 @@ import 'database_service.dart';
 import 'encryption_service.dart';
 import 'file_metadata_service.dart';
 import 'mp4_metadata_parser.dart';
+import 'subscription_service.dart';
 import 'upload_foreground_guard.dart';
 
 /// Which picker surface the user came through. Drives type classification
@@ -85,6 +86,17 @@ class UploadPipeline {
     void Function(int done, int total)? onProgress,
   }) async {
     if (picks.isEmpty) return const [];
+
+    // Free-tier cap: the whole batch must fit (a partial upload of a
+    // hand-picked batch confuses more than it helps). Typed failure so
+    // callers surface the upsell like any other upload error.
+    if (!await FreeTierGuard.canStoreMore(adding: picks.length)) {
+      return [
+        for (final p in picks)
+          UploadOutcome._(p.name,
+              ok: false, error: const FreeLimitReachedError()),
+      ];
+    }
 
     // Android 13+: without this the pin still works but the "Securing your
     // file…" notification is invisible and a backgrounded upload looks

@@ -725,12 +725,14 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
             children: [
               Text(
                 _headline(),
+                textAlign: TextAlign.center,
                 style: text.headlineMedium
                     ?.copyWith(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 8),
               Text(
                 _subtext(),
+                textAlign: TextAlign.center,
                 style: text.bodyMedium?.copyWith(
                   color: cs.onSurface.withValues(alpha: 0.72),
                   height: 1.4,
@@ -765,15 +767,6 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
                 subtitle: 'Coming in v2',
                 logoAsset: 'assets/images/brands/pcloud.png',
                 enabled: false,
-              ),
-              const SizedBox(height: 20),
-              Text(
-                'New here? Google Drive gives you 15 GB free. Most people start there.',
-                textAlign: TextAlign.center,
-                style: text.bodySmall?.copyWith(
-                  color: cs.onSurface.withValues(alpha: 0.55),
-                  fontSize: 12,
-                ),
               ),
               if (_isLoading) ...[
                 const SizedBox(height: 32),
