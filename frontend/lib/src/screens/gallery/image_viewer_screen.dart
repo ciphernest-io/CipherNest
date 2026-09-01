@@ -3403,7 +3403,11 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
               builder: (context, constraints) {
                 _viewportSize =
                     Size(constraints.maxWidth, constraints.maxHeight);
-                return ClipRect(
+                // Hero pairs with the grid tile: the photo expands
+                // out of its cell and returns to it on close.
+                return Hero(
+                  tag: 'photo-${widget.file.id}',
+                  child: ClipRect(
                   child: AnimatedBuilder(
                     animation: _zoomCtrl,
                     builder: (context, child) => Transform(
@@ -3471,6 +3475,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
             ],
                     ),
                   ),
+                ),
                 );
               },
             ),

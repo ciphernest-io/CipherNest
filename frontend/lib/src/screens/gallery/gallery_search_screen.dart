@@ -171,17 +171,27 @@ class _GallerySearchScreenState extends State<GallerySearchScreen> {
             itemBuilder: (context, i) => GestureDetector(
               onTap: () => Navigator.push(
                 context,
-                MaterialPageRoute(
-                  builder: (_) => ImageViewerScreen(
-                    files: matches,
-                    initialIndex: i,
+                PageRouteBuilder(
+                  transitionDuration: const Duration(milliseconds: 260),
+                  reverseTransitionDuration:
+                      const Duration(milliseconds: 220),
+                  pageBuilder: (_, animation, secondaryAnimation) =>
+                      FadeTransition(
+                    opacity: animation,
+                    child: ImageViewerScreen(
+                      files: matches,
+                      initialIndex: i,
+                    ),
                   ),
                 ),
               ),
-              child: GalleryGridItem(
-                key: ValueKey('search-${matches[i].id}'),
-                file: matches[i],
-                decodeWidth: 200,
+              child: Hero(
+                tag: 'photo-${matches[i].id}',
+                child: GalleryGridItem(
+                  key: ValueKey('search-${matches[i].id}'),
+                  file: matches[i],
+                  decodeWidth: 200,
+                ),
               ),
             ),
           );

@@ -128,8 +128,13 @@ class PicturesTabState extends State<PicturesTab>
   late final AnimationController _settleCtrl = AnimationController(
       vsync: this, duration: const Duration(milliseconds: 280));
   double _settleFrom = 1.0;
-  bool _fadeOnSettle = false;
   Alignment _zoomAlign = Alignment.center;
+  List<CnestFile>? _lastFiles;
+
+  /// Tail padding that keeps offset == _headerH reachable when a far
+  /// zoom-out makes the whole library shorter than the viewport —
+  /// otherwise the title box would just pop into view.
+  double _bottomFiller = 0;
 
   // Ghost handoff: a snapshot of the outgoing level keeps zooming and
   // fades out over the incoming one — the Samsung pivot feel.
@@ -376,16 +381,14 @@ class PicturesTabState extends State<PicturesTab>
                 Curves.easeOutCubic.transform(_settleCtrl.value);
             final scale = _ghostStart + (_ghostEnd - _ghostStart) * tCurve;
             return Opacity(
-              opacity: (1 - Curves.easeOut.transform(_settleCtrl.value))
-                  .clamp(0.0, 1.0),
+              // Dead by the halfway point; the incoming grid owns
+              // the second half of the handoff.
+              opacity: (1 - _settleCtrl.value * 2).clamp(0.0, 1.0),
               child: Transform.scale(
                 scale: scale,
                 alignment: _zoomAlign,
-                child: RawImage(
-                  image: _ghostImage,
-                  fit: BoxFit.fill,
-                  width: double.infinity,
-                  height: double.infinity,
+                child: SizedBox.expand(
+                  child: RawImage(image: _ghostImage, fit: BoxFit.fill),
                 ),
               ),
             );
@@ -395,20 +398,106 @@ class PicturesTabState extends State<PicturesTab>
     );
   }
 
+  Offset? _pinchMid() {
+    if (_pinchPointers.length < 2) return null;
+    final pts = _pinchPointers.values.toList();
+    return (pts[0] + pts[1]) / 2;
+  }
+
   void _stepZoom(int direction, double relative, double span) {
     final oldEff = _effCols(_zoomIndex);
     final newIdx = _zoomIndex + direction;
     final newEff = _effCols(newIdx);
-    // Handoff: snapshot the outgoing level; it keeps zooming and fades
-    // out over the incoming grid, pivoting on the fingers.
+    final ctrl = _scrollCtrl;
+    final headerVisible = ctrl != null &&
+        ctrl.hasClients &&
+        ctrl.offset < _headerH - 1;
+    // Pivot: the tile under the fingers stays put through the handoff.
     _zoomAlign = _focalAlignment();
-    _captureGhost(_pinchScale.value, oldEff / newEff);
+    final mid = _pinchMid();
+    final pivotIndex = mid == null ? null : _hitTileIndex(mid);
+    if (!headerVisible) {
+      _captureGhost(_pinchScale.value, oldEff / newEff);
+    } else {
+      _ghostImage?.dispose();
+      _ghostImage = null;
+    }
     setState(() => _zoomIndex = newIdx);
     _pinchSpanBaseline = span;
     _pinchScale.value = 1.0;
     _settleFrom = (relative * newEff / oldEff).clamp(0.6, 1.6);
-    _fadeOnSettle = true;
-    _settleCtrl.forward(from: 0);
+    if (headerVisible) {
+      // Plain swap under the title; nothing animates over it.
+      _settleFrom = 1.0;
+      _settleCtrl.value = 1.0;
+    } else {
+      _settleCtrl.forward(from: 0);
+    }
+    _repositionForPivot(pivotIndex, mid, newIdx, headerVisible);
+  }
+
+  /// Scrolls the NEW level so the pivot tile lands back under the fingers
+  /// — this is what makes "that photo zoomed into place" read literally.
+  /// Fixed-column levels only; the justified rung keeps its offset.
+  void _repositionForPivot(
+      int? pivotIndex, Offset? mid, int newIdx, bool headerVisible) {
+    if (pivotIndex == null || mid == null || headerVisible) return;
+    final files = _lastFiles;
+    final obj = _gridKey.currentContext?.findRenderObject();
+    final ctrl = _scrollCtrl;
+    if (files == null || obj is! RenderBox || ctrl == null) return;
+    final level = _zoomLevels[newIdx];
+    if (level.isJustified) return;
+    final orientation = MediaQuery.of(context).orientation;
+    final cols = orientation == Orientation.landscape
+        ? (level.columns * 1.5).round().clamp(2, 42)
+        : level.columns;
+    final sections = switch (level.grouping) {
+      _Grouping.year => groupByYear(files),
+      _Grouping.month => groupByMonth(files),
+      _Grouping.day => groupByDate(files),
+    };
+    final width = obj.size.width;
+    final tileH = (width - (cols - 1) * 1.5) / cols;
+    var y = widget.embedded
+        ? 0.0
+        : _headerH + MediaQuery.paddingOf(context).top + 56;
+    var found = false;
+    var index = pivotIndex;
+    for (final section in sections) {
+      y += 36; // date header extent
+      if (index < section.files.length) {
+        y += (index ~/ cols) * (tileH + 1.5);
+        found = true;
+        break;
+      }
+      index -= section.files.length;
+      final rows = (section.files.length / cols).ceil();
+      y += rows * tileH + (rows - 1) * 1.5;
+    }
+    if (!found) return;
+    final fingerLocalY = obj.globalToLocal(mid).dy;
+    final target = y - fingerLocalY + tileH / 2;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !ctrl.hasClients) return;
+      final lowest = widget.embedded ? 0.0 : _headerH;
+      ctrl.jumpTo(target
+          .clamp(lowest, math.max(lowest, ctrl.position.maxScrollExtent))
+          .toDouble());
+    });
+  }
+
+  void _ensureHeaderReachable() {
+    if (!mounted || widget.embedded) return;
+    final ctrl = _scrollCtrl;
+    if (ctrl == null || !ctrl.hasClients) return;
+    final maxExtent = ctrl.position.maxScrollExtent;
+    final withoutFiller = maxExtent - _bottomFiller;
+    final needed =
+        (_headerH - withoutFiller).clamp(0.0, _headerH).toDouble();
+    if ((needed - _bottomFiller).abs() > 1) {
+      setState(() => _bottomFiller = needed);
+    }
   }
 
   void _onPointerEnd(PointerEvent event) {
@@ -421,7 +510,6 @@ class PicturesTabState extends State<PicturesTab>
       // Release any leftover between-step scale without a snap.
       if ((_pinchScale.value - 1).abs() > 0.01) {
         _settleFrom = _pinchScale.value;
-        _fadeOnSettle = false;
         _pinchScale.value = 1.0;
         _settleCtrl.forward(from: 0);
       }
@@ -611,9 +699,12 @@ class PicturesTabState extends State<PicturesTab>
   /// Near the grid's top/bottom edge the list scrolls under the finger,
   /// speed proportional to how deep into the edge zone it is, and the
   /// sweep keeps updating as new rows slide under the drag point.
-  void _maybeAutoScroll(Offset globalPos) {
+  void _refreshAutoScrollVel(Offset globalPos) {
     final obj = _gridKey.currentContext?.findRenderObject();
-    if (obj is! RenderBox) return;
+    if (obj is! RenderBox) {
+      _autoScrollVel = 0;
+      return;
+    }
     final local = obj.globalToLocal(globalPos);
     const zone = 96.0;
     double v = 0;
@@ -623,20 +714,35 @@ class PicturesTabState extends State<PicturesTab>
       v = (local.dy - (obj.size.height - zone)) / zone;
     }
     _autoScrollVel = v * 16;
-    if (v == 0) {
+  }
+
+  /// Near the grid's top/bottom edge the list scrolls under the finger,
+  /// speed proportional to how deep the finger sits in the zone. The zone
+  /// is re-evaluated EVERY tick from the last known finger position, so
+  /// pulling out of the edge stops it and touching it again resumes —
+  /// even while the finger then holds perfectly still.
+  void _maybeAutoScroll(Offset globalPos) {
+    _refreshAutoScrollVel(globalPos);
+    if (_autoScrollVel == 0) {
       _autoScrollTimer?.cancel();
       _autoScrollTimer = null;
       return;
     }
     _autoScrollTimer ??=
         Timer.periodic(const Duration(milliseconds: 16), (_) {
+      final at = _lastDragGlobal;
+      if (at != null) _refreshAutoScrollVel(at);
+      if (_autoScrollVel == 0) {
+        _autoScrollTimer?.cancel();
+        _autoScrollTimer = null;
+        return;
+      }
       final ctrl = _scrollCtrl;
       if (ctrl == null || !ctrl.hasClients) return;
       final target = (ctrl.offset + _autoScrollVel)
           .clamp(_headerH, ctrl.position.maxScrollExtent)
           .toDouble();
       if (target != ctrl.offset) ctrl.jumpTo(target);
-      final at = _lastDragGlobal;
       final flat = _dragFlat;
       if (at != null && flat != null) _sweepSelect(at, flat);
     });
@@ -865,6 +971,9 @@ class PicturesTabState extends State<PicturesTab>
           return const Center(child: CircularProgressIndicator());
         }
         final files = snapshot.data!;
+        _lastFiles = files;
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) => _ensureHeaderReachable());
 
         if (files.isEmpty) {
           return RefreshIndicator(
@@ -940,17 +1049,17 @@ class PicturesTabState extends State<PicturesTab>
                       final headerVisible = revealCtrl != null &&
                           revealCtrl.hasClients &&
                           revealCtrl.offset < _headerH - 1;
-                      // The title box must not zoom with the grid: while it
-                      // is in view the transition is fade-only.
+                      // The title box must never zoom: with it in view the
+                      // level swap is plain.
                       final scale =
                           headerVisible ? 1.0 : _pinchScale.value * settle;
-                      final fade = _fadeOnSettle
-                          ? 0.18 +
-                              0.82 *
-                                  Curves.easeOut.transform(_settleCtrl.value)
+                      // Incoming layer rises to full opacity across the
+                      // whole handoff; the ghost above dies by halfway.
+                      final fade = _ghostImage != null
+                          ? Curves.easeIn.transform(_settleCtrl.value)
                           : 1.0;
                       return Opacity(
-                        opacity: fade.clamp(0.0, 1.0),
+                        opacity: fade.clamp(0.05, 1.0),
                         child: Transform.scale(
                           scale: scale,
                           alignment: _zoomAlign,
@@ -1027,6 +1136,9 @@ class PicturesTabState extends State<PicturesTab>
                               (widget.embedded ? 8 : 96),
                         ),
                       ),
+                      SliverToBoxAdapter(
+                        child: SizedBox(height: _bottomFiller),
+                      ),
                     ],
                   ),
                   ),
@@ -1064,12 +1176,20 @@ class PicturesTabState extends State<PicturesTab>
           _toggleSelected(file.id);
           return;
         }
+        // Fade route: the hero flies while the gallery dims behind it
+        // instead of sliding away.
         final result = await Navigator.push(
           context,
-          MaterialPageRoute(
-            builder: (_) => ImageViewerScreen(
-              files: flatFiles,
-              initialIndex: globalIndex,
+          PageRouteBuilder(
+            transitionDuration: const Duration(milliseconds: 260),
+            reverseTransitionDuration: const Duration(milliseconds: 220),
+            pageBuilder: (_, animation, secondaryAnimation) =>
+                FadeTransition(
+              opacity: animation,
+              child: ImageViewerScreen(
+                files: flatFiles,
+                initialIndex: globalIndex,
+              ),
             ),
           ),
         );
@@ -1082,11 +1202,14 @@ class PicturesTabState extends State<PicturesTab>
       child: Stack(
         fit: StackFit.expand,
         children: [
-          GalleryGridItem(
-            key: ValueKey(file.id),
-            file: file,
-            decodeWidth: decodeWidth,
-            compact: compact,
+          Hero(
+            tag: 'photo-${file.id}',
+            child: GalleryGridItem(
+              key: ValueKey(file.id),
+              file: file,
+              decodeWidth: decodeWidth,
+              compact: compact,
+            ),
           ),
           if (_selectionMode)
             Container(

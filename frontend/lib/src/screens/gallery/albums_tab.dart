@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
@@ -29,6 +30,80 @@ class AlbumsTab extends StatefulWidget {
 }
 
 class AlbumsTabState extends State<AlbumsTab> {
+  static const _kViewModePref = 'albums_view_mode';
+  _AlbumViewMode _viewMode = _AlbumViewMode.grid3;
+
+  // Raw-pointer pinch (same reasons as the photo grid: a scale recognizer
+  // loses the arena to the scroll drag).
+  final Map<int, Offset> _pinchPointers = {};
+  bool _pinchActive = false;
+  double? _pinchBaseline;
+
+  double _pinchSpan() {
+    final pts = _pinchPointers.values.toList();
+    return (pts[0] - pts[1]).distance;
+  }
+
+  void _onPointerDown(PointerDownEvent e) {
+    _pinchPointers[e.pointer] = e.position;
+    if (_pinchPointers.length == 2) {
+      setState(() {
+        _pinchActive = true;
+        _pinchBaseline = _pinchSpan();
+      });
+    }
+  }
+
+  void _onPointerMove(PointerMoveEvent e) {
+    if (!_pinchPointers.containsKey(e.pointer)) return;
+    _pinchPointers[e.pointer] = e.position;
+    if (!_pinchActive || _pinchPointers.length < 2) return;
+    final span = _pinchSpan();
+    final baseline = _pinchBaseline;
+    if (baseline == null || baseline <= 0) {
+      _pinchBaseline = span;
+      return;
+    }
+    final relative = span / baseline;
+    final idx = _viewMode.index;
+    if (relative > 1.25 && idx < _AlbumViewMode.values.length - 1) {
+      setState(() => _viewMode = _AlbumViewMode.values[idx + 1]);
+      _pinchBaseline = span;
+    } else if (relative < 0.8 && idx > 0) {
+      setState(() => _viewMode = _AlbumViewMode.values[idx - 1]);
+      _pinchBaseline = span;
+    }
+  }
+
+  void _onPointerEnd(PointerEvent e) {
+    _pinchPointers.remove(e.pointer);
+    if (_pinchPointers.length < 2) _pinchBaseline = null;
+    if (_pinchPointers.isEmpty && _pinchActive) {
+      setState(() => _pinchActive = false);
+      SharedPreferences.getInstance()
+          .then((p) => p.setInt(_kViewModePref, _viewMode.index));
+    }
+  }
+
+  Future<void> _loadViewMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getInt(_kViewModePref);
+    if (saved == null || !mounted) return;
+    setState(() => _viewMode = _AlbumViewMode
+        .values[saved.clamp(0, _AlbumViewMode.values.length - 1)]);
+  }
+
+  Widget _entryCard(_AlbumEntry entry, _AlbumViewMode mode) {
+    final album = entry.album;
+    if (album == null) return _buildCreateCard();
+    return _AlbumCard(
+      key: ValueKey(entry.id),
+      album: album,
+      mode: mode,
+      onTap: () => _openAlbum(album),
+    );
+  }
+
   // OneUI header: same reveal pattern as PicturesTab.
   ScrollController? _scrollCtrl;
   double _headerH = 0;
@@ -151,6 +226,7 @@ class AlbumsTabState extends State<AlbumsTab> {
     // non-deleted file automatically.
     DatabaseService().addListener(_reload);
     _reload();
+    _loadViewMode();
   }
 
   @override
@@ -242,15 +318,23 @@ class AlbumsTabState extends State<AlbumsTab> {
 
     final cs = Theme.of(context).colorScheme;
 
-    return NotificationListener<ScrollNotification>(
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _onPointerDown,
+      onPointerMove: _onPointerMove,
+      onPointerUp: _onPointerEnd,
+      onPointerCancel: _onPointerEnd,
+      child: NotificationListener<ScrollNotification>(
       onNotification: _onScrollNotification,
       child: ListView(
       controller: _scrollCtrl,
-      physics: HeaderSnapPhysics(
-        collapsedOffset: _headerH,
-        headerLocked: () => _headerLocked,
-        parent: const AlwaysScrollableScrollPhysics(),
-      ),
+      physics: _pinchActive
+          ? const NeverScrollableScrollPhysics()
+          : HeaderSnapPhysics(
+              collapsedOffset: _headerH,
+              headerLocked: () => _headerLocked,
+              parent: const AlwaysScrollableScrollPhysics(),
+            ),
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 120),
       children: [
         _bigHeader(),
@@ -258,28 +342,27 @@ class AlbumsTabState extends State<AlbumsTab> {
         SizedBox(height: MediaQuery.paddingOf(context).top + 56),
         if (_deviceAlbums.isNotEmpty) ...[
           _sectionHeader('On this phone', cs),
-          _grid([
-            // Keys are LOAD-BEARING: without them Flutter reuses card STATE
-            // by grid position, pairing a stale cover with a different
-            // album whenever the list shifts (album deleted, device section
-            // appearing).
-            for (final album in _deviceAlbums)
-              _AlbumCard(
-                  key: ValueKey(album.id),
-                  album: album,
-                  onTap: () => _openAlbum(album)),
-          ]),
+          // Keys stay LOAD-BEARING: card state (the loaded cover) must
+          // travel with its album across list shifts and mode morphs.
+          _AnimatedAlbumGrid(
+            mode: _viewMode,
+            entries: [
+              for (final album in _deviceAlbums)
+                _AlbumEntry(album.id, album),
+            ],
+            buildCard: _entryCard,
+          ),
         ],
         _sectionHeader('My albums', cs,
             subtitle: 'Synced across your devices'),
-        _grid([
-          for (final album in _albums)
-            _AlbumCard(
-                key: ValueKey(album.id),
-                album: album,
-                onTap: () => _openAlbum(album)),
-          _buildCreateCard(),
-        ]),
+        _AnimatedAlbumGrid(
+          mode: _viewMode,
+          entries: [
+            for (final album in _albums) _AlbumEntry(album.id, album),
+            const _AlbumEntry('__create__', null),
+          ],
+          buildCard: _entryCard,
+        ),
         const SizedBox(height: 8),
         SwitchListTile(
           contentPadding: const EdgeInsets.symmetric(horizontal: 8),
@@ -313,6 +396,7 @@ class AlbumsTabState extends State<AlbumsTab> {
             ]),
         ],
       ],
+      ),
       ),
     );
   }
@@ -445,8 +529,14 @@ class AlbumsTabState extends State<AlbumsTab> {
 class _AlbumCard extends StatefulWidget {
   final CnestAlbum album;
   final VoidCallback onTap;
+  final _AlbumViewMode mode;
 
-  const _AlbumCard({super.key, required this.album, required this.onTap});
+  const _AlbumCard({
+    super.key,
+    required this.album,
+    required this.onTap,
+    this.mode = _AlbumViewMode.grid3,
+  });
 
   @override
   State<_AlbumCard> createState() => _AlbumCardState();
@@ -534,6 +624,22 @@ class _AlbumCardState extends State<_AlbumCard> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final t = ThemeController().tokens;
+    final grid = widget.mode != _AlbumViewMode.list;
+    Widget cover() => _coverBytes != null
+        ? Image.memory(_coverBytes!, fit: BoxFit.cover)
+        : Container(
+            color: cs.surfaceContainerHighest,
+            child: ThemeIcon(
+              widget.album.isSmart
+                  ? _smartAlbumIcon(widget.album.smartQuery)
+                  : 'folderSimple',
+              color: cs.onSurface.withAlpha(60),
+              size: 32,
+            ),
+          );
+
+    // The outer rect (and with it the cover's aspect) is animated by the
+    // grid; only the internal arrangement swaps between overlay and row.
     return GestureDetector(
       onTap: widget.onTap,
       child: Container(
@@ -543,44 +649,76 @@ class _AlbumCardState extends State<_AlbumCard> {
           border: Border.all(color: cs.outline),
         ),
         clipBehavior: Clip.antiAlias,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              child: _coverBytes != null
-                  ? Image.memory(_coverBytes!, fit: BoxFit.cover)
-                  : Container(
-                      color: cs.surfaceContainerHighest,
-                      child: ThemeIcon(
-                        widget.album.isSmart
-                            ? _smartAlbumIcon(widget.album.smartQuery)
-                            : 'folderSimple',
-                        color: cs.onSurface.withAlpha(60),
-                        size: 40,
+        child: grid
+            ? Stack(
+                fit: StackFit.expand,
+                children: [
+                  cover(),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: Container(
+                      padding: const EdgeInsets.fromLTRB(10, 18, 10, 8),
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.bottomCenter,
+                          end: Alignment.topCenter,
+                          colors: [Color(0xB3000000), Color(0x00000000)],
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(widget.album.name,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis),
+                          const SizedBox(height: 1),
+                          Text('${widget.album.fileCount}',
+                              style: const TextStyle(
+                                  color: Colors.white70, fontSize: 11)),
+                        ],
                       ),
                     ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                  ),
+                ],
+              )
+            : Row(
                 children: [
-                  Text(widget.album.name,
-                      style: TextStyle(
-                          color: cs.onSurface,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis),
-                  const SizedBox(height: 2),
-                  Text('${widget.album.fileCount}',
-                      style:
-                          TextStyle(color: cs.onSurface.withAlpha(120), fontSize: 12)),
+                  SizedBox(
+                    width: 76,
+                    height: double.infinity,
+                    child: cover(),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(widget.album.name,
+                            style: TextStyle(
+                                color: cs.onSurface,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis),
+                        const SizedBox(height: 2),
+                        Text('${widget.album.fileCount}',
+                            style: TextStyle(
+                                color: cs.onSurface.withAlpha(120),
+                                fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
                 ],
               ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -599,5 +737,84 @@ class _AlbumCardState extends State<_AlbumCard> {
       default:
         return 'folderSimple';
     }
+  }
+}
+
+
+/// The three album layouts, in pinch order: pinch-in walks toward the
+/// list, pinch-out toward the 2-wide cards.
+enum _AlbumViewMode { list, grid3, grid2 }
+
+class _AlbumEntry {
+  const _AlbumEntry(this.id, this.album);
+  final String id;
+  final CnestAlbum? album; // null = the "create album" card
+}
+
+/// Mode changes MOVE every card to its new rect (AnimatedPositioned per
+/// album, stable keys) — no fades: going 2-wide -> 3-wide you can follow
+/// each album travel, and the 3:4 <-> square aspect morphs with the rect.
+class _AnimatedAlbumGrid extends StatelessWidget {
+  const _AnimatedAlbumGrid({
+    required this.entries,
+    required this.mode,
+    required this.buildCard,
+  });
+
+  static const _moveDuration = Duration(milliseconds: 340);
+  final List<_AlbumEntry> entries;
+  final _AlbumViewMode mode;
+  final Widget Function(_AlbumEntry, _AlbumViewMode) buildCard;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) {
+      final w = constraints.maxWidth;
+      late final double totalH;
+      Rect rectFor(int i) {
+        switch (mode) {
+          case _AlbumViewMode.list:
+            return Rect.fromLTWH(0, i * 84.0, w, 76);
+          case _AlbumViewMode.grid3:
+          case _AlbumViewMode.grid2:
+            final cols = mode == _AlbumViewMode.grid3 ? 3 : 2;
+            final tw = (w - (cols - 1) * 10) / cols;
+            final th = tw * 4 / 3;
+            final row = i ~/ cols;
+            final col = i % cols;
+            return Rect.fromLTWH(
+                col * (tw + 10), row * (th + 10), tw, th);
+        }
+      }
+
+      if (mode == _AlbumViewMode.list) {
+        totalH = entries.isEmpty ? 0 : entries.length * 84.0 - 8;
+      } else {
+        final cols = mode == _AlbumViewMode.grid3 ? 3 : 2;
+        final tw = (w - (cols - 1) * 10) / cols;
+        final th = tw * 4 / 3;
+        final rows = (entries.length / cols).ceil();
+        totalH = rows == 0 ? 0 : rows * th + (rows - 1) * 10;
+      }
+
+      return AnimatedContainer(
+        duration: _moveDuration,
+        curve: Curves.easeInOutCubic,
+        height: totalH,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            for (var i = 0; i < entries.length; i++)
+              AnimatedPositioned.fromRect(
+                key: ValueKey('pos-${entries[i].id}'),
+                duration: _moveDuration,
+                curve: Curves.easeInOutCubic,
+                rect: rectFor(i),
+                child: buildCard(entries[i], mode),
+              ),
+          ],
+        ),
+      );
+    });
   }
 }
