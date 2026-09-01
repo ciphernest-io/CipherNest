@@ -85,9 +85,18 @@ class _GalleryScreenState extends State<GalleryScreen> {
   Widget _topButtons(double safeTop) {
     final cs = Theme.of(context).colorScheme;
     final t = ThemeController().tokens;
-    return Positioned(
-      top: safeTop + 6,
-      left: 10,
+    return ValueListenableBuilder<double>(
+      valueListenable: _chrome.headerReveal,
+      builder: (context, reveal, inner) => Positioned(
+        // The buttons belong to the grid's top edge: revealing the title
+        // box pushes them DOWN with the content; their collapsed spot is
+        // their upper limit when scrolling back up.
+        top: safeTop +
+            6 +
+            ((_bottomNavIndex == 0 || _bottomNavIndex == 1) ? reveal : 0),
+        right: 10,
+        child: inner!,
+      ),
       child: ValueListenableBuilder<bool>(
         valueListenable: _chrome.selectionActive,
         builder: (context, selection, _) => ValueListenableBuilder<bool>(
@@ -214,8 +223,12 @@ class _GalleryScreenState extends State<GalleryScreen> {
             ),
           ),
         ),
-        child: Center(
+        child: Padding(
+          // OneUI width: the pill leaves 1/8 of the screen on each side.
+          padding: EdgeInsets.symmetric(
+              horizontal: MediaQuery.sizeOf(context).width / 8),
           child: Container(
+            width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
             decoration: BoxDecoration(
               color: cs.surfaceContainerHigh.withValues(alpha: 0.86),
@@ -231,12 +244,11 @@ class _GalleryScreenState extends State<GalleryScreen> {
               ],
             ),
             child: Row(
-              mainAxisSize: MainAxisSize.min,
               children: [
                 _navItem(0, 'image', 'Pictures'),
                 _navItem(1, 'photo_album', 'Albums'),
-                _navItem(2, 'clockCounterClockwise', 'Stories'),
-                _navItem(3, 'list', 'Menu'),
+                _navItem(2, 'web_stories', 'Stories'),
+                _navItem(3, 'menu', 'Menu'),
               ],
             ),
           ),
@@ -249,7 +261,8 @@ class _GalleryScreenState extends State<GalleryScreen> {
     final cs = Theme.of(context).colorScheme;
     final t = ThemeController().tokens;
     final selected = _bottomNavIndex == index;
-    return InkWell(
+    return Expanded(
+      child: InkWell(
       onTap: () => _selectTab(index),
       borderRadius: BorderRadius.circular(t.rPill),
       child: AnimatedContainer(
@@ -284,6 +297,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
               ),
             ),
           ],
+        ),
         ),
       ),
     );

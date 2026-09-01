@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import '../../config/theme_controller.dart';
 import '../../config/theme_packs.dart';
 import '../../widgets/activity_pill.dart';
@@ -86,6 +89,10 @@ class PicturesTabState extends State<PicturesTab>
   double _headerH = 0;
   Timer? _motionTimer;
 
+  /// True while the current gesture began below the fold: the header stays
+  /// hidden and the scroll parks at the collapsed top (extra-swipe rule).
+  bool _headerLocked = true;
+
   // Pinch detection runs on RAW pointer events, not a GestureDetector.
   // A scale recognizer has to win the gesture arena against the scroll
   // view's vertical drag — and the drag claims the gesture as soon as the
@@ -107,7 +114,7 @@ class PicturesTabState extends State<PicturesTab>
   // snapping at every threshold.
   final ValueNotifier<double> _pinchScale = ValueNotifier(1.0);
   late final AnimationController _settleCtrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 240));
+      vsync: this, duration: const Duration(milliseconds: 280));
   double _settleFrom = 1.0;
   bool _fadeOnSettle = false;
 
@@ -142,6 +149,8 @@ class PicturesTabState extends State<PicturesTab>
     if (chrome.scrolledUnder.value != under) {
       chrome.scrolledUnder.value = under;
     }
+    chrome.headerReveal.value =
+        (_headerH - ctrl.offset).clamp(0.0, _headerH).toDouble();
   }
 
   /// Chrome hide/show + back-to-top, from raw scroll notifications:
@@ -151,6 +160,11 @@ class PicturesTabState extends State<PicturesTab>
   bool _onScrollNotification(ScrollNotification n) {
     final chrome = widget.chrome;
     if (chrome == null || n.metrics.axis != Axis.vertical) return false;
+    if (n is ScrollStartNotification && n.dragDetails != null) {
+      // Lock the header for gestures that begin below the fold; a swipe
+      // that starts parked AT the fold unlocks the reveal.
+      _headerLocked = n.metrics.pixels > _headerH + 0.5;
+    }
     if (n is ScrollUpdateNotification) {
       final delta = n.scrollDelta ?? 0;
       if (delta > 1) {
@@ -272,7 +286,11 @@ class PicturesTabState extends State<PicturesTab>
       return;
     }
     // Between steps the grid follows the fingers directly (paint-only).
-    _pinchScale.value = relative.clamp(0.78, 1.32);
+    // At the ladder ends there is no next level, so the scale is pinned:
+    // pinching past the extreme shows nothing that would snap back.
+    final upper = _zoomIndex < _zoomLevels.length - 1 ? 1.32 : 1.0;
+    final lower = _zoomIndex > 0 ? 0.78 : 1.0;
+    _pinchScale.value = relative.clamp(lower, upper);
   }
 
   /// Commit one ladder step and hand the accumulated finger scale to the
@@ -453,6 +471,62 @@ class PicturesTabState extends State<PicturesTab>
       _selectedIds.clear();
     });
     _updateSelectionClaim();
+  }
+
+  // ---- drag-to-select: long-press anchors, dragging sweeps a range ----
+
+  final GlobalKey _gridKey = GlobalKey();
+  int? _dragAnchorIndex;
+  Set<String>? _dragBaseSelection;
+
+  void _beginDragSelect(String id, int index) {
+    _dragAnchorIndex = index;
+    _dragBaseSelection = Set.of(_selectedIds);
+    _enterSelection(id);
+  }
+
+  void _updateDragSelect(Offset globalPos, List<CnestFile> flat) {
+    final anchor = _dragAnchorIndex;
+    final base = _dragBaseSelection;
+    if (anchor == null || base == null) return;
+    final hit = _hitTileIndex(globalPos);
+    if (hit == null) return;
+    final lo = math.min(anchor, hit);
+    final hi = math.max(anchor, hit);
+    final next = Set.of(base);
+    for (var i = lo; i <= hi && i < flat.length; i++) {
+      next.add(flat[i].id);
+    }
+    if (next.length != _selectedIds.length ||
+        !next.containsAll(_selectedIds)) {
+      setState(() {
+        _selectedIds
+          ..clear()
+          ..addAll(next);
+      });
+    }
+  }
+
+  void _endDragSelect() {
+    _dragAnchorIndex = null;
+    _dragBaseSelection = null;
+  }
+
+  /// Which tile (by flat index) is under [globalPos] right now. Hit-tests
+  /// the live render tree, so it is correct mid-scroll and across the
+  /// date-section headers; tiles tag themselves with MetaData.
+  int? _hitTileIndex(Offset globalPos) {
+    final obj = _gridKey.currentContext?.findRenderObject();
+    if (obj is! RenderBox) return null;
+    final result = BoxHitTestResult();
+    obj.hitTest(result, position: obj.globalToLocal(globalPos));
+    for (final entry in result.path) {
+      final target = entry.target;
+      if (target is RenderMetaData && target.metaData is int) {
+        return target.metaData as int;
+      }
+    }
+    return null;
   }
 
   // The selection toolbar sits right under the gallery AppBar — exactly
@@ -699,10 +773,17 @@ class PicturesTabState extends State<PicturesTab>
                           (1 - _settleFrom) *
                               Curves.easeOutCubic
                                   .transform(_settleCtrl.value);
-                      final scale = _pinchScale.value * settle;
+                      final revealCtrl = _scrollCtrl;
+                      final headerVisible = revealCtrl != null &&
+                          revealCtrl.hasClients &&
+                          revealCtrl.offset < _headerH - 1;
+                      // The title box must not zoom with the grid: while it
+                      // is in view the transition is fade-only.
+                      final scale =
+                          headerVisible ? 1.0 : _pinchScale.value * settle;
                       final fade = _fadeOnSettle
-                          ? 0.35 +
-                              0.65 *
+                          ? 0.18 +
+                              0.82 *
                                   Curves.easeOut.transform(_settleCtrl.value)
                           : 1.0;
                       return Opacity(
@@ -717,10 +798,15 @@ class PicturesTabState extends State<PicturesTab>
                     child: NotificationListener<ScrollNotification>(
                     onNotification: _onScrollNotification,
                     child: CustomScrollView(
+                    key: _gridKey,
                     controller: _scrollCtrl,
                     physics: _pinchActive
                         ? const NeverScrollableScrollPhysics()
-                        : const AlwaysScrollableScrollPhysics(),
+                        : HeaderSnapPhysics(
+                            collapsedOffset: _headerH,
+                            headerLocked: () => _headerLocked,
+                            parent: const AlwaysScrollableScrollPhysics(),
+                          ),
                     slivers: [
                       SliverToBoxAdapter(child: _bigHeader(files.length)),
                       // Collapsed state: the grid starts BELOW the floating
@@ -797,7 +883,9 @@ class PicturesTabState extends State<PicturesTab>
     bool compact = false,
   }) {
     final isSelected = _selectedIds.contains(file.id);
-    return GestureDetector(
+    return MetaData(
+      metaData: globalIndex,
+      child: GestureDetector(
       onTap: () async {
         if (_selectionMode) {
           _toggleSelected(file.id);
@@ -814,7 +902,10 @@ class PicturesTabState extends State<PicturesTab>
         );
         if (result == true) _refresh();
       },
-      onLongPress: () => _enterSelection(file.id),
+      onLongPressStart: (_) => _beginDragSelect(file.id, globalIndex),
+      onLongPressMoveUpdate: (d) =>
+          _updateDragSelect(d.globalPosition, flatFiles),
+      onLongPressEnd: (_) => _endDragSelect(),
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -856,6 +947,7 @@ class PicturesTabState extends State<PicturesTab>
               ),
             ),
         ],
+      ),
       ),
     );
   }

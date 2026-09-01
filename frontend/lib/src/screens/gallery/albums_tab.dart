@@ -33,6 +33,7 @@ class AlbumsTabState extends State<AlbumsTab> {
   ScrollController? _scrollCtrl;
   double _headerH = 0;
   Timer? _motionTimer;
+  bool _headerLocked = true;
 
   @override
   void didChangeDependencies() {
@@ -52,6 +53,8 @@ class AlbumsTabState extends State<AlbumsTab> {
     if (chrome.scrolledUnder.value != under) {
       chrome.scrolledUnder.value = under;
     }
+    chrome.headerReveal.value =
+        (_headerH - ctrl.offset).clamp(0.0, _headerH).toDouble();
   }
 
   /// Re-publish scroll-derived chrome state (used after tab switches).
@@ -60,6 +63,9 @@ class AlbumsTabState extends State<AlbumsTab> {
   bool _onScrollNotification(ScrollNotification n) {
     final chrome = widget.chrome;
     if (chrome == null || n.metrics.axis != Axis.vertical) return false;
+    if (n is ScrollStartNotification && n.dragDetails != null) {
+      _headerLocked = n.metrics.pixels > _headerH + 0.5;
+    }
     if (n is ScrollUpdateNotification) {
       final delta = n.scrollDelta ?? 0;
       if (delta > 1) {
@@ -235,6 +241,11 @@ class AlbumsTabState extends State<AlbumsTab> {
       onNotification: _onScrollNotification,
       child: ListView(
       controller: _scrollCtrl,
+      physics: HeaderSnapPhysics(
+        collapsedOffset: _headerH,
+        headerLocked: () => _headerLocked,
+        parent: const AlwaysScrollableScrollPhysics(),
+      ),
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 120),
       children: [
         _bigHeader(),

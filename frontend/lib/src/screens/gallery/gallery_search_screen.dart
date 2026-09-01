@@ -115,7 +115,13 @@ class _GallerySearchScreenState extends State<GallerySearchScreen> {
       appBar: AppBar(
         elevation: 0,
         scrolledUnderElevation: 0,
-        title: TextField(
+        title: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(
+            color: cs.surfaceContainerHighest.withValues(alpha: 0.6),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: TextField(
           controller: _queryCtrl,
           autofocus: true,
           textInputAction: TextInputAction.search,
@@ -124,6 +130,7 @@ class _GallerySearchScreenState extends State<GallerySearchScreen> {
             border: InputBorder.none,
             hintStyle:
                 TextStyle(color: cs.onSurface.withValues(alpha: 0.5)),
+          ),
           ),
         ),
       ),
