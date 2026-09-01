@@ -98,9 +98,13 @@ class AlbumsTabState extends State<AlbumsTab> {
           final frac = (1 - off / _headerH).clamp(0.0, 1.0);
           return Opacity(
             opacity: Curves.easeIn.transform(frac),
-            child: Center(
+            child: Padding(
+              padding: EdgeInsets.only(
+                  top: MediaQuery.paddingOf(context).top + 12),
+              child: Align(
+                alignment: const Alignment(0, 0.45),
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
                     'Albums',
@@ -119,6 +123,7 @@ class AlbumsTabState extends State<AlbumsTab> {
                     ),
                   ),
                 ],
+              ),
               ),
             ),
           );

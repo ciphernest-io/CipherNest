@@ -127,7 +127,13 @@ class _GallerySearchScreenState extends State<GallerySearchScreen> {
           textInputAction: TextInputAction.search,
           decoration: InputDecoration(
             hintText: 'Search photos',
+            // The pack theme paints an OutlineInputBorder + fill on every
+            // field; this one lives inside its own pill, so strip all of
+            // it (border: none alone leaves enabled/focused outlines).
+            filled: false,
             border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
             hintStyle:
                 TextStyle(color: cs.onSurface.withValues(alpha: 0.5)),
           ),

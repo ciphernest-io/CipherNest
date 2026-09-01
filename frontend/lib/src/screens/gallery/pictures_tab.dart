@@ -38,7 +38,19 @@ class PicturesTab extends StatefulWidget {
   /// Null (tests, embedding elsewhere) disables all reporting.
   final GalleryChrome? chrome;
 
-  const PicturesTab({super.key, this.chrome});
+  /// Embedded mode (the type-results view): the caller supplies the file
+  /// list, there is no reveal header, and content starts at offset 0. All
+  /// grid behavior (zoom ladder + masonry, date sections, drag-select,
+  /// selection actions) comes along for free.
+  final List<CnestFile>? filesOverride;
+  final bool embedded;
+
+  const PicturesTab({
+    super.key,
+    this.chrome,
+    this.filesOverride,
+    this.embedded = false,
+  });
 
   @override
   State<PicturesTab> createState() => PicturesTabState();
@@ -117,6 +129,14 @@ class PicturesTabState extends State<PicturesTab>
       vsync: this, duration: const Duration(milliseconds: 280));
   double _settleFrom = 1.0;
   bool _fadeOnSettle = false;
+  Alignment _zoomAlign = Alignment.center;
+
+  // Ghost handoff: a snapshot of the outgoing level keeps zooming and
+  // fades out over the incoming one — the Samsung pivot feel.
+  ui.Image? _ghostImage;
+  double _ghostStart = 1.0;
+  double _ghostEnd = 1.0;
+  final GlobalKey _repaintKey = GlobalKey();
 
   /// Visual column density of a ladder rung; the justified level behaves
   /// like ~2.2 columns for scale-continuity math.
@@ -135,9 +155,18 @@ class PicturesTabState extends State<PicturesTab>
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (_scrollCtrl == null) {
-      _headerH = MediaQuery.sizeOf(context).height * 0.30;
+      _headerH =
+          widget.embedded ? 0.0 : MediaQuery.sizeOf(context).height * 0.30;
       _scrollCtrl = ScrollController(initialScrollOffset: _headerH)
         ..addListener(_onScrollTick);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant PicturesTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.filesOverride, widget.filesOverride)) {
+      _refresh();
     }
   }
 
@@ -205,6 +234,9 @@ class PicturesTabState extends State<PicturesTab>
     _refresh();
   }
 
+  /// Back-button behavior: leave selection, stay in the gallery.
+  void exitSelection() => _exitSelection();
+
   /// Overflow-menu entry: selection with nothing picked yet.
   void startSelection() {
     setState(() => _selectionMode = true);
@@ -215,6 +247,14 @@ class PicturesTabState extends State<PicturesTab>
   void initState() {
     super.initState();
     SyncService().syncNotifier.addListener(_onSyncComplete);
+    _settleCtrl.addStatusListener((status) {
+      if (status == AnimationStatus.completed && _ghostImage != null) {
+        setState(() {
+          _ghostImage?.dispose();
+          _ghostImage = null;
+        });
+      }
+    });
     // DatabaseService fires notifyListeners on delete/restore/addFile so the
     // grid rebuilds without a pull-to-refresh after any mutation, including
     // ones initiated from other screens (album detail, image viewer).
@@ -258,6 +298,7 @@ class PicturesTabState extends State<PicturesTab>
     if (_pinchPointers.length == 2) {
       // Second finger down: this is a pinch. The physics swap cancels any
       // scroll drag the first finger already started.
+      _zoomAlign = _focalAlignment();
       setState(() {
         _pinchActive = true;
         _pinchSpanBaseline = _pinchSpan();
@@ -297,10 +338,71 @@ class PicturesTabState extends State<PicturesTab>
   /// new grid: the new level enters at the visually-equivalent scale and
   /// settles to 1 while its tiles fade in — one continuous motion can walk
   /// the whole ladder without a visible stop.
+  /// Focal point of the two fingers, as a transform alignment: the photo
+  /// under the pinch stays put across the handoff (the "pivot").
+  Alignment _focalAlignment() {
+    final obj = _gridKey.currentContext?.findRenderObject();
+    if (obj is! RenderBox || _pinchPointers.length < 2) {
+      return Alignment.center;
+    }
+    final pts = _pinchPointers.values.toList();
+    final mid = obj.globalToLocal((pts[0] + pts[1]) / 2);
+    return Alignment(
+      (mid.dx / obj.size.width) * 2 - 1,
+      (mid.dy / obj.size.height) * 2 - 1,
+    );
+  }
+
+  void _captureGhost(double startScale, double endScale) {
+    final ro = _repaintKey.currentContext?.findRenderObject();
+    if (ro is! RenderRepaintBoundary) return;
+    try {
+      final img = ro.toImageSync(
+          pixelRatio: MediaQuery.of(context).devicePixelRatio * 0.6);
+      _ghostImage?.dispose();
+      _ghostImage = img;
+      _ghostStart = startScale;
+      _ghostEnd = endScale;
+    } catch (_) {}
+  }
+
+  Widget _ghostOverlay() {
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: AnimatedBuilder(
+          animation: _settleCtrl,
+          builder: (context, _) {
+            final tCurve =
+                Curves.easeOutCubic.transform(_settleCtrl.value);
+            final scale = _ghostStart + (_ghostEnd - _ghostStart) * tCurve;
+            return Opacity(
+              opacity: (1 - Curves.easeOut.transform(_settleCtrl.value))
+                  .clamp(0.0, 1.0),
+              child: Transform.scale(
+                scale: scale,
+                alignment: _zoomAlign,
+                child: RawImage(
+                  image: _ghostImage,
+                  fit: BoxFit.fill,
+                  width: double.infinity,
+                  height: double.infinity,
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   void _stepZoom(int direction, double relative, double span) {
     final oldEff = _effCols(_zoomIndex);
     final newIdx = _zoomIndex + direction;
     final newEff = _effCols(newIdx);
+    // Handoff: snapshot the outgoing level; it keeps zooming and fades
+    // out over the incoming grid, pivoting on the fingers.
+    _zoomAlign = _focalAlignment();
+    _captureGhost(_pinchScale.value, oldEff / newEff);
     setState(() => _zoomIndex = newIdx);
     _pinchSpanBaseline = span;
     _pinchScale.value = 1.0;
@@ -414,6 +516,8 @@ class PicturesTabState extends State<PicturesTab>
     _scrollCtrl?.dispose();
     _settleCtrl.dispose();
     _pinchScale.dispose();
+    _autoScrollTimer?.cancel();
+    _ghostImage?.dispose();
     SyncService().syncNotifier.removeListener(_onSyncComplete);
     DatabaseService().removeListener(_onDatabaseChanged);
     _selectionClaim?.release();
@@ -437,6 +541,13 @@ class PicturesTabState extends State<PicturesTab>
   }
 
   Future<List<CnestFile>> _loadFiles() async {
+    final override = widget.filesOverride;
+    if (override != null) {
+      final list = List<CnestFile>.of(override);
+      return _favoritesOnly
+          ? list.where((f) => f.isFavorite).toList()
+          : list;
+    }
     final images =
         await DatabaseService().getFilesByType(CnestFileType.image);
     if (_favoritesOnly) {
@@ -485,7 +596,53 @@ class PicturesTabState extends State<PicturesTab>
     _enterSelection(id);
   }
 
+  Timer? _autoScrollTimer;
+  double _autoScrollVel = 0;
+  Offset? _lastDragGlobal;
+  List<CnestFile>? _dragFlat;
+
   void _updateDragSelect(Offset globalPos, List<CnestFile> flat) {
+    _lastDragGlobal = globalPos;
+    _dragFlat = flat;
+    _maybeAutoScroll(globalPos);
+    _sweepSelect(globalPos, flat);
+  }
+
+  /// Near the grid's top/bottom edge the list scrolls under the finger,
+  /// speed proportional to how deep into the edge zone it is, and the
+  /// sweep keeps updating as new rows slide under the drag point.
+  void _maybeAutoScroll(Offset globalPos) {
+    final obj = _gridKey.currentContext?.findRenderObject();
+    if (obj is! RenderBox) return;
+    final local = obj.globalToLocal(globalPos);
+    const zone = 96.0;
+    double v = 0;
+    if (local.dy < zone) {
+      v = -(zone - local.dy) / zone;
+    } else if (local.dy > obj.size.height - zone) {
+      v = (local.dy - (obj.size.height - zone)) / zone;
+    }
+    _autoScrollVel = v * 16;
+    if (v == 0) {
+      _autoScrollTimer?.cancel();
+      _autoScrollTimer = null;
+      return;
+    }
+    _autoScrollTimer ??=
+        Timer.periodic(const Duration(milliseconds: 16), (_) {
+      final ctrl = _scrollCtrl;
+      if (ctrl == null || !ctrl.hasClients) return;
+      final target = (ctrl.offset + _autoScrollVel)
+          .clamp(_headerH, ctrl.position.maxScrollExtent)
+          .toDouble();
+      if (target != ctrl.offset) ctrl.jumpTo(target);
+      final at = _lastDragGlobal;
+      final flat = _dragFlat;
+      if (at != null && flat != null) _sweepSelect(at, flat);
+    });
+  }
+
+  void _sweepSelect(Offset globalPos, List<CnestFile> flat) {
     final anchor = _dragAnchorIndex;
     final base = _dragBaseSelection;
     if (anchor == null || base == null) return;
@@ -510,6 +667,10 @@ class PicturesTabState extends State<PicturesTab>
   void _endDragSelect() {
     _dragAnchorIndex = null;
     _dragBaseSelection = null;
+    _lastDragGlobal = null;
+    _dragFlat = null;
+    _autoScrollTimer?.cancel();
+    _autoScrollTimer = null;
   }
 
   /// Which tile (by flat index) is under [globalPos] right now. Hit-tests
@@ -766,7 +927,9 @@ class PicturesTabState extends State<PicturesTab>
                   onPointerMove: _onPointerMove,
                   onPointerUp: _onPointerEnd,
                   onPointerCancel: _onPointerEnd,
-                  child: AnimatedBuilder(
+                  child: Stack(
+                    children: [
+                      AnimatedBuilder(
                     animation: Listenable.merge([_pinchScale, _settleCtrl]),
                     builder: (context, child) {
                       final settle = _settleFrom +
@@ -790,11 +953,13 @@ class PicturesTabState extends State<PicturesTab>
                         opacity: fade.clamp(0.0, 1.0),
                         child: Transform.scale(
                           scale: scale,
-                          alignment: Alignment.center,
+                          alignment: _zoomAlign,
                           child: child,
                         ),
                       );
                     },
+                    child: RepaintBoundary(
+                    key: _repaintKey,
                     child: NotificationListener<ScrollNotification>(
                     onNotification: _onScrollNotification,
                     child: CustomScrollView(
@@ -808,15 +973,18 @@ class PicturesTabState extends State<PicturesTab>
                             parent: const AlwaysScrollableScrollPhysics(),
                           ),
                     slivers: [
-                      SliverToBoxAdapter(child: _bigHeader(files.length)),
-                      // Collapsed state: the grid starts BELOW the floating
-                      // search/overflow buttons.
-                      SliverToBoxAdapter(
-                        child: SizedBox(
-                          height:
-                              MediaQuery.paddingOf(context).top + 56,
+                      if (!widget.embedded) ...[
+                        SliverToBoxAdapter(
+                            child: _bigHeader(files.length)),
+                        // Collapsed state: the grid starts BELOW the
+                        // floating search/overflow buttons.
+                        SliverToBoxAdapter(
+                          child: SizedBox(
+                            height:
+                                MediaQuery.paddingOf(context).top + 56,
+                          ),
                         ),
-                      ),
+                      ],
                       for (int s = 0; s < sections.length; s++) ...[
                         SliverPersistentHeader(
                           pinned: false,
@@ -855,12 +1023,17 @@ class PicturesTabState extends State<PicturesTab>
                       ],
                       SliverToBoxAdapter(
                         child: SizedBox(
-                          height: MediaQuery.paddingOf(context).bottom + 96,
+                          height: MediaQuery.paddingOf(context).bottom +
+                              (widget.embedded ? 8 : 96),
                         ),
                       ),
                     ],
                   ),
                   ),
+                  ),
+                      ),
+                      if (_ghostImage != null) _ghostOverlay(),
+                    ],
                   ),
                 ),
               ),
@@ -1053,6 +1226,7 @@ class PicturesTabState extends State<PicturesTab>
     final cs = Theme.of(context).colorScheme;
     if (!_selectionMode) return const SizedBox.shrink();
     return SafeArea(
+      top: !widget.embedded,
       bottom: false,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -1119,9 +1293,15 @@ class PicturesTabState extends State<PicturesTab>
           final frac = (1 - off / _headerH).clamp(0.0, 1.0);
           return Opacity(
             opacity: Curves.easeIn.transform(frac),
-            child: Center(
+            child: Padding(
+              padding: EdgeInsets.only(
+                  top: MediaQuery.paddingOf(context).top + 12),
+              // Biased below center: the box starts behind the status
+              // bar, so a raw Center hugs the top edge visually.
+              child: Align(
+                alignment: const Alignment(0, 0.45),
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
                     'Gallery',
@@ -1140,6 +1320,7 @@ class PicturesTabState extends State<PicturesTab>
                     ),
                   ),
                 ],
+              ),
               ),
             ),
           );

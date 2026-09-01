@@ -58,7 +58,17 @@ class _GalleryScreenState extends State<GalleryScreen> {
     final safeTop = MediaQuery.paddingOf(context).top;
     final safeBottom = MediaQuery.paddingOf(context).bottom;
 
-    return Scaffold(
+    // Back during selection deselects instead of leaving the gallery.
+    return ValueListenableBuilder<bool>(
+      valueListenable: _chrome.selectionActive,
+      builder: (context, selection, child) => PopScope(
+        canPop: !selection,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) _picturesKey.currentState?.exitSelection();
+        },
+        child: child!,
+      ),
+      child: Scaffold(
       body: Stack(
         children: [
           Positioned.fill(
@@ -76,6 +86,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
           _backToTop(safeBottom),
           _bottomPill(safeBottom),
         ],
+      ),
       ),
     );
   }
@@ -226,7 +237,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
         child: Padding(
           // OneUI width: the pill leaves 1/8 of the screen on each side.
           padding: EdgeInsets.symmetric(
-              horizontal: MediaQuery.sizeOf(context).width / 8),
+              horizontal: MediaQuery.sizeOf(context).width / 12),
           child: Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
