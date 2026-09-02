@@ -37,6 +37,8 @@ import '../../widgets/file_actions.dart';
 import '../../widgets/friendly_error_sheet.dart';
 import '../share/share_dialog.dart';
 import 'image_editor_screen.dart';
+import 'photo_hero.dart';
+import 'pictures_tab.dart' show GalleryGridItem;
 
 class ImageViewerScreen extends StatefulWidget {
   final List<CnestFile> files;
@@ -56,12 +58,18 @@ class ImageViewerScreen extends StatefulWidget {
   /// Swiping stays: the bin passes its own binned-only list.
   final bool fromRecycleBin;
 
+  /// Live index reports so the launching gallery can keep the viewed
+  /// photo's tile built and on-screen — the close hero needs a cell to
+  /// land in even after swiping far from the opened photo.
+  final ValueChanged<int>? onIndexChanged;
+
   const ImageViewerScreen({
     super.key,
     required this.files,
     required this.initialIndex,
     this.standalone = false,
     this.fromRecycleBin = false,
+    this.onIndexChanged,
   });
 
   @override
@@ -1441,6 +1449,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                             _loadVideoDurationHint();
                             // FIX: Sync filmstrip when swiping main photo
                             _scrollToIndex(index);
+                            widget.onIndexChanged?.call(index);
                           },
                           itemBuilder: (context, index) {
                             return Padding(
@@ -2883,6 +2892,20 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     super.initState();
     _zoomAnim.addListener(_applyZoomAnim);
     _checkFileType();
+    // Seed the placeholder synchronously from the grid's session memo so
+    // the hero flight lands on the exact pixels the tile showed — never a
+    // black frame, never a loader over a photo that was just on screen.
+    final seedBytes = GalleryGridItem.memoAssetBytes(widget.file.id);
+    if (seedBytes != null) {
+      _assetThumbBytes = seedBytes;
+    } else {
+      final seedPath = GalleryGridItem.memoDiskPath(widget.file.id);
+      if (seedPath != null) {
+        try {
+          _thumbImage = File(seedPath).readAsBytesSync();
+        } catch (_) {}
+      }
+    }
     if (_isVideo && widget.isFocused) {
       // Hand the dock a way to start playback before any controller exists,
       // then autoplay muted — Samsung behavior on landing on a video.
@@ -3403,18 +3426,26 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
               builder: (context, constraints) {
                 _viewportSize =
                     Size(constraints.maxWidth, constraints.maxHeight);
-                // Hero pairs with the grid tile: the photo expands
-                // out of its cell and returns to it on close.
-                return Hero(
-                  tag: 'photo-${widget.file.id}',
-                  child: ClipRect(
-                  child: AnimatedBuilder(
-                    animation: _zoomCtrl,
-                    builder: (context, child) => Transform(
-                      transform: _zoomCtrl.value,
-                      child: child,
-                    ),
-                    child: Stack(
+                // Hero pairs with the grid tile: the photo expands out
+                // of its cell and returns to it on close. The hero wraps
+                // the image's REAL display rect (Center + AspectRatio)
+                // when dimensions are known, so the flight morphs the
+                // grid's square crop into the photo's true aspect — never
+                // ballooning to full screen first. Unknown dimensions
+                // fall back to the fullscreen hero.
+                final dimW = widget.file.width;
+                final dimH = widget.file.height;
+                final aspect =
+                    (dimW != null && dimH != null && dimW > 0 && dimH > 0)
+                        ? dimW / dimH
+                        : null;
+                // contain, not cover: stored dimensions can be raw
+                // (pre-EXIF-rotation), and cover would CROP such a photo
+                // at rest. With correct metadata contain == cover inside
+                // this exact-aspect box; with wrong metadata the photo
+                // letterboxes instead of losing pixels.
+                const fit = BoxFit.contain;
+                final photo = Stack(
             fit: StackFit.expand,
             children: [
               // Placeholder — first rung that's ready wins. Local originals
@@ -3423,7 +3454,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
               if (_assetThumbBytes != null)
                 Image.memory(
                   _assetThumbBytes!,
-                  fit: BoxFit.contain,
+                  fit: fit,
                   gaplessPlayback: true,
                   errorBuilder: (_, _, _) => const SizedBox.shrink(),
                 )
@@ -3433,7 +3464,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
                 // flicker on local-gallery photos.
                 Image.file(
                   localFile,
-                  fit: BoxFit.contain,
+                  fit: fit,
                   cacheWidth: 300,
                   gaplessPlayback: true,
                   errorBuilder: (_, _, _) => const SizedBox.shrink(),
@@ -3441,7 +3472,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
               else if (_thumbImage != null)
                 Image.memory(
                   _thumbImage!,
-                  fit: BoxFit.contain,
+                  fit: fit,
                   gaplessPlayback: true,
                   errorBuilder: (_, _, _) => const SizedBox.shrink(),
                 ),
@@ -3453,7 +3484,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
               if (!_isVideo && _fullImage != null)
                 Image.memory(
                   _fullImage!,
-                  fit: BoxFit.contain,
+                  fit: fit,
                   gaplessPlayback: true,
                   // Bound the decoded bitmap: at max zoom (4x) a 1080-wide
                   // viewport never needs more than ~4320 source pixels, and
@@ -3473,9 +3504,41 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
                   },
                 ),
             ],
+                    );
+                if (aspect == null) {
+                  return Hero(
+                    tag: 'photo-${widget.file.id}',
+                    flightShuttleBuilder: photoHeroShuttle,
+                    child: ClipRect(
+                      child: AnimatedBuilder(
+                        animation: _zoomCtrl,
+                        builder: (context, child) => Transform(
+                          transform: _zoomCtrl.value,
+                          child: child,
+                        ),
+                        child: photo,
+                      ),
+                    ),
+                  );
+                }
+                return ClipRect(
+                  child: AnimatedBuilder(
+                    animation: _zoomCtrl,
+                    builder: (context, child) => Transform(
+                      transform: _zoomCtrl.value,
+                      child: child,
+                    ),
+                    child: Center(
+                      child: AspectRatio(
+                        aspectRatio: aspect,
+                        child: Hero(
+                          tag: 'photo-${widget.file.id}',
+                          flightShuttleBuilder: photoHeroShuttle,
+                          child: photo,
+                        ),
+                      ),
                     ),
                   ),
-                ),
                 );
               },
             ),
@@ -3486,7 +3549,14 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
         // the dock's pill, same as Samsung Gallery.)
 
         // D. Spinner (For Image or Video Buffering)
-        if ((!_isVideo && _isLoadingFull && _fullImage == null) ||
+        // Spinner only when there is NOTHING to show — with any
+        // placeholder on screen a loader over a local photo reads broken.
+        if ((!_isVideo &&
+                _isLoadingFull &&
+                _fullImage == null &&
+                _assetThumbBytes == null &&
+                _thumbImage == null &&
+                !hasLocal) ||
             _isBufferingVideo)
           Center(
             child: CircularProgressIndicator(

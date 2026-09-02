@@ -5,6 +5,7 @@ import '../../models/file_model.dart';
 import 'image_viewer_screen.dart';
 import 'gallery_type_results_screen.dart';
 import 'pictures_tab.dart' show GalleryGridItem;
+import 'photo_hero.dart';
 
 /// Filename search over the encrypted gallery. In-memory filter of the
 /// already-indexed rows (the index is local SQLite; nothing decrypts to
@@ -187,6 +188,7 @@ class _GallerySearchScreenState extends State<GallerySearchScreen> {
               ),
               child: Hero(
                 tag: 'photo-${matches[i].id}',
+                flightShuttleBuilder: photoHeroShuttle,
                 child: GalleryGridItem(
                   key: ValueKey('search-${matches[i].id}'),
                   file: matches[i],

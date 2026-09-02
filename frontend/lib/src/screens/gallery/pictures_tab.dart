@@ -32,6 +32,7 @@ import '../../../services/sync_service.dart';
 import '../share/share_dialog.dart';
 import 'gallery_chrome.dart';
 import 'image_viewer_screen.dart';
+import 'photo_hero.dart';
 
 class PicturesTab extends StatefulWidget {
   /// Scroll-driven chrome bridge to GalleryScreen's floating overlays.
@@ -143,6 +144,21 @@ class PicturesTabState extends State<PicturesTab>
   double _ghostEnd = 1.0;
   final GlobalKey _repaintKey = GlobalKey();
 
+  /// Incoming-layer fade is running for this handoff (a level commit with
+  /// the header hidden). Tracked apart from the ghost so the fade still
+  /// runs even when a snapshot capture fails.
+  bool _fadeIncoming = false;
+
+  // A threshold crossing commits on the NEXT frame boundary, where the
+  // repaint boundary is guaranteed painted-clean: capturing mid-gesture
+  // hit debugNeedsPaint and silently dropped the whole transition.
+  bool _stepScheduled = false;
+  int? _pendingStepDir;
+  double _pendingRelative = 1.0;
+  double _pendingSpan = 0.0;
+  Offset? _pendingMid;
+  int? _pendingPivot;
+
   /// Visual column density of a ladder rung; the justified level behaves
   /// like ~2.2 columns for scale-continuity math.
   double _effCols(int idx) => _zoomLevels[idx].isJustified
@@ -248,15 +264,30 @@ class PicturesTabState extends State<PicturesTab>
     _updateSelectionClaim();
   }
 
+  // Floating selection-bar actions (GalleryScreen's top line).
+  void moveSelectedToFolder() => _moveSelectedToFolder();
+  void hideSelected() => _hideSelected();
+  void shareSelected() {
+    final files = _lastFiles;
+    if (files != null) _shareSelected(files);
+  }
+
+  void deleteSelected() {
+    final files = _lastFiles;
+    if (files != null) _deleteSelected(files);
+  }
+
   @override
   void initState() {
     super.initState();
     SyncService().syncNotifier.addListener(_onSyncComplete);
     _settleCtrl.addStatusListener((status) {
-      if (status == AnimationStatus.completed && _ghostImage != null) {
+      if (status != AnimationStatus.completed) return;
+      if (_ghostImage != null || _fadeIncoming) {
         setState(() {
           _ghostImage?.dispose();
           _ghostImage = null;
+          _fadeIncoming = false;
         });
       }
     });
@@ -314,6 +345,14 @@ class PicturesTabState extends State<PicturesTab>
   void _onPointerMove(PointerMoveEvent event) {
     if (!_pinchPointers.containsKey(event.pointer)) return;
     _pinchPointers[event.pointer] = event.position;
+    // Drag-select rides the RAW pointer stream: the anchor tile's
+    // long-press recognizer dies when auto-scroll recycles that tile,
+    // which used to strand the timer scrolling to the end of the grid
+    // (and the finger's exit from the edge zone was never seen again).
+    if (_dragSelecting && !_pinchActive && _pinchPointers.length == 1) {
+      final flat = _lastFiles;
+      if (flat != null) _updateDragSelect(event.position, flat);
+    }
     if (!_pinchActive || _pinchPointers.length < 2) return;
 
     final span = _pinchSpan();
@@ -324,11 +363,11 @@ class PicturesTabState extends State<PicturesTab>
     }
     final relative = span / baseline;
     if (relative > 1.25 && _zoomIndex < _zoomLevels.length - 1) {
-      _stepZoom(1, relative, span); // spread → zoom in, bigger tiles
+      _queueStepZoom(1, relative, span); // spread → zoom in, bigger tiles
       return;
     }
     if (relative < 0.8 && _zoomIndex > 0) {
-      _stepZoom(-1, relative, span); // pinch → zoom out, denser grid
+      _queueStepZoom(-1, relative, span); // pinch → zoom out, denser grid
       return;
     }
     // Between steps the grid follows the fingers directly (paint-only).
@@ -363,7 +402,7 @@ class PicturesTabState extends State<PicturesTab>
     if (ro is! RenderRepaintBoundary) return;
     try {
       final img = ro.toImageSync(
-          pixelRatio: MediaQuery.of(context).devicePixelRatio * 0.6);
+          pixelRatio: MediaQuery.of(context).devicePixelRatio);
       _ghostImage?.dispose();
       _ghostImage = img;
       _ghostStart = startScale;
@@ -404,24 +443,49 @@ class PicturesTabState extends State<PicturesTab>
     return (pts[0] + pts[1]) / 2;
   }
 
-  void _stepZoom(int direction, double relative, double span) {
+  /// A pinch threshold crossing: remember the gesture's pivot NOW (both
+  /// fingers still down) and commit on the frame boundary, where the
+  /// repaint boundary is painted-clean and the outgoing level can be
+  /// snapshotted reliably.
+  void _queueStepZoom(int direction, double relative, double span) {
+    _pendingStepDir = direction;
+    _pendingRelative = relative;
+    _pendingSpan = span;
+    _zoomAlign = _focalAlignment();
+    _pendingMid = _pinchMid();
+    _pendingPivot =
+        _pendingMid == null ? null : _hitTileIndex(_pendingMid!);
+    if (_stepScheduled) return;
+    _stepScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _stepScheduled = false;
+      final dir = _pendingStepDir;
+      _pendingStepDir = null;
+      if (!mounted || dir == null) return;
+      _stepZoom(dir, _pendingRelative, _pendingSpan, _pendingMid,
+          _pendingPivot);
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  void _stepZoom(int direction, double relative, double span, Offset? mid,
+      int? pivotIndex) {
+    final newIdx =
+        (_zoomIndex + direction).clamp(0, _zoomLevels.length - 1);
+    if (newIdx == _zoomIndex) return;
     final oldEff = _effCols(_zoomIndex);
-    final newIdx = _zoomIndex + direction;
     final newEff = _effCols(newIdx);
     final ctrl = _scrollCtrl;
     final headerVisible = ctrl != null &&
         ctrl.hasClients &&
         ctrl.offset < _headerH - 1;
-    // Pivot: the tile under the fingers stays put through the handoff.
-    _zoomAlign = _focalAlignment();
-    final mid = _pinchMid();
-    final pivotIndex = mid == null ? null : _hitTileIndex(mid);
     if (!headerVisible) {
       _captureGhost(_pinchScale.value, oldEff / newEff);
     } else {
       _ghostImage?.dispose();
       _ghostImage = null;
     }
+    _fadeIncoming = !headerVisible;
     setState(() => _zoomIndex = newIdx);
     _pinchSpanBaseline = span;
     _pinchScale.value = 1.0;
@@ -434,20 +498,18 @@ class PicturesTabState extends State<PicturesTab>
       _settleCtrl.forward(from: 0);
     }
     _repositionForPivot(pivotIndex, mid, newIdx, headerVisible);
+    if (!_pinchActive) _persistZoomLevel();
   }
 
-  /// Scrolls the NEW level so the pivot tile lands back under the fingers
-  /// — this is what makes "that photo zoomed into place" read literally.
-  /// Fixed-column levels only; the justified rung keeps its offset.
-  void _repositionForPivot(
-      int? pivotIndex, Offset? mid, int newIdx, bool headerVisible) {
-    if (pivotIndex == null || mid == null || headerVisible) return;
+  /// Top-of-tile y and tile height for [flatIndex] in the CURRENT level's
+  /// layout. Fixed-column levels only (the justified rung's rows depend on
+  /// resolved aspect ratios).
+  (double, double)? _tileGeometry(int flatIndex) {
     final files = _lastFiles;
     final obj = _gridKey.currentContext?.findRenderObject();
-    final ctrl = _scrollCtrl;
-    if (files == null || obj is! RenderBox || ctrl == null) return;
-    final level = _zoomLevels[newIdx];
-    if (level.isJustified) return;
+    if (files == null || obj is! RenderBox) return null;
+    final level = _zoomLevels[_zoomIndex];
+    if (level.isJustified) return null;
     final orientation = MediaQuery.of(context).orientation;
     final cols = orientation == Orientation.landscape
         ? (level.columns * 1.5).round().clamp(2, 42)
@@ -462,20 +524,31 @@ class PicturesTabState extends State<PicturesTab>
     var y = widget.embedded
         ? 0.0
         : _headerH + MediaQuery.paddingOf(context).top + 56;
-    var found = false;
-    var index = pivotIndex;
+    var index = flatIndex;
     for (final section in sections) {
       y += 36; // date header extent
       if (index < section.files.length) {
-        y += (index ~/ cols) * (tileH + 1.5);
-        found = true;
-        break;
+        return (y + (index ~/ cols) * (tileH + 1.5), tileH);
       }
       index -= section.files.length;
       final rows = (section.files.length / cols).ceil();
       y += rows * tileH + (rows - 1) * 1.5;
     }
-    if (!found) return;
+    return null;
+  }
+
+  /// Scrolls the NEW level so the pivot tile lands back under the fingers
+  /// — this is what makes "that photo zoomed into place" read literally.
+  /// Fixed-column levels only; the justified rung keeps its offset.
+  void _repositionForPivot(
+      int? pivotIndex, Offset? mid, int newIdx, bool headerVisible) {
+    if (pivotIndex == null || mid == null || headerVisible) return;
+    final ctrl = _scrollCtrl;
+    final obj = _gridKey.currentContext?.findRenderObject();
+    if (ctrl == null || obj is! RenderBox) return;
+    final geo = _tileGeometry(pivotIndex);
+    if (geo == null) return;
+    final (y, tileH) = geo;
     final fingerLocalY = obj.globalToLocal(mid).dy;
     final target = y - fingerLocalY + tileH / 2;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -485,6 +558,24 @@ class PicturesTabState extends State<PicturesTab>
           .clamp(lowest, math.max(lowest, ctrl.position.maxScrollExtent))
           .toDouble());
     });
+  }
+
+  /// Viewer page changed: keep that photo's tile built and on screen so
+  /// the close hero always has a cell to land in — Samsung follows the
+  /// viewer the same way.
+  void _followViewer(int flatIndex) {
+    final ctrl = _scrollCtrl;
+    if (ctrl == null || !ctrl.hasClients) return;
+    final geo = _tileGeometry(flatIndex);
+    if (geo == null) return;
+    final (y, tileH) = geo;
+    final viewTop = ctrl.offset;
+    final viewH = ctrl.position.viewportDimension;
+    if (y >= viewTop + 48 && y + tileH <= viewTop + viewH - 16) return;
+    final lowest = widget.embedded ? 0.0 : _headerH;
+    ctrl.jumpTo((y - (viewH - tileH) / 2)
+        .clamp(lowest, math.max(lowest, ctrl.position.maxScrollExtent))
+        .toDouble());
   }
 
   void _ensureHeaderReachable() {
@@ -503,12 +594,16 @@ class PicturesTabState extends State<PicturesTab>
   void _onPointerEnd(PointerEvent event) {
     _pinchPointers.remove(event.pointer);
     if (_pinchPointers.length < 2) _pinchSpanBaseline = null;
+    // Finger up ALWAYS ends a drag-select — even when the anchor tile's
+    // long-press recognizer already died mid-drag.
+    if (_dragSelecting && _pinchPointers.isEmpty) _endDragSelect();
     // Keep scrolling frozen until ALL fingers lift — the finger that
     // remains after a pinch shouldn't fling the list.
     if (_pinchPointers.isEmpty && _pinchActive) {
       setState(() => _pinchActive = false);
-      // Release any leftover between-step scale without a snap.
-      if ((_pinchScale.value - 1).abs() > 0.01) {
+      // Release any leftover between-step scale without a snap — unless
+      // a step commit is queued for the next frame (it settles itself).
+      if (!_stepScheduled && (_pinchScale.value - 1).abs() > 0.01) {
         _settleFrom = _pinchScale.value;
         _pinchScale.value = 1.0;
         _settleCtrl.forward(from: 0);
@@ -665,9 +760,24 @@ class PicturesTabState extends State<PicturesTab>
   }
 
   void _exitSelection() {
+    _endDragSelect();
     setState(() {
       _selectionMode = false;
       _selectedIds.clear();
+    });
+    _updateSelectionClaim();
+  }
+
+  /// Date-header circle: selects/deselects every photo of that section.
+  void _toggleSection(List<CnestFile> files) {
+    final ids = files.map((f) => f.id).toList();
+    setState(() {
+      final all = ids.every(_selectedIds.contains);
+      if (all) {
+        _selectedIds.removeAll(ids);
+      } else {
+        _selectedIds.addAll(ids);
+      }
     });
     _updateSelectionClaim();
   }
@@ -677,8 +787,10 @@ class PicturesTabState extends State<PicturesTab>
   final GlobalKey _gridKey = GlobalKey();
   int? _dragAnchorIndex;
   Set<String>? _dragBaseSelection;
+  bool _dragSelecting = false;
 
   void _beginDragSelect(String id, int index) {
+    _dragSelecting = true;
     _dragAnchorIndex = index;
     _dragBaseSelection = Set.of(_selectedIds);
     _enterSelection(id);
@@ -767,10 +879,12 @@ class PicturesTabState extends State<PicturesTab>
           ..clear()
           ..addAll(next);
       });
+      _updateSelectionClaim();
     }
   }
 
   void _endDragSelect() {
+    _dragSelecting = false;
     _dragAnchorIndex = null;
     _dragBaseSelection = null;
     _lastDragGlobal = null;
@@ -802,6 +916,7 @@ class PicturesTabState extends State<PicturesTab>
   InsetClaim? _selectionClaim;
   void _updateSelectionClaim() {
     widget.chrome?.selectionActive.value = _selectionMode;
+    widget.chrome?.selectionCount.value = _selectedIds.length;
     if (_selectionMode && _selectionClaim == null) {
       _selectionClaim = ActivityPillInset.claim(60);
     } else if (!_selectionMode) {
@@ -1028,7 +1143,10 @@ class PicturesTabState extends State<PicturesTab>
           onRefresh: handleSync,
           child: Column(
             children: [
-              _buildToolbar(files),
+              // Main gallery: selection lives in GalleryScreen's floating
+              // top line. Only the embedded type view keeps the inline
+              // toolbar (it has a real AppBar above it).
+              if (widget.embedded) _buildToolbar(files),
               Expanded(
                 child: Listener(
                   behavior: HitTestBehavior.translucent,
@@ -1055,11 +1173,12 @@ class PicturesTabState extends State<PicturesTab>
                           headerVisible ? 1.0 : _pinchScale.value * settle;
                       // Incoming layer rises to full opacity across the
                       // whole handoff; the ghost above dies by halfway.
-                      final fade = _ghostImage != null
-                          ? Curves.easeIn.transform(_settleCtrl.value)
+                      final fade = _fadeIncoming
+                          ? Curves.easeOutCubic
+                              .transform(_settleCtrl.value)
                           : 1.0;
                       return Opacity(
-                        opacity: fade.clamp(0.05, 1.0),
+                        opacity: fade.clamp(0.0, 1.0),
                         child: Transform.scale(
                           scale: scale,
                           alignment: _zoomAlign,
@@ -1098,7 +1217,15 @@ class PicturesTabState extends State<PicturesTab>
                         SliverPersistentHeader(
                           pinned: false,
                           floating: false,
-                          delegate: _DateHeaderDelegate(sections[s].label),
+                          delegate: _DateHeaderDelegate(
+                            sections[s].label,
+                            selecting: _selectionMode,
+                            selected: _selectionMode &&
+                                sections[s].files.every(
+                                    (f) => _selectedIds.contains(f.id)),
+                            onToggle: () =>
+                                _toggleSection(sections[s].files),
+                          ),
                         ),
                         if (level.isJustified)
                           _justifiedSliver(
@@ -1189,21 +1316,23 @@ class PicturesTabState extends State<PicturesTab>
               child: ImageViewerScreen(
                 files: flatFiles,
                 initialIndex: globalIndex,
+                onIndexChanged: _followViewer,
               ),
             ),
           ),
         );
         if (result == true) _refresh();
       },
+      // The press only ANCHORS the drag-select; the sweep and the end
+      // ride the grid-level raw pointer stream (_onPointerMove/End),
+      // which survives this tile being recycled by auto-scroll.
       onLongPressStart: (_) => _beginDragSelect(file.id, globalIndex),
-      onLongPressMoveUpdate: (d) =>
-          _updateDragSelect(d.globalPosition, flatFiles),
-      onLongPressEnd: (_) => _endDragSelect(),
       child: Stack(
         fit: StackFit.expand,
         children: [
           Hero(
             tag: 'photo-${file.id}',
+            flightShuttleBuilder: photoHeroShuttle,
             child: GalleryGridItem(
               key: ValueKey(file.id),
               file: file,
@@ -1217,7 +1346,7 @@ class PicturesTabState extends State<PicturesTab>
               child: compact
                   ? null
                   : Align(
-                      alignment: Alignment.topRight,
+                      alignment: Alignment.topLeft,
                       child: Padding(
                         padding: const EdgeInsets.all(4.0),
                         child: ThemeIcon(
@@ -1455,7 +1584,15 @@ class PicturesTabState extends State<PicturesTab>
 
 class _DateHeaderDelegate extends SliverPersistentHeaderDelegate {
   final String label;
-  _DateHeaderDelegate(this.label);
+  final bool selecting;
+  final bool selected;
+  final VoidCallback? onToggle;
+  _DateHeaderDelegate(
+    this.label, {
+    this.selecting = false,
+    this.selected = false,
+    this.onToggle,
+  });
 
   @override
   double get minExtent => 36;
@@ -1471,21 +1608,43 @@ class _DateHeaderDelegate extends SliverPersistentHeaderDelegate {
       color: Theme.of(context).scaffoldBackgroundColor,
       alignment: Alignment.centerLeft,
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: cs.onSurface.withAlpha(180),
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-          fontFamily: t.fontFamily,
-        ),
+      child: Row(
+        children: [
+          // Selection mode: a select-all circle pushes the date forward.
+          if (selecting)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onToggle,
+              child: Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: ThemeIcon(
+                  selected ? 'checkCircle' : 'radio_button_unchecked',
+                  selected: selected,
+                  size: 20,
+                  color:
+                      selected ? cs.primary : cs.onSurface.withAlpha(150),
+                ),
+              ),
+            ),
+          Text(
+            label,
+            style: TextStyle(
+              color: cs.onSurface.withAlpha(180),
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              fontFamily: t.fontFamily,
+            ),
+          ),
+        ],
       ),
     );
   }
 
   @override
   bool shouldRebuild(covariant _DateHeaderDelegate oldDelegate) =>
-      label != oldDelegate.label;
+      label != oldDelegate.label ||
+      selecting != oldDelegate.selecting ||
+      selected != oldDelegate.selected;
 }
 
 /// Shared thumbnail grid item — used by Pictures tab, Albums detail, etc.
@@ -1503,6 +1662,13 @@ class GalleryGridItem extends StatefulWidget {
     this.decodeWidth = 300,
     this.compact = false,
   });
+
+  /// Synchronous peek at the session thumb memo — the viewer seeds its
+  /// placeholder from these so the hero flight never lands on black.
+  static Uint8List? memoAssetBytes(String id) =>
+      _GalleryGridItemState._memo[id]?.assetBytes;
+  static String? memoDiskPath(String id) =>
+      _GalleryGridItemState._memo[id]?.diskPath;
 
   @override
   State<GalleryGridItem> createState() => _GalleryGridItemState();

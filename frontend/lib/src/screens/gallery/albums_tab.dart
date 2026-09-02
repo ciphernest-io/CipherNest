@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -29,15 +30,25 @@ class AlbumsTab extends StatefulWidget {
   State<AlbumsTab> createState() => AlbumsTabState();
 }
 
-class AlbumsTabState extends State<AlbumsTab> {
+class AlbumsTabState extends State<AlbumsTab>
+    with SingleTickerProviderStateMixin {
   static const _kViewModePref = 'albums_view_mode';
-  _AlbumViewMode _viewMode = _AlbumViewMode.grid3;
+
+  /// Continuous view position: 0 = list, 1 = 3-across, 2 = 2-across.
+  /// Driven LIVE by the pinch — the layout follows the fingers — and
+  /// settled to the nearest whole mode on release.
+  double _viewProgress = 1.0;
+  late final AnimationController _settleCtrl = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 260));
+  double _settleFrom = 1.0;
+  double _settleTo = 1.0;
 
   // Raw-pointer pinch (same reasons as the photo grid: a scale recognizer
   // loses the arena to the scroll drag).
   final Map<int, Offset> _pinchPointers = {};
   bool _pinchActive = false;
   double? _pinchBaseline;
+  double _pinchStartProgress = 1.0;
 
   double _pinchSpan() {
     final pts = _pinchPointers.values.toList();
@@ -47,9 +58,11 @@ class AlbumsTabState extends State<AlbumsTab> {
   void _onPointerDown(PointerDownEvent e) {
     _pinchPointers[e.pointer] = e.position;
     if (_pinchPointers.length == 2) {
+      _settleCtrl.stop();
       setState(() {
         _pinchActive = true;
         _pinchBaseline = _pinchSpan();
+        _pinchStartProgress = _viewProgress;
       });
     }
   }
@@ -64,14 +77,13 @@ class AlbumsTabState extends State<AlbumsTab> {
       _pinchBaseline = span;
       return;
     }
-    final relative = span / baseline;
-    final idx = _viewMode.index;
-    if (relative > 1.25 && idx < _AlbumViewMode.values.length - 1) {
-      setState(() => _viewMode = _AlbumViewMode.values[idx + 1]);
-      _pinchBaseline = span;
-    } else if (relative < 0.8 && idx > 0) {
-      setState(() => _viewMode = _AlbumViewMode.values[idx - 1]);
-      _pinchBaseline = span;
+    // Continuous: the layout tracks the fingers directly — one 1.7x span
+    // change walks one full view step; release snaps to the nearest mode.
+    final delta = math.log(span / baseline) / math.log(1.7);
+    final next =
+        (_pinchStartProgress + delta).clamp(0.0, 2.0).toDouble();
+    if ((next - _viewProgress).abs() > 0.001) {
+      setState(() => _viewProgress = next);
     }
   }
 
@@ -80,26 +92,36 @@ class AlbumsTabState extends State<AlbumsTab> {
     if (_pinchPointers.length < 2) _pinchBaseline = null;
     if (_pinchPointers.isEmpty && _pinchActive) {
       setState(() => _pinchActive = false);
-      SharedPreferences.getInstance()
-          .then((p) => p.setInt(_kViewModePref, _viewMode.index));
+      _settleToNearest();
     }
+  }
+
+  void _settleToNearest() {
+    _settleFrom = _viewProgress;
+    _settleTo = _viewProgress.round().clamp(0, 2).toDouble();
+    if ((_settleTo - _settleFrom).abs() < 0.001) {
+      setState(() => _viewProgress = _settleTo);
+    } else {
+      _settleCtrl.forward(from: 0);
+    }
+    SharedPreferences.getInstance()
+        .then((p) => p.setInt(_kViewModePref, _settleTo.round()));
   }
 
   Future<void> _loadViewMode() async {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getInt(_kViewModePref);
     if (saved == null || !mounted) return;
-    setState(() => _viewMode = _AlbumViewMode
-        .values[saved.clamp(0, _AlbumViewMode.values.length - 1)]);
+    setState(() => _viewProgress = saved.clamp(0, 2).toDouble());
   }
 
-  Widget _entryCard(_AlbumEntry entry, _AlbumViewMode mode) {
+  Widget _entryCard(_AlbumEntry entry, double t) {
     final album = entry.album;
-    if (album == null) return _buildCreateCard();
+    if (album == null) return _buildCreateCard(t);
     return _AlbumCard(
       key: ValueKey(entry.id),
       album: album,
-      mode: mode,
+      gridness: t,
       onTap: () => _openAlbum(album),
     );
   }
@@ -220,6 +242,11 @@ class AlbumsTabState extends State<AlbumsTab> {
   @override
   void initState() {
     super.initState();
+    _settleCtrl.addListener(() {
+      final v = Curves.easeOutCubic.transform(_settleCtrl.value);
+      setState(() =>
+          _viewProgress = _settleFrom + (_settleTo - _settleFrom) * v);
+    });
     SyncService().syncNotifier.addListener(_reload);
     // Rebuild album covers when files are added, deleted, or restored —
     // getAlbumCoverFile now filters is_deleted and falls back to the next
@@ -233,6 +260,7 @@ class AlbumsTabState extends State<AlbumsTab> {
   void dispose() {
     _motionTimer?.cancel();
     _scrollCtrl?.dispose();
+    _settleCtrl.dispose();
     SyncService().syncNotifier.removeListener(_reload);
     DatabaseService().removeListener(_reload);
     super.dispose();
@@ -344,8 +372,8 @@ class AlbumsTabState extends State<AlbumsTab> {
           _sectionHeader('On this phone', cs),
           // Keys stay LOAD-BEARING: card state (the loaded cover) must
           // travel with its album across list shifts and mode morphs.
-          _AnimatedAlbumGrid(
-            mode: _viewMode,
+          _MorphAlbumGrid(
+            progress: _viewProgress,
             entries: [
               for (final album in _deviceAlbums)
                 _AlbumEntry(album.id, album),
@@ -355,8 +383,8 @@ class AlbumsTabState extends State<AlbumsTab> {
         ],
         _sectionHeader('My albums', cs,
             subtitle: 'Synced across your devices'),
-        _AnimatedAlbumGrid(
-          mode: _viewMode,
+        _MorphAlbumGrid(
+          progress: _viewProgress,
           entries: [
             for (final album in _albums) _AlbumEntry(album.id, album),
             const _AlbumEntry('__create__', null),
@@ -499,29 +527,76 @@ class AlbumsTabState extends State<AlbumsTab> {
     );
   }
 
-  Widget _buildCreateCard() {
+  Widget _buildCreateCard(double g0) {
     final cs = Theme.of(context).colorScheme;
     final t = ThemeController().tokens;
+    final g = g0.clamp(0.0, 1.0).toDouble();
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: _createAlbum,
-      child: Container(
-        decoration: BoxDecoration(
-          color: cs.surface,
-          borderRadius: BorderRadius.circular(t.rCard),
-          border: Border.all(color: cs.outline),
-        ),
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              ThemeIcon('plus', color: cs.onSurface.withAlpha(140), size: 40),
-              const SizedBox(height: 8),
-              Text('Create Album',
-                  style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 13)),
-            ],
-          ),
-        ),
-      ),
+      child: LayoutBuilder(builder: (context, c) {
+        final size = Size(c.maxWidth, c.maxHeight);
+        final boxRect = Rect.lerp(
+          Rect.fromLTWH(0, 0, size.height, size.height),
+          Rect.fromLTWH(0, 0, size.width, size.height),
+          g,
+        )!;
+        return Stack(
+          children: [
+            Positioned.fromRect(
+              rect: boxRect,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: cs.surface,
+                  borderRadius: BorderRadius.circular(t.rCard),
+                  border: Border.all(color: cs.outline),
+                ),
+                child: Center(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ThemeIcon('plus',
+                            color: cs.onSurface.withAlpha(140), size: 40),
+                        const SizedBox(height: 8),
+                        Opacity(
+                          opacity: g,
+                          child: Text('Create Album',
+                              style: TextStyle(
+                                  color: cs.onSurface.withAlpha(140),
+                                  fontSize: 13)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            if (g < 0.5)
+              Positioned(
+                left: size.height + 12,
+                right: 8,
+                top: 0,
+                bottom: 0,
+                child: IgnorePointer(
+                  child: AnimatedOpacity(
+                    opacity: g <= 0.001 ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 160),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('Create album',
+                          style: TextStyle(
+                              color: cs.onSurface.withAlpha(140),
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      }),
     );
   }
 }
@@ -529,13 +604,18 @@ class AlbumsTabState extends State<AlbumsTab> {
 class _AlbumCard extends StatefulWidget {
   final CnestAlbum album;
   final VoidCallback onTap;
-  final _AlbumViewMode mode;
+
+  /// 0 = list row (the box IS the square cover; text sits beside it),
+  /// 1 = grid card (the cover fills the card; text overlaid at the
+  /// bottom). The pinch drives values in between: the box rect and both
+  /// text layers interpolate continuously.
+  final double gridness;
 
   const _AlbumCard({
     super.key,
     required this.album,
     required this.onTap,
-    this.mode = _AlbumViewMode.grid3,
+    this.gridness = 1.0,
   });
 
   @override
@@ -624,7 +704,7 @@ class _AlbumCardState extends State<_AlbumCard> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final t = ThemeController().tokens;
-    final grid = widget.mode != _AlbumViewMode.list;
+    final g = widget.gridness.clamp(0.0, 1.0).toDouble();
     Widget cover() => _coverBytes != null
         ? Image.memory(_coverBytes!, fit: BoxFit.cover)
         : Container(
@@ -638,65 +718,92 @@ class _AlbumCardState extends State<_AlbumCard> {
             ),
           );
 
-    // The outer rect (and with it the cover's aspect) is animated by the
-    // grid; only the internal arrangement swaps between overlay and row.
+    // The card's outer rect is interpolated by _MorphAlbumGrid; inside it
+    // the visible BOX morphs between "the whole card" (grid) and "the
+    // height-sized square on the left" (list). The overlay text fades out
+    // with the morph; the beside-text fades in only once the morph lands
+    // on the list — Samsung's exact order.
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: widget.onTap,
-      child: Container(
-        decoration: BoxDecoration(
-          color: cs.surface,
-          borderRadius: BorderRadius.circular(t.rCard),
-          border: Border.all(color: cs.outline),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: grid
-            ? Stack(
-                fit: StackFit.expand,
-                children: [
-                  cover(),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: Container(
-                      padding: const EdgeInsets.fromLTRB(10, 18, 10, 8),
-                      decoration: const BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.bottomCenter,
-                          end: Alignment.topCenter,
-                          colors: [Color(0xB3000000), Color(0x00000000)],
+      child: LayoutBuilder(builder: (context, c) {
+        final size = Size(c.maxWidth, c.maxHeight);
+        final boxRect = Rect.lerp(
+          Rect.fromLTWH(0, 0, size.height, size.height),
+          Rect.fromLTWH(0, 0, size.width, size.height),
+          g,
+        )!;
+        return Stack(
+          children: [
+            Positioned.fromRect(
+              rect: boxRect,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: cs.surface,
+                  borderRadius: BorderRadius.circular(t.rCard),
+                  border: Border.all(color: cs.outline),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    cover(),
+                    if (g > 0.001)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        child: Opacity(
+                          opacity: g,
+                          child: Container(
+                            padding:
+                                const EdgeInsets.fromLTRB(10, 18, 10, 8),
+                            decoration: const BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.bottomCenter,
+                                end: Alignment.topCenter,
+                                colors: [
+                                  Color(0xB3000000),
+                                  Color(0x00000000),
+                                ],
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment:
+                                  CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(widget.album.name,
+                                    style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 13),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis),
+                                const SizedBox(height: 1),
+                                Text('${widget.album.fileCount}',
+                                    style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 11)),
+                              ],
+                            ),
+                          ),
                         ),
                       ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(widget.album.name,
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 13),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis),
-                          const SizedBox(height: 1),
-                          Text('${widget.album.fileCount}',
-                              style: const TextStyle(
-                                  color: Colors.white70, fontSize: 11)),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              )
-            : Row(
-                children: [
-                  SizedBox(
-                    width: 76,
-                    height: double.infinity,
-                    child: cover(),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
+                  ],
+                ),
+              ),
+            ),
+            if (g < 0.5)
+              Positioned(
+                left: size.height + 12,
+                right: 8,
+                top: 0,
+                bottom: 0,
+                child: IgnorePointer(
+                  child: AnimatedOpacity(
+                    opacity: g <= 0.001 ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 160),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -716,10 +823,11 @@ class _AlbumCardState extends State<_AlbumCard> {
                       ],
                     ),
                   ),
-                  const SizedBox(width: 8),
-                ],
+                ),
               ),
-      ),
+          ],
+        );
+      }),
     );
   }
 
@@ -741,76 +849,69 @@ class _AlbumCardState extends State<_AlbumCard> {
 }
 
 
-/// The three album layouts, in pinch order: pinch-in walks toward the
-/// list, pinch-out toward the 2-wide cards.
-enum _AlbumViewMode { list, grid3, grid2 }
-
 class _AlbumEntry {
   const _AlbumEntry(this.id, this.album);
   final String id;
   final CnestAlbum? album; // null = the "create album" card
 }
 
-/// Mode changes MOVE every card to its new rect (AnimatedPositioned per
-/// album, stable keys) — no fades: going 2-wide -> 3-wide you can follow
-/// each album travel, and the 3:4 <-> square aspect morphs with the rect.
-class _AnimatedAlbumGrid extends StatelessWidget {
-  const _AnimatedAlbumGrid({
+/// Progress-driven album layout: 0 = list rows, 1 = 3-across, 2 =
+/// 2-across. Every card rect is a lerp between the two neighboring
+/// layouts, so the pinch MOVES the cards continuously — no fades, no
+/// threshold snap — and each card's aspect morphs with its rect. Stable
+/// keys keep card state (the loaded cover) riding along.
+class _MorphAlbumGrid extends StatelessWidget {
+  const _MorphAlbumGrid({
     required this.entries,
-    required this.mode,
+    required this.progress,
     required this.buildCard,
   });
 
-  static const _moveDuration = Duration(milliseconds: 340);
   final List<_AlbumEntry> entries;
-  final _AlbumViewMode mode;
-  final Widget Function(_AlbumEntry, _AlbumViewMode) buildCard;
+  final double progress;
+  final Widget Function(_AlbumEntry, double) buildCard;
+
+  Rect _rectFor(int i, int modeIdx, double w) {
+    if (modeIdx == 0) return Rect.fromLTWH(0, i * 84.0, w, 76);
+    final cols = modeIdx == 1 ? 3 : 2;
+    final tw = (w - (cols - 1) * 10) / cols;
+    final th = tw * 4 / 3;
+    return Rect.fromLTWH(
+        (i % cols) * (tw + 10), (i ~/ cols) * (th + 10), tw, th);
+  }
+
+  double _heightFor(int modeIdx, double w) {
+    if (entries.isEmpty) return 0;
+    if (modeIdx == 0) return entries.length * 84.0 - 8;
+    final cols = modeIdx == 1 ? 3 : 2;
+    final tw = (w - (cols - 1) * 10) / cols;
+    final th = tw * 4 / 3;
+    final rows = (entries.length / cols).ceil();
+    return rows * th + (rows - 1) * 10;
+  }
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
       final w = constraints.maxWidth;
-      late final double totalH;
-      Rect rectFor(int i) {
-        switch (mode) {
-          case _AlbumViewMode.list:
-            return Rect.fromLTWH(0, i * 84.0, w, 76);
-          case _AlbumViewMode.grid3:
-          case _AlbumViewMode.grid2:
-            final cols = mode == _AlbumViewMode.grid3 ? 3 : 2;
-            final tw = (w - (cols - 1) * 10) / cols;
-            final th = tw * 4 / 3;
-            final row = i ~/ cols;
-            final col = i % cols;
-            return Rect.fromLTWH(
-                col * (tw + 10), row * (th + 10), tw, th);
-        }
-      }
-
-      if (mode == _AlbumViewMode.list) {
-        totalH = entries.isEmpty ? 0 : entries.length * 84.0 - 8;
-      } else {
-        final cols = mode == _AlbumViewMode.grid3 ? 3 : 2;
-        final tw = (w - (cols - 1) * 10) / cols;
-        final th = tw * 4 / 3;
-        final rows = (entries.length / cols).ceil();
-        totalH = rows == 0 ? 0 : rows * th + (rows - 1) * 10;
-      }
-
-      return AnimatedContainer(
-        duration: _moveDuration,
-        curve: Curves.easeInOutCubic,
+      final p = progress.clamp(0.0, 2.0).toDouble();
+      final lo = p.floor().clamp(0, 2);
+      final hi = p.ceil().clamp(0, 2);
+      final f = (p - lo).clamp(0.0, 1.0).toDouble();
+      final gridness = p.clamp(0.0, 1.0).toDouble();
+      final totalH = _heightFor(lo, w) +
+          (_heightFor(hi, w) - _heightFor(lo, w)) * f;
+      return SizedBox(
         height: totalH,
         child: Stack(
           clipBehavior: Clip.none,
           children: [
             for (var i = 0; i < entries.length; i++)
-              AnimatedPositioned.fromRect(
+              Positioned.fromRect(
                 key: ValueKey('pos-${entries[i].id}'),
-                duration: _moveDuration,
-                curve: Curves.easeInOutCubic,
-                rect: rectFor(i),
-                child: buildCard(entries[i], mode),
+                rect: Rect.lerp(
+                    _rectFor(i, lo, w), _rectFor(i, hi, w), f)!,
+                child: buildCard(entries[i], gridness),
               ),
           ],
         ),

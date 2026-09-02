@@ -24,12 +24,16 @@ class GalleryChrome {
   /// inside the title box.
   final ValueNotifier<double> headerReveal = ValueNotifier(0);
 
+  /// Selected-photo count (drives the floating selection bar's label).
+  final ValueNotifier<int> selectionCount = ValueNotifier(0);
+
   void dispose() {
     scrolledUnder.dispose();
     chromeHidden.dispose();
     showBackToTop.dispose();
     selectionActive.dispose();
     headerReveal.dispose();
+    selectionCount.dispose();
   }
 }
 

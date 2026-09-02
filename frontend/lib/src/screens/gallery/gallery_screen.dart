@@ -94,80 +94,150 @@ class _GalleryScreenState extends State<GalleryScreen> {
   // ---- top-left: search + overflow, translucent pill when scrolled ----
 
   Widget _topButtons(double safeTop) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: _chrome.selectionActive,
+      builder: (context, selection, _) => ValueListenableBuilder<double>(
+        valueListenable: _chrome.headerReveal,
+        builder: (context, reveal, _) {
+          // The buttons belong to the grid's top edge: revealing the title
+          // box pushes them DOWN with the content; their collapsed spot is
+          // their upper limit when scrolling back up.
+          final top = safeTop +
+              6 +
+              ((_bottomNavIndex == 0 || _bottomNavIndex == 1) ? reveal : 0);
+          // Selection swaps the CONTENT of this same line — the count and
+          // the selection actions fill it edge to edge. Same top rule, so
+          // it never rides into the title box, and being an overlay it
+          // never pushes the photos down.
+          if (selection) {
+            return Positioned(
+              top: top,
+              left: 10,
+              right: 10,
+              child: _selectionBar(),
+            );
+          }
+          return Positioned(top: top, right: 10, child: _plainTopButtons());
+        },
+      ),
+    );
+  }
+
+  Widget _selectionBar() {
     final cs = Theme.of(context).colorScheme;
     final t = ThemeController().tokens;
-    return ValueListenableBuilder<double>(
-      valueListenable: _chrome.headerReveal,
-      builder: (context, reveal, inner) => Positioned(
-        // The buttons belong to the grid's top edge: revealing the title
-        // box pushes them DOWN with the content; their collapsed spot is
-        // their upper limit when scrolling back up.
-        top: safeTop +
-            6 +
-            ((_bottomNavIndex == 0 || _bottomNavIndex == 1) ? reveal : 0),
-        right: 10,
-        child: inner!,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHigh.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(t.rPill),
+        border: Border.all(color: cs.outline.withValues(alpha: 0.35)),
       ),
-      child: ValueListenableBuilder<bool>(
-        valueListenable: _chrome.selectionActive,
-        builder: (context, selection, _) => ValueListenableBuilder<bool>(
-          valueListenable: _chrome.chromeHidden,
-          builder: (context, hidden, _) => ValueListenableBuilder<bool>(
-            valueListenable: _chrome.scrolledUnder,
-            builder: (context, under, _) {
-              final visible = !hidden && !selection;
-              // Pictures and Albums have the reveal header; the other
-              // tabs' content is always "under" the buttons.
-              final pillBg = (_bottomNavIndex == 0 || _bottomNavIndex == 1)
-                  ? under
-                  : true;
-              return IgnorePointer(
-                ignoring: !visible,
-                child: AnimatedOpacity(
-                  opacity: visible ? 1 : 0,
-                  duration: const Duration(milliseconds: 180),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    padding: const EdgeInsets.symmetric(horizontal: 2),
-                    decoration: BoxDecoration(
-                      color: cs.surfaceContainerHigh
-                          .withValues(alpha: pillBg ? 0.82 : 0),
-                      borderRadius: BorderRadius.circular(t.rPill),
-                      border: Border.all(
-                        color: cs.outline.withValues(
-                            alpha: pillBg ? 0.35 : 0),
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (_bottomNavIndex == 1)
-                          IconButton(
-                            tooltip: 'New album',
-                            icon: ThemeIcon('plus', color: cs.onSurface),
-                            onPressed: () =>
-                                _albumsKey.currentState?.createAlbum(),
-                          ),
-                        IconButton(
-                          tooltip: 'Search',
-                          icon: ThemeIcon('magnifyingGlass',
-                              color: cs.onSurface),
-                          onPressed: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                                builder: (_) =>
-                                    const GallerySearchScreen()),
-                          ),
-                        ),
-                        _overflowMenu(cs),
-                      ],
-                    ),
+      child: Row(
+        children: [
+          IconButton(
+            tooltip: 'Exit selection',
+            icon: ThemeIcon('x', color: cs.onSurface),
+            onPressed: () => _picturesKey.currentState?.exitSelection(),
+          ),
+          Expanded(
+            child: ValueListenableBuilder<int>(
+              valueListenable: _chrome.selectionCount,
+              builder: (context, n, _) => Text(
+                '$n selected',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: cs.onSurface,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Move to folder',
+            icon: ThemeIcon('folder', color: cs.onSurface),
+            onPressed: () =>
+                _picturesKey.currentState?.moveSelectedToFolder(),
+          ),
+          IconButton(
+            tooltip: 'Hide from views',
+            icon: ThemeIcon('visibility_off', color: cs.onSurface),
+            onPressed: () => _picturesKey.currentState?.hideSelected(),
+          ),
+          IconButton(
+            tooltip: 'Share',
+            icon: ThemeIcon('shareFat', color: cs.onSurface),
+            onPressed: () => _picturesKey.currentState?.shareSelected(),
+          ),
+          IconButton(
+            tooltip: 'Delete',
+            icon: ThemeIcon('trash', color: cs.error),
+            onPressed: () => _picturesKey.currentState?.deleteSelected(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _plainTopButtons() {
+    final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
+    return ValueListenableBuilder<bool>(
+      valueListenable: _chrome.chromeHidden,
+      builder: (context, hidden, _) => ValueListenableBuilder<bool>(
+        valueListenable: _chrome.scrolledUnder,
+        builder: (context, under, _) {
+          final visible = !hidden;
+          // Pictures and Albums have the reveal header; the other
+          // tabs' content is always "under" the buttons.
+          final pillBg = (_bottomNavIndex == 0 || _bottomNavIndex == 1)
+              ? under
+              : true;
+          return IgnorePointer(
+            ignoring: !visible,
+            child: AnimatedOpacity(
+              opacity: visible ? 1 : 0,
+              duration: const Duration(milliseconds: 180),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 220),
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                decoration: BoxDecoration(
+                  color: cs.surfaceContainerHigh
+                      .withValues(alpha: pillBg ? 0.82 : 0),
+                  borderRadius: BorderRadius.circular(t.rPill),
+                  border: Border.all(
+                    color:
+                        cs.outline.withValues(alpha: pillBg ? 0.35 : 0),
                   ),
                 ),
-              );
-            },
-          ),
-        ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_bottomNavIndex == 1)
+                      IconButton(
+                        tooltip: 'New album',
+                        icon: ThemeIcon('plus', color: cs.onSurface),
+                        onPressed: () =>
+                            _albumsKey.currentState?.createAlbum(),
+                      ),
+                    IconButton(
+                      tooltip: 'Search',
+                      icon: ThemeIcon('magnifyingGlass',
+                          color: cs.onSurface),
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const GallerySearchScreen()),
+                      ),
+                    ),
+                    _overflowMenu(cs),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
