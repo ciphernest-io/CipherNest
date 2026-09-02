@@ -21,6 +21,7 @@ import '../../../services/cloud/cloud_service.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/cache_manager_service.dart';
 import '../../../services/local_content_guard.dart';
+import '../../utils/atomic_write.dart';
 import '../../utils/byte_format.dart';
 import '../../utils/perf_trace.dart';
 import '../../../services/database_service.dart';
@@ -58,10 +59,11 @@ class ImageViewerScreen extends StatefulWidget {
   /// Swiping stays: the bin passes its own binned-only list.
   final bool fromRecycleBin;
 
-  /// Live index reports so the launching gallery can keep the viewed
-  /// photo's tile built and on-screen — the close hero needs a cell to
-  /// land in even after swiping far from the opened photo.
-  final ValueChanged<int>? onIndexChanged;
+  /// Reports the viewed photo BY FILE ID so the launching gallery can
+  /// keep its tile built and on-screen — the close hero needs a cell to
+  /// land in even after swiping far from the opened photo. An id, not an
+  /// index: the gallery can refresh and reorder while the viewer is open.
+  final ValueChanged<String>? onViewedFileChanged;
 
   const ImageViewerScreen({
     super.key,
@@ -69,7 +71,7 @@ class ImageViewerScreen extends StatefulWidget {
     required this.initialIndex,
     this.standalone = false,
     this.fromRecycleBin = false,
-    this.onIndexChanged,
+    this.onViewedFileChanged,
   });
 
   @override
@@ -88,6 +90,22 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   // fight the user's drag.
   bool _userScrollingStrip = false;
   static final Set<String> _activeDownloads = {};
+
+  // Verified full-image bytes for the CURRENT photo's neighbours, filled
+  // by the prefetch chain once the focused photo is ready. A page seeded
+  // from here (plus the precached decode) paints the finished image on
+  // its very first frame — the swipe lands in milliseconds. LRU-capped
+  // and cleared when the viewer closes.
+  static final Map<String, Uint8List> _fullSeedCache = {};
+  static const int _fullSeedCap = 5;
+
+  static void _stashFullSeed(String id, Uint8List bytes) {
+    _fullSeedCache.remove(id);
+    if (_fullSeedCache.length >= _fullSeedCap) {
+      _fullSeedCache.remove(_fullSeedCache.keys.first);
+    }
+    _fullSeedCache[id] = bytes;
+  }
   // Zoom state of the focused page. While zoomed, page-swipe and
   // swipe-down-to-dismiss are disabled so drags pan the image instead.
   bool _isZoomed = false;
@@ -122,6 +140,13 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   // the pager's horizontal drag tracks the stray dx of a vertical swipe
   // and the page wobbles left/right under the sheet/dismiss motion.
   bool _verticalDragLock = false;
+
+  // Touch born inside the system back-gesture zone: the OS is about to
+  // claim the swipe as BACK, so the pager must not track the few pixels
+  // that leak through (they nudged the pager off the photo mid-pop).
+  // systemGestureInsets are ZERO on button-nav phones, so their swipes
+  // are untouched.
+  bool _edgeBackGuard = false;
 
   // --- Active-video binding, reported by the focused page. The dock uses it
   // to render the Samsung-style pill (play/pause + time), the mute toggle,
@@ -223,6 +248,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   void dispose() {
     _pageController.dispose();
     _filmStripController.dispose();
+    _fullSeedCache.clear();
     super.dispose();
   }
 
@@ -472,9 +498,25 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     // filmstrip and viewer placeholder are ready when the user swipes here.
     _prewarmThumb(file);
 
-    // Skip full-image pre-fetch if the original is on device — Image.file
-    // will pick it up instantly on swipe.
-    if (file.localPath != null && File(file.localPath!).existsSync()) return;
+    // Local original: verify + read it on a BACKGROUND isolate and
+    // pre-decode at the page's exact provider key, so swiping onto it
+    // shows the finished image immediately. This runs only after the
+    // focused photo is done (the prefetch chain), one neighbour at a
+    // time — unlike allowImplicitScrolling, which piled three full
+    // loads + hashes onto the open.
+    if (file.localPath != null && File(file.localPath!).existsSync()) {
+      final localExt = file.filename.split('.').last.toLowerCase();
+      if (const {'mp4', 'mov', 'avi', 'mkv'}.contains(localExt)) return;
+      if (_fullSeedCache.containsKey(file.id)) return;
+      final bytes = await LocalContentGuard.verifiedRead(file);
+      if (bytes == null || !mounted) return;
+      _stashFullSeed(file.id, bytes);
+      unawaited(precacheImage(
+        ResizeImage.resizeIfNeeded(4096, null, MemoryImage(bytes)),
+        context,
+      ));
+      return;
+    }
 
     if (_activeDownloads.contains(file.cloudId)) return;
 
@@ -499,7 +541,13 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       final decryptedBytes = await EncryptionService.decryptFile(
         encryptedBytes,
       );
-      await File(fullPath).writeAsBytes(decryptedBytes);
+      await atomicWriteBytes(File(fullPath), decryptedBytes);
+      if (!mounted) return;
+      _stashFullSeed(file.id, decryptedBytes);
+      unawaited(precacheImage(
+        ResizeImage.resizeIfNeeded(4096, null, MemoryImage(decryptedBytes)),
+        context,
+      ));
     } catch (e) {
       // Silent fail
     } finally {
@@ -1310,10 +1358,19 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                   bottom: 0,
                   right: photoRightPadding,
                   child: Listener(
-                    onPointerDown: (_) {
+                    onPointerDown: (event) {
                       _activePointers++;
                       _dragDx = 0;
                       _dragDy = 0;
+                      final gz =
+                          MediaQuery.systemGestureInsetsOf(context);
+                      if (gz.left > 0 || gz.right > 0) {
+                        final x = event.position.dx;
+                        final w = MediaQuery.sizeOf(context).width;
+                        if (x <= gz.left || x >= w - gz.right) {
+                          setState(() => _edgeBackGuard = true);
+                        }
+                      }
                       // Multi-touch means pinch — never the details sheet,
                       // any in-progress dismiss drag snaps back, and the
                       // pager freezes for the rest of the gesture.
@@ -1369,10 +1426,13 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                         _sheetTriggered = false;
                         // Unfreeze only when ALL fingers lift — the finger
                         // left over from a pinch must not fling the pager.
-                        if (_multiTouch || _verticalDragLock) {
+                        if (_multiTouch ||
+                            _verticalDragLock ||
+                            _edgeBackGuard) {
                           setState(() {
                             _multiTouch = false;
                             _verticalDragLock = false;
+                            _edgeBackGuard = false;
                           });
                         }
                         if (_dismissDragging) _endDismissDrag();
@@ -1384,10 +1444,12 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                         _sheetTriggered = false;
                         if (_multiTouch ||
                             _verticalDragLock ||
+                            _edgeBackGuard ||
                             _dismissDragging) {
                           setState(() {
                             _multiTouch = false;
                             _verticalDragLock = false;
+                            _edgeBackGuard = false;
                             _dismissDragging = false;
                             _dismissDy = 0;
                           });
@@ -1425,17 +1487,14 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                           curve: Curves.easeOutCubic,
                           child: PageView.builder(
                           controller: _pageController,
-                          // Build current ±1: neighbours preload + decode
-                          // their full image before the swipe arrives, so
-                          // the handoff is milliseconds, Samsung-style.
-                          // Bounded (3 live pages), unlike the old
-                          // keep-alive that retained every visited page.
-                          allowImplicitScrolling: true,
                           // While zoomed, horizontal drags pan the image,
                           // not the pager; while pinching or mid vertical
                           // swipe, the pager must not drag underneath the
                           // gesture.
-                          physics: _isZoomed || _multiTouch || _verticalDragLock
+                          physics: _isZoomed ||
+                                  _multiTouch ||
+                                  _verticalDragLock ||
+                                  _edgeBackGuard
                               ? const NeverScrollableScrollPhysics()
                               : null,
                           itemCount: _currentFiles.length,
@@ -1455,7 +1514,8 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                             _loadVideoDurationHint();
                             // FIX: Sync filmstrip when swiping main photo
                             _scrollToIndex(index);
-                            widget.onIndexChanged?.call(index);
+                            widget.onViewedFileChanged
+                                ?.call(_currentFiles[index].id);
                           },
                           itemBuilder: (context, index) {
                             return Padding(
@@ -2912,6 +2972,16 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
         } catch (_) {}
       }
     }
+    // Full-image seed: the neighbour prewarm already verified + read (and
+    // pre-decoded) this photo — the swipe lands on the finished image,
+    // no thumb phase at all.
+    if (!_isVideo) {
+      final full = _ImageViewerScreenState._fullSeedCache[widget.file.id];
+      if (full != null) {
+        _fullImage = full;
+        _isLoadingFull = false;
+      }
+    }
     if (_isVideo && widget.isFocused) {
       // Hand the dock a way to start playback before any controller exists,
       // then autoplay muted — Samsung behavior on landing on a video.
@@ -3088,7 +3158,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
       final decryptedBytes = await EncryptionService.decryptFile(
         encryptedBytes,
       );
-      await targetFile.writeAsBytes(decryptedBytes);
+      await atomicWriteBytes(targetFile, decryptedBytes);
 
       // Only update UI if we still don't have the full image
       // (If full image loaded first, we don't need to show the blurry thumb)
@@ -3104,35 +3174,48 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
 
   Future<void> _loadImagesImpl() async {
     if (!mounted) return;
+    if (_fullImage != null) {
+      // Seeded in initState from the neighbour-prewarm cache — verified,
+      // read, and usually already decoded. Nothing to load.
+      widget.onLoaded(widget.index);
+      return;
+    }
 
     // STEP 1 — placeholder, launched CONCURRENTLY with the full load:
     // neither waits on the other; whichever is ready first paints (the
     // grid-memo seed usually already painted frame 1).
     unawaited(_loadPlaceholder());
 
-    // STEP 2 — full image. Local original wins ONLY when the content guard
-    // verifies it matches the vault entry (size gate always; hash for
-    // images) — a bare localPath might point at stale/different bytes.
+    // STEP 2 — full image. Local original wins ONLY when the content
+    // guard verifies it matches the vault entry — a bare localPath might
+    // point at stale/different bytes. For images the size gate + hash +
+    // read all happen in ONE background-isolate pass (verifiedRead): the
+    // UI isolate never hashes (that block was the open-flicker) and the
+    // file is read once, not twice.
     if (widget.file.localPath != null) {
-      final localFile = File(widget.file.localPath!);
-      if (await localFile.exists() &&
-          await LocalContentGuard.matches(widget.file, localFile: localFile)) {
-        if (_isVideo) {
+      if (_isVideo) {
+        final localFile = File(widget.file.localPath!);
+        if (await localFile.exists() &&
+            await LocalContentGuard.matches(widget.file,
+                localFile: localFile)) {
           if (mounted) {
             setState(() => _isLoadingFull = false);
             widget.onLoaded(widget.index);
           }
           return;
         }
-        final bytes = await localFile.readAsBytes();
-        if (mounted) {
-          setState(() {
-            _fullImage = bytes;
-            _isLoadingFull = false;
-          });
-          widget.onLoaded(widget.index);
+      } else {
+        final bytes = await LocalContentGuard.verifiedRead(widget.file);
+        if (bytes != null) {
+          if (mounted) {
+            setState(() {
+              _fullImage = bytes;
+              _isLoadingFull = false;
+            });
+            widget.onLoaded(widget.index);
+          }
+          return;
         }
-        return;
       }
     }
 
@@ -3204,7 +3287,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
         }
         return;
       }
-      await fullFile.writeAsBytes(decryptedBytes, flush: true);
+      await atomicWriteBytes(fullFile, decryptedBytes);
 
       if (mounted) {
         setState(() {

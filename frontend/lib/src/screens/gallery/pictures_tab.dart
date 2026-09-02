@@ -16,6 +16,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/file_model.dart';
+import '../../utils/atomic_write.dart';
 import '../../utils/date_grouper.dart';
 import '../../utils/perf_trace.dart';
 import '../../../services/cache_manager_service.dart';
@@ -131,6 +132,7 @@ class PicturesTabState extends State<PicturesTab>
   double _settleFrom = 1.0;
   Alignment _zoomAlign = Alignment.center;
   List<CnestFile>? _lastFiles;
+  bool _followJump = false;
 
   /// Tail padding that keeps offset == _headerH reachable when a far
   /// zoom-out makes the whole library shorter than the viewport —
@@ -210,6 +212,7 @@ class PicturesTabState extends State<PicturesTab>
   bool _onScrollNotification(ScrollNotification n) {
     final chrome = widget.chrome;
     if (chrome == null || n.metrics.axis != Axis.vertical) return false;
+    if (_followJump) return false;
     if (n is ScrollStartNotification && n.dragDetails != null) {
       // Lock the header for gestures that begin below the fold; a swipe
       // that starts parked AT the fold unlocks the reveal.
@@ -493,7 +496,7 @@ class PicturesTabState extends State<PicturesTab>
     setState(() => _zoomIndex = newIdx);
     _pinchSpanBaseline = span;
     _pinchScale.value = 1.0;
-    _settleFrom = (relative * newEff / oldEff).clamp(0.6, 1.6);
+    _settleFrom = (relative * newEff / oldEff).clamp(0.4, 2.4);
     if (headerVisible) {
       // Plain swap under the title; nothing animates over it.
       _settleFrom = 1.0;
@@ -566,20 +569,30 @@ class PicturesTabState extends State<PicturesTab>
 
   /// Viewer page changed: keep that photo's tile built and on screen so
   /// the close hero always has a cell to land in — Samsung follows the
-  /// viewer the same way.
-  void _followViewer(int flatIndex) {
+  /// viewer the same way. Resolved by FILE ID: the grid can refresh and
+  /// reorder while the viewer is open, so a raw index would go stale.
+  void _followViewerFile(String fileId) {
+    final files = _lastFiles;
+    if (files == null) return;
+    final idx = files.indexWhere((f) => f.id == fileId);
+    if (idx < 0) return;
     final ctrl = _scrollCtrl;
     if (ctrl == null || !ctrl.hasClients) return;
-    final geo = _tileGeometry(flatIndex);
+    final geo = _tileGeometry(idx);
     if (geo == null) return;
     final (y, tileH) = geo;
     final viewTop = ctrl.offset;
     final viewH = ctrl.position.viewportDimension;
     if (y >= viewTop + 48 && y + tileH <= viewTop + viewH - 16) return;
     final lowest = widget.embedded ? 0.0 : _headerH;
+    // The jump happens under a covered route: chrome must not react to
+    // its scroll notifications, or the pills are gone by pop time.
+    _followJump = true;
     ctrl.jumpTo((y - (viewH - tileH) / 2)
         .clamp(lowest, math.max(lowest, ctrl.position.maxScrollExtent))
         .toDouble());
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _followJump = false);
   }
 
   void _ensureHeaderReachable() {
@@ -588,8 +601,13 @@ class PicturesTabState extends State<PicturesTab>
     if (ctrl == null || !ctrl.hasClients) return;
     final maxExtent = ctrl.position.maxScrollExtent;
     final withoutFiller = maxExtent - _bottomFiller;
-    final needed =
-        (_headerH - withoutFiller).clamp(0.0, _headerH).toDouble();
+    // The cap must allow content SHORTER than the viewport: the filler
+    // then needs headerH + (viewport - content), which exceeds headerH —
+    // the old cap left the title stuck half-revealed at the year rung on
+    // small libraries.
+    final needed = (_headerH - withoutFiller)
+        .clamp(0.0, _headerH + ctrl.position.viewportDimension)
+        .toDouble();
     if ((needed - _bottomFiller).abs() > 1) {
       setState(() => _bottomFiller = needed);
     }
@@ -597,7 +615,13 @@ class PicturesTabState extends State<PicturesTab>
 
   void _onPointerEnd(PointerEvent event) {
     _pinchPointers.remove(event.pointer);
-    if (_pinchPointers.length < 2) _pinchSpanBaseline = null;
+    if (_pinchPointers.length < 2) {
+      _pinchSpanBaseline = null;
+    } else if (_pinchActive) {
+      // The measured pair changed (a finger of three lifted): re-baseline
+      // so the next threshold is relative to the real span.
+      _pinchSpanBaseline = _pinchSpan();
+    }
     // Finger up ALWAYS ends a drag-select — even when the anchor tile's
     // long-press recognizer already died mid-drag.
     if (_dragSelecting && _pinchPointers.isEmpty) _endDragSelect();
@@ -1320,7 +1344,7 @@ class PicturesTabState extends State<PicturesTab>
               child: ImageViewerScreen(
                 files: flatFiles,
                 initialIndex: globalIndex,
-                onIndexChanged: _followViewer,
+                onViewedFileChanged: _followViewerFile,
               ),
             ),
           ),
@@ -1645,10 +1669,9 @@ class _DateHeaderDelegate extends SliverPersistentHeaderDelegate {
   }
 
   @override
-  bool shouldRebuild(covariant _DateHeaderDelegate oldDelegate) =>
-      label != oldDelegate.label ||
-      selecting != oldDelegate.selecting ||
-      selected != oldDelegate.selected;
+  // Always: the toggle closure captures the section's CURRENT file list;
+  // comparing display fields kept a stale closure alive across refreshes.
+  bool shouldRebuild(covariant _DateHeaderDelegate oldDelegate) => true;
 }
 
 /// Shared thumbnail grid item — used by Pictures tab, Albums detail, etc.
@@ -1927,7 +1950,7 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
           }
           return;
         }
-        await cacheFile.writeAsBytes(decryptedBytes, flush: true);
+        await atomicWriteBytes(cacheFile, decryptedBytes);
       }
 
       _memoize(widget.file.id, _ThumbMemo(diskPath: cacheFile.path));

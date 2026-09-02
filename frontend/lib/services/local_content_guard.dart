@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:photo_manager/photo_manager.dart';
 
@@ -77,6 +79,46 @@ class LocalContentGuard {
       return ok;
     } catch (_) {
       return false; // any resolution failure → prefer the cloud blob
+    }
+  }
+
+  /// Verify-and-read in ONE pass: the same rules as [matches] (size gate
+  /// always; SHA-256 for hash-carrying images under the ceiling), but the
+  /// hash runs on a BACKGROUND isolate and the file is read exactly once
+  /// — the display path never blocks the UI isolate and never reads the
+  /// bytes twice. Images only; returns null when the file may not be
+  /// trusted (caller falls through to the cloud blob).
+  static Future<Uint8List?> verifiedRead(CnestFile file) async {
+    final path = file.localPath;
+    if (path == null) return null;
+    try {
+      final f = File(path);
+      if (!await f.exists()) return null;
+      final len = await f.length();
+      if (file.sizeBytes > 0 && len != file.sizeBytes) return null;
+      final ext = file.filename.split('.').last.toLowerCase();
+      if (const {'mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v'}.contains(ext)) {
+        return null; // the display-read shortcut is for images only
+      }
+      final needsHash = file.contentHash != null &&
+          file.type == CnestFileType.image &&
+          len <= _hashCeilingBytes;
+      if (!needsHash) return f.readAsBytes();
+      final mtime = (await f.lastModified()).millisecondsSinceEpoch;
+      final key = '${file.id}|$len|$mtime';
+      final cached = _verdicts[key];
+      if (cached == false) return null;
+      if (cached == true) return f.readAsBytes();
+      final expected = file.contentHash!;
+      final bytes = await Isolate.run(() async {
+        final b = await File(path).readAsBytes();
+        final ok = await EncryptionService.hashPlaintext(b) == expected;
+        return ok ? b : null;
+      });
+      _verdicts[key] = bytes != null;
+      return bytes;
+    } catch (_) {
+      return null;
     }
   }
 }

@@ -9,6 +9,7 @@ import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../config/routes.dart';
+import '../../utils/atomic_write.dart';
 import '../../models/album_model.dart';
 import '../../../services/backup_backfill_runner.dart';
 import '../../../services/backup_selection_service.dart';
@@ -89,7 +90,14 @@ class AlbumsTabState extends State<AlbumsTab>
 
   void _onPointerEnd(PointerEvent e) {
     _pinchPointers.remove(e.pointer);
-    if (_pinchPointers.length < 2) _pinchBaseline = null;
+    if (_pinchPointers.length < 2) {
+      _pinchBaseline = null;
+    } else {
+      // The measured pair changed (a finger of three lifted): re-baseline
+      // so the layout doesn't leap.
+      _pinchBaseline = _pinchSpan();
+      _pinchStartProgress = _viewProgress;
+    }
     if (_pinchPointers.isEmpty && _pinchActive) {
       setState(() => _pinchActive = false);
       _settleToNearest();
@@ -573,12 +581,14 @@ class AlbumsTabState extends State<AlbumsTab>
                 ),
               ),
             ),
-            if (g < 0.5)
-              Positioned(
-                left: size.height + 12,
-                right: 8,
-                top: 0,
-                bottom: 0,
+            Positioned(
+              left: size.height + 12,
+              // Width-safe at every g (a left/right pair went negative
+              // mid-morph), and staying mounted lets the 160ms fade-out
+              // FINISH instead of popping out at the old g=0.5 unmount.
+              width: math.max(0.0, size.width - size.height - 20),
+              top: 0,
+              bottom: 0,
                 child: IgnorePointer(
                   child: AnimatedOpacity(
                     opacity: g <= 0.001 ? 1.0 : 0.0,
@@ -695,7 +705,7 @@ class _AlbumCardState extends State<_AlbumCard> {
 
       final enc = await CloudService().downloadFile(targetId);
       final dec = await EncryptionService.decryptFile(enc);
-      await cacheFile.writeAsBytes(dec);
+      await atomicWriteBytes(cacheFile, dec);
       if (mounted) setState(() => _coverBytes = dec);
     } catch (_) {}
   }
@@ -794,12 +804,14 @@ class _AlbumCardState extends State<_AlbumCard> {
                 ),
               ),
             ),
-            if (g < 0.5)
-              Positioned(
-                left: size.height + 12,
-                right: 8,
-                top: 0,
-                bottom: 0,
+            Positioned(
+              left: size.height + 12,
+              // Width-safe at every g (a left/right pair went negative
+              // mid-morph), and staying mounted lets the 160ms fade-out
+              // FINISH instead of popping out at the old g=0.5 unmount.
+              width: math.max(0.0, size.width - size.height - 20),
+              top: 0,
+              bottom: 0,
                 child: IgnorePointer(
                   child: AnimatedOpacity(
                     opacity: g <= 0.001 ? 1.0 : 0.0,
