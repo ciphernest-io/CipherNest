@@ -45,6 +45,16 @@ subprojects {
             if (androidExt != null && androidExt.namespace == null) {
                 androidExt.namespace = project.group.toString()
             }
+            // Same vintage of plugin also compiles against an SDK too old
+            // for AGP 8 release-resource verification (android:attr/lStar
+            // needs 31+), failing verifyReleaseResources. Bump ONLY those.
+            if (androidExt != null) {
+                val sdk = androidExt.compileSdkVersion
+                    ?.removePrefix("android-")?.toIntOrNull()
+                if (sdk != null && sdk < 31) {
+                    androidExt.compileSdkVersion(36)
+                }
+            }
         }
     }
 }
