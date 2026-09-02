@@ -12,6 +12,7 @@ import 'package:workmanager/workmanager.dart';
 import 'package:material_symbols_icons/symbols_map.dart';
 
 import 'src/app.dart';
+import 'src/config/media_budget.dart';
 import 'src/config/theme_controller.dart';
 import 'src/screens/splash/splash_screen.dart';
 import 'src/utils/byte_format.dart';
@@ -52,6 +53,10 @@ Future<void> main() async {
   // before any AudioPlayer exists (just_audio_background contract), the
   // size-unit preference before any screen formats bytes.
   await Future.wait([
+    // Image-cache budget BEFORE any screen decodes: the default 100 MiB
+    // cache is smaller than one viewer page, and its evictions were the
+    // black grid tiles on viewer close.
+    MediaBudget.init(),
     ThemeController().load(),
     _warmSplashLogo(),
     JustAudioBackground.init(

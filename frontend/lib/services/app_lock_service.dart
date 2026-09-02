@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../src/config/routes.dart';
 import 'key_manager_service.dart';
+import 'thumb_store.dart';
 
 /// Auto-lock: zeroes the vault private key after a period of inactivity and
 /// routes to the login screen. Encryption keeps working after a lock (the
@@ -127,6 +128,10 @@ class AppLockService {
     _timer?.cancel();
     if (!KeyManagerService().isUnlocked) return;
     KeyManagerService().lock();
+    // Plaintext thumbnails (bytes + decoded bitmaps) leave memory with
+    // the keys.
+    ThumbStore.instance.clear();
+    PaintingBinding.instance.imageCache.clear();
     _navKey?.currentState
         ?.pushNamedAndRemoveUntil(AppRoutes.login, (_) => false);
   }

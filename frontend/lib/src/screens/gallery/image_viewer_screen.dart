@@ -23,6 +23,7 @@ import '../../../services/cache_manager_service.dart';
 import '../../../services/local_content_guard.dart';
 import '../../utils/atomic_write.dart';
 import '../../utils/byte_format.dart';
+import '../../utils/image_dims.dart';
 import '../../utils/perf_trace.dart';
 import '../../../services/database_service.dart';
 import '../../../services/database_backup_service.dart';
@@ -39,7 +40,8 @@ import '../../widgets/friendly_error_sheet.dart';
 import '../share/share_dialog.dart';
 import 'image_editor_screen.dart';
 import 'photo_hero.dart';
-import 'pictures_tab.dart' show GalleryGridItem;
+import '../../config/media_budget.dart';
+import '../../../services/thumb_store.dart';
 
 class ImageViewerScreen extends StatefulWidget {
   final List<CnestFile> files;
@@ -512,7 +514,8 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       if (bytes == null || !mounted) return;
       _stashFullSeed(file.id, bytes);
       unawaited(precacheImage(
-        ResizeImage.resizeIfNeeded(4096, null, MemoryImage(bytes)),
+        ResizeImage.resizeIfNeeded(
+            MediaBudget.viewerDecodeWidth, null, MemoryImage(bytes)),
         context,
       ));
       return;
@@ -545,7 +548,8 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       if (!mounted) return;
       _stashFullSeed(file.id, decryptedBytes);
       unawaited(precacheImage(
-        ResizeImage.resizeIfNeeded(4096, null, MemoryImage(decryptedBytes)),
+        ResizeImage.resizeIfNeeded(
+            MediaBudget.viewerDecodeWidth, null, MemoryImage(decryptedBytes)),
         context,
       ));
     } catch (e) {
@@ -580,7 +584,10 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
             maxWidth: 300,
             quality: 60,
           );
-          if (bytes != null) await thumbFile.writeAsBytes(bytes);
+          if (bytes != null) {
+            await atomicWriteBytes(thumbFile, bytes);
+            ThumbStore.instance.putDiskPath(file.id, thumbFile.path);
+          }
         }
       } catch (_) {
         // Best-effort prewarm.
@@ -608,7 +615,8 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
           await CloudService().downloadFile(file.thumbnailCloudId!);
       if (!mounted) return;
       final decryptedBytes = await EncryptionService.decryptFile(encryptedBytes);
-      await thumbFile.writeAsBytes(decryptedBytes);
+      await atomicWriteBytes(thumbFile, decryptedBytes);
+      ThumbStore.instance.putDiskPath(file.id, thumbFile.path);
     } catch (_) {
       // Silent
     }
@@ -2015,6 +2023,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
             scrollDirection: axis,
             itemCount: _currentFiles.length,
             clipBehavior: Clip.none,
+            // ~12 slots pre-built either side so scrubs never hit a grey
+            // cell (store hits make each prebuilt cell nearly free).
+            cacheExtent: 400,
             padding: axis == Axis.horizontal
                 ? EdgeInsets.only(left: leadPad, right: trailPad)
                 : EdgeInsets.only(top: leadPad, bottom: trailPad),
@@ -2958,20 +2969,9 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     super.initState();
     _zoomAnim.addListener(_applyZoomAnim);
     _checkFileType();
-    // Seed the placeholder synchronously from the grid's session memo so
-    // the hero flight lands on the exact pixels the tile showed — never a
-    // black frame, never a loader over a photo that was just on screen.
-    final seedBytes = GalleryGridItem.memoAssetBytes(widget.file.id);
-    if (seedBytes != null) {
-      _assetThumbBytes = seedBytes;
-    } else {
-      final seedPath = GalleryGridItem.memoDiskPath(widget.file.id);
-      if (seedPath != null) {
-        try {
-          _thumbImage = File(seedPath).readAsBytesSync();
-        } catch (_) {}
-      }
-    }
+    // Placeholder seeding is provider-based now: build() consults the
+    // shared ThumbStore directly (_storeThumbProvider), whose ImageCache
+    // entry is already warm from the grid — no byte copies, no sync IO.
     // Full-image seed: the neighbour prewarm already verified + read (and
     // pre-decoded) this photo — the swipe lands on the finished image,
     // no thumb phase at all.
@@ -3036,6 +3036,24 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     _animateZoomTo(target);
   }
 
+  /// The shared ThumbStore provider at the grid's canonical decode width:
+  /// identical ImageCache entry, so the hero flight lands on pixels that
+  /// are already decoded.
+  ImageProvider? _storeThumbProvider() => ThumbStore.instance
+      .providerFor(widget.file.id, width: MediaBudget.thumbDecodeWidth);
+
+  /// Backfills null width/height rows from the decoded full image so the
+  /// aspect-tight hero stops hitting the fullscreen fallback. Silent DB
+  /// write; converges per photo.
+  void _maybeBackfillDims(Uint8List bytes) {
+    if (widget.file.width != null && widget.file.height != null) return;
+    unawaited(decodeImageDims(bytes).then((dims) {
+      if (dims == null) return;
+      unawaited(DatabaseService()
+          .updateDimensions(widget.file.id, dims.$1, dims.$2));
+    }));
+  }
+
   /// Reads a previously persisted video frame from the shared thumb cache.
   Future<Uint8List?> _cachedVideoFrame() async {
     if (widget.file.cloudId == null) return null;
@@ -3059,7 +3077,9 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     if (cloudId == null) return;
     getTemporaryDirectory().then((dir) async {
       try {
-        await File('${dir.path}/thumb_$cloudId.jpg').writeAsBytes(bytes);
+        final f = File('${dir.path}/thumb_$cloudId.jpg');
+        await atomicWriteBytes(f, bytes);
+        ThumbStore.instance.putDiskPath(widget.file.id, f.path);
       } catch (_) {
         // Best-effort cache write.
       }
@@ -3162,6 +3182,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
 
       // Only update UI if we still don't have the full image
       // (If full image loaded first, we don't need to show the blurry thumb)
+      ThumbStore.instance.putBytes(widget.file.id, decryptedBytes);
       if (mounted && _fullImage == null) {
         setState(() => _thumbImage = decryptedBytes);
       }
@@ -3212,6 +3233,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
               _fullImage = bytes;
               _isLoadingFull = false;
             });
+            _maybeBackfillDims(bytes);
             widget.onLoaded(widget.index);
           }
           return;
@@ -3239,6 +3261,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
           _fullImage = bytes;
           _isLoadingFull = false;
         });
+        _maybeBackfillDims(bytes);
         widget.onLoaded(widget.index);
       }
       return;
@@ -3294,6 +3317,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
           _fullImage = decryptedBytes;
           _isLoadingFull = false;
         });
+        _maybeBackfillDims(decryptedBytes);
         widget.onLoaded(widget.index);
       }
     } catch (e) {
@@ -3319,6 +3343,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     if (_isVideo && widget.file.assetId == null) {
       final cached = await _cachedVideoFrame();
       if (cached != null) {
+        ThumbStore.instance.putBytes(widget.file.id, cached);
         if (mounted) setState(() => _assetThumbBytes = cached);
         return;
       }
@@ -3334,6 +3359,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
           );
           if (bytes != null) {
             if (_isVideo) _persistVideoFrame(bytes);
+            ThumbStore.instance.putBytes(widget.file.id, bytes);
             if (mounted) setState(() => _assetThumbBytes = bytes);
             return;
           }
@@ -3358,6 +3384,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
         );
         if (bytes != null) {
           _persistVideoFrame(bytes);
+          ThumbStore.instance.putBytes(widget.file.id, bytes);
           if (mounted) setState(() => _assetThumbBytes = bytes);
           return;
         }
@@ -3371,7 +3398,9 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     final cacheDir = await getTemporaryDirectory();
     final thumbFile = File('${cacheDir.path}/thumb_${widget.file.cloudId}.jpg');
     if (await thumbFile.exists()) {
-      if (mounted) setState(() => _thumbImage = thumbFile.readAsBytesSync());
+      // Provider-based: no sync byte read on the UI isolate mid-flight.
+      ThumbStore.instance.putDiskPath(widget.file.id, thumbFile.path);
+      if (mounted) setState(() {});
       return;
     }
     // Fire-and-forget — when it arrives, build() picks it up.
@@ -3543,10 +3572,18 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
                 final photo = Stack(
             fit: StackFit.expand,
             children: [
-              // Placeholder — first rung that's ready wins. Local originals
-              // are only decodable for images; a video's rung-2 frame is
-              // extracted in _loadPlaceholder and arrives as _assetThumbBytes.
-              if (_assetThumbBytes != null)
+              // Placeholder — the shared ThumbStore provider first: the
+              // grid's exact ImageCache entry, so the flight lands on
+              // already-decoded pixels. Then the per-page rungs (a
+              // video's rung-2 frame arrives as _assetThumbBytes).
+              if (_storeThumbProvider() != null)
+                Image(
+                  image: _storeThumbProvider()!,
+                  fit: fit,
+                  gaplessPlayback: true,
+                  errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                )
+              else if (_assetThumbBytes != null)
                 Image.memory(
                   _assetThumbBytes!,
                   fit: fit,
@@ -3581,12 +3618,12 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
                   _fullImage!,
                   fit: fit,
                   gaplessPlayback: true,
-                  // Bound the decoded bitmap: at max zoom (4x) a 1080-wide
-                  // viewport never needs more than ~4320 source pixels, and
-                  // 4096 is the safe GPU-texture ceiling. An unconstrained
-                  // 50MP shot would otherwise decode to a ~200MB RGBA
-                  // buffer on exactly the screen where memory is tightest.
-                  cacheWidth: 4096,
+                  // Decode bounded by the device tier (2560/2048): the old
+                  // 4096 decode was ~50 MB per page and evicted every grid
+                  // thumbnail from the ImageCache — the black tiles on
+                  // viewer close. Slightly soft only at extreme pinch
+                  // zoom; sharp at 1x and normal zooms.
+                  cacheWidth: MediaBudget.viewerDecodeWidth,
                   errorBuilder: (_, _, _) => const SizedBox.shrink(),
                   frameBuilder: (context, child, frame, wasSync) {
                     if (wasSync) return child;
@@ -3651,6 +3688,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
         if ((!_isVideo &&
                 _isLoadingFull &&
                 _fullImage == null &&
+                _storeThumbProvider() == null &&
                 _assetThumbBytes == null &&
                 _thumbImage == null &&
                 !hasLocal) ||
@@ -3693,6 +3731,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
         if (!_isVideo &&
             _loadFailed &&
             _fullImage == null &&
+            _storeThumbProvider() == null &&
             _assetThumbBytes == null &&
             _thumbImage == null &&
             !hasLocal)
@@ -3733,6 +3772,15 @@ class _FilmstripItemState extends State<_FilmstripItem> {
   @override
   void initState() {
     super.initState();
+    // Store hit: the grid/viewer already resolved this photo — the strip
+    // cell paints the same provider synchronously. This is what makes the
+    // filmstrip instant on every open and every chrome toggle.
+    final entry = ThumbStore.instance.peek(widget.file.id);
+    if (entry != null && entry.hasSource) {
+      _assetThumbBytes = entry.bytes;
+      _diskThumbPath = entry.diskPath;
+      return;
+    }
     _load();
   }
 
@@ -3748,6 +3796,7 @@ class _FilmstripItemState extends State<_FilmstripItem> {
       final cacheDir = await getTemporaryDirectory();
       final cached = File('${cacheDir.path}/thumb_${widget.file.cloudId}.jpg');
       if (await cached.exists()) {
+        ThumbStore.instance.putDiskPath(widget.file.id, cached.path);
         if (mounted) setState(() => _diskThumbPath = cached.path);
         return;
       }
@@ -3759,9 +3808,12 @@ class _FilmstripItemState extends State<_FilmstripItem> {
         final asset = await AssetEntity.fromId(widget.file.assetId!);
         if (asset != null) {
           final bytes = await asset.thumbnailDataWithSize(
-            const ThumbnailSize(120, 120),
+            // 300 = the grid's exact Glide + ImageCache key: one platform
+            // thumbnail and one decode serve every surface.
+            const ThumbnailSize(300, 300),
           );
           if (bytes != null) {
+            ThumbStore.instance.putBytes(widget.file.id, bytes);
             if (mounted) setState(() => _assetThumbBytes = bytes);
             return;
           }
@@ -3801,6 +3853,7 @@ class _FilmstripItemState extends State<_FilmstripItem> {
     final cacheDir = await getTemporaryDirectory();
     final f = File('${cacheDir.path}/thumb_${widget.file.cloudId}.jpg');
     if (await f.exists()) {
+      ThumbStore.instance.putDiskPath(widget.file.id, f.path);
       if (mounted) setState(() => _diskThumbPath = f.path);
       return;
     }
@@ -3817,7 +3870,9 @@ class _FilmstripItemState extends State<_FilmstripItem> {
     if (cloudId == null) return;
     getTemporaryDirectory().then((dir) async {
       try {
-        await File('${dir.path}/thumb_$cloudId.jpg').writeAsBytes(bytes);
+        final f = File('${dir.path}/thumb_$cloudId.jpg');
+        await atomicWriteBytes(f, bytes);
+        ThumbStore.instance.putDiskPath(widget.file.id, f.path);
       } catch (_) {
         // Best-effort cache write.
       }
@@ -3831,7 +3886,8 @@ class _FilmstripItemState extends State<_FilmstripItem> {
     try {
       final encrypted = await CloudService().downloadFile(thumbId);
       final decrypted = await EncryptionService.decryptFile(encrypted);
-      await target.writeAsBytes(decrypted);
+      await atomicWriteBytes(target, decrypted);
+      ThumbStore.instance.putDiskPath(widget.file.id, target.path);
       if (mounted) setState(() => _diskThumbPath = target.path);
     } catch (_) {
       // Cell stays grey; a rebuild retries.
@@ -3845,6 +3901,18 @@ class _FilmstripItemState extends State<_FilmstripItem> {
     final placeholder = Theme.of(context).colorScheme.surfaceContainerHighest;
     Widget fallback(_, _, _) => Container(color: placeholder);
 
+    // The shared ThumbStore provider first — the grid's exact ImageCache
+    // entry, so a strip cell paints synchronously with zero decode.
+    final provider = ThumbStore.instance
+        .providerFor(widget.file.id, width: MediaBudget.thumbDecodeWidth);
+    if (provider != null) {
+      return Image(
+        image: provider,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        errorBuilder: fallback,
+      );
+    }
     if (_assetThumbBytes != null) {
       return Image.memory(
         _assetThumbBytes!,
@@ -3861,7 +3929,7 @@ class _FilmstripItemState extends State<_FilmstripItem> {
         return Image.file(
           f,
           fit: BoxFit.cover,
-          cacheWidth: 120,
+          cacheWidth: MediaBudget.thumbDecodeWidth,
           gaplessPlayback: true,
           errorBuilder: fallback,
         );
@@ -3871,7 +3939,7 @@ class _FilmstripItemState extends State<_FilmstripItem> {
       return Image.file(
         File(_diskThumbPath!),
         fit: BoxFit.cover,
-        cacheWidth: 120,
+        cacheWidth: MediaBudget.thumbDecodeWidth,
         gaplessPlayback: true,
         errorBuilder: fallback,
       );

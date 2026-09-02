@@ -91,7 +91,7 @@ class DatabaseService extends ChangeNotifier {
 
     final db = await openDatabase(
       path,
-      version: 20,
+      version: 21,
       onCreate: (db, version) async {
         await _createSchema(db);
         await _createSyncSchema(db);
@@ -302,6 +302,13 @@ class DatabaseService extends ChangeNotifier {
           await db.execute('ALTER TABLE files ADD COLUMN prior_key INTEGER '
               'NOT NULL DEFAULT 0');
         }
+        // v21: persisted LocalContentGuard verdicts — a photo is
+        // content-verified once EVER (per byte identity), not once per
+        // session. Device-local derived state: never synced, wiped with
+        // the database.
+        if (oldVersion < 21) {
+          await db.execute(_createGuardVerdictsTableSql);
+        }
   }
 
   /// The virtual folder tree (v15). Fully op-derived — every row is
@@ -345,6 +352,17 @@ class DatabaseService extends ChangeNotifier {
         created_at INTEGER NOT NULL,
         account_id TEXT NOT NULL,
         FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+      )
+    ''';
+
+  /// Guard verdicts (v21): key is `<fileId>|<len>|<mtimeMs>` — byte
+  /// identity, so any change to the local file re-verifies. Device-local
+  /// derived state only; never enters the sync op-log.
+  static const String _createGuardVerdictsTableSql = '''
+      CREATE TABLE IF NOT EXISTS guard_verdicts(
+        verdict_key TEXT PRIMARY KEY,
+        ok INTEGER NOT NULL,
+        checked_at INTEGER NOT NULL
       )
     ''';
 
@@ -464,6 +482,7 @@ class DatabaseService extends ChangeNotifier {
       )
     ''');
     await db.execute(_createSharesTableSql);
+    await db.execute(_createGuardVerdictsTableSql);
   }
 
   static Future<void> _seedSmartAlbums(Database db) async {
@@ -662,6 +681,51 @@ class DatabaseService extends ChangeNotifier {
       whereArgs: [id],
     );
     notifyListeners();
+  }
+
+  /// Backfills missing pixel dimensions (display metadata only). SILENT —
+  /// no notifyListeners: a per-photo grid re-query storm is exactly what
+  /// the viewer perf work removed. Guarded so captured values are never
+  /// overwritten.
+  Future<void> updateDimensions(String id, int width, int height) async {
+    if (width <= 0 || height <= 0) return;
+    final db = await database;
+    await db.update(
+      'files',
+      {'width': width, 'height': height},
+      where: 'id = ? AND (width IS NULL OR height IS NULL)',
+      whereArgs: [id],
+    );
+  }
+
+  // ---- guard verdicts (v21): device-local content-check results ----
+
+  Future<bool?> getGuardVerdict(String key) async {
+    final db = await database;
+    final rows = await db.query('guard_verdicts',
+        columns: ['ok'], where: 'verdict_key = ?', whereArgs: [key]);
+    if (rows.isEmpty) return null;
+    return rows.single['ok'] == 1;
+  }
+
+  /// One row per file: stale (len|mtime) siblings are dropped first so
+  /// the table can't grow past ~1 row/photo. SILENT — no notifyListeners.
+  Future<void> putGuardVerdict(String key, bool ok) async {
+    final db = await database;
+    final sep = key.indexOf('|');
+    if (sep > 0) {
+      await db.delete('guard_verdicts',
+          where: 'verdict_key LIKE ?',
+          whereArgs: ['${key.substring(0, sep)}|%']);
+    }
+    await db.insert(
+        'guard_verdicts',
+        {
+          'verdict_key': key,
+          'ok': ok ? 1 : 0,
+          'checked_at': DateTime.now().millisecondsSinceEpoch,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   /// Soft-delete: hides the row from every gallery query and stamps the

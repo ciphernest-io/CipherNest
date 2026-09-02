@@ -16,7 +16,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/file_model.dart';
+import '../../config/media_budget.dart';
 import '../../utils/atomic_write.dart';
+import '../../utils/image_dims.dart';
 import '../../utils/date_grouper.dart';
 import '../../utils/perf_trace.dart';
 import '../../../services/cache_manager_service.dart';
@@ -30,8 +32,10 @@ import '../../../services/auto_sync_service.dart';
 import '../../../services/notify.dart';
 import '../../utils/bulk_ops.dart';
 import '../../../services/sync_service.dart';
+import '../../../services/thumb_store.dart';
 import '../share/share_dialog.dart';
 import 'gallery_chrome.dart';
+import 'gallery_layout.dart';
 import 'image_viewer_screen.dart';
 import 'photo_hero.dart';
 
@@ -123,43 +127,38 @@ class PicturesTabState extends State<PicturesTab>
   bool _pinchActive = false;
   double? _pinchSpanBaseline;
 
-  // Continuous pinch: a live scale between ladder steps plus a settle/fade
-  // animation on each step, so one motion glides across levels instead of
-  // snapping at every threshold.
-  final ValueNotifier<double> _pinchScale = ValueNotifier(1.0);
+  // CONTINUOUS zoom morph (the Albums feel): ONE double drives the whole
+  // transition. Integer values are the ladder rungs; fractional values
+  // render as a live tile-travel morph between the two bracketing rungs.
+  // The pinch writes it directly (log-of-span axis, so tile size tracks
+  // the fingers 1:1); release settles the SAME variable to the nearest
+  // rung — a settle is indistinguishable from a slow finger.
+  final ValueNotifier<double> _zoomProgress = ValueNotifier(3.0);
   late final AnimationController _settleCtrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 280));
-  double _settleFrom = 1.0;
+      vsync: this, duration: const Duration(milliseconds: 240));
+  double _settleFrom = 3.0;
+  double _settleTo = 3.0;
   Alignment _zoomAlign = Alignment.center;
   List<CnestFile>? _lastFiles;
   bool _followJump = false;
+
+  // Morph-gesture state, captured when the second finger lands.
+  bool _morphActive = false;
+  bool _morphEnabled = false; // false = title visible: plain rung swaps
+  bool _morphClosing = false; // commit fade-out of the travel layer
+  double _morphStartProgress = 3.0;
+  double _gestureStartProgress = 3.0;
+  String? _pivotFileId;
+  Offset? _pivotFingerLocal;
+  int _heldDecodeWidth = MediaBudget.thumbDecodeWidth;
+  bool _heldCompact = false;
 
   /// Tail padding that keeps offset == _headerH reachable when a far
   /// zoom-out makes the whole library shorter than the viewport —
   /// otherwise the title box would just pop into view.
   double _bottomFiller = 0;
 
-  // Ghost handoff: a snapshot of the outgoing level keeps zooming and
-  // fades out over the incoming one — the Samsung pivot feel.
-  ui.Image? _ghostImage;
-  double _ghostStart = 1.0;
-  double _ghostEnd = 1.0;
   final GlobalKey _repaintKey = GlobalKey();
-
-  /// Incoming-layer fade is running for this handoff (a level commit with
-  /// the header hidden). Tracked apart from the ghost so the fade still
-  /// runs even when a snapshot capture fails.
-  bool _fadeIncoming = false;
-
-  // A threshold crossing commits on the NEXT frame boundary, where the
-  // repaint boundary is guaranteed painted-clean: capturing mid-gesture
-  // hit debugNeedsPaint and silently dropped the whole transition.
-  bool _stepScheduled = false;
-  int? _pendingStepDir;
-  double _pendingRelative = 1.0;
-  double _pendingSpan = 0.0;
-  Offset? _pendingMid;
-  int? _pendingPivot;
 
   /// Visual column density of a ladder rung; the justified level behaves
   /// like ~2.2 columns for scale-continuity math.
@@ -167,11 +166,39 @@ class PicturesTabState extends State<PicturesTab>
       ? 2.2
       : _zoomLevels[idx].columns.toDouble();
 
+  /// Log-column axis: A[i] = log(effCols(0)/effCols(i)). Equal finger
+  /// travel = equal RELATIVE tile-size change — a physical span doubling
+  /// doubles the tiles, so the morph tracks the fingers 1:1.
+  late final List<double> _axis = [
+    for (var i = 0; i < _zoomLevels.length; i++)
+      math.log(_effCols(0) / _effCols(i)),
+  ];
+
+  double _axisOf(double p) {
+    final lo = p.floor().clamp(0, _zoomLevels.length - 1);
+    final hi = p.ceil().clamp(0, _zoomLevels.length - 1);
+    return _axis[lo] + (_axis[hi] - _axis[lo]) * (p - lo);
+  }
+
+  double _progressOfAxis(double a) {
+    if (a <= _axis.first) return 0;
+    if (a >= _axis.last) return (_zoomLevels.length - 1).toDouble();
+    for (var i = 1; i < _axis.length; i++) {
+      if (a <= _axis[i]) {
+        return (i - 1) + (a - _axis[i - 1]) / (_axis[i] - _axis[i - 1]);
+      }
+    }
+    return (_zoomLevels.length - 1).toDouble();
+  }
+
+  double _effColsAt(double p) => _effCols(0) / math.exp(_axisOf(p));
+
   // Aspect ratios (w/h) for the justified layout, resolved lazily off the
   // MediaStore entry / local file / cached thumb. Static so ratios survive
   // tab remounts. Files we couldn't measure get a neutral fallback cached
   // too — retrying every build would hammer the disk.
   static final Map<String, double> _ratioCache = {};
+  static int _ratioEpoch = 0;
   bool _resolvingRatios = false;
 
   @override
@@ -284,15 +311,12 @@ class PicturesTabState extends State<PicturesTab>
   void initState() {
     super.initState();
     SyncService().syncNotifier.addListener(_onSyncComplete);
+    _settleCtrl.addListener(() {
+      final v = Curves.easeOutCubic.transform(_settleCtrl.value);
+      _zoomProgress.value = _settleFrom + (_settleTo - _settleFrom) * v;
+    });
     _settleCtrl.addStatusListener((status) {
-      if (status != AnimationStatus.completed) return;
-      if (_ghostImage != null || _fadeIncoming) {
-        setState(() {
-          _ghostImage?.dispose();
-          _ghostImage = null;
-          _fadeIncoming = false;
-        });
-      }
+      if (status == AnimationStatus.completed) _commitMorph();
     });
     // DatabaseService fires notifyListeners on delete/restore/addFile so the
     // grid rebuilds without a pull-to-refresh after any mutation, including
@@ -319,6 +343,8 @@ class PicturesTabState extends State<PicturesTab>
     if (!mounted) return;
     setState(() {
       _zoomIndex = saved!.clamp(0, _zoomLevels.length - 1);
+      _zoomProgress.value = _zoomIndex.toDouble();
+      _morphStartProgress = _zoomIndex.toDouble();
     });
   }
 
@@ -339,14 +365,73 @@ class PicturesTabState extends State<PicturesTab>
       // and auto-scroll timer die) — otherwise the timer kept scrolling
       // from a frozen point for the rest of the pinch.
       if (_dragSelecting) _endDragSelect();
-      // Second finger down: this is a pinch. The physics swap cancels any
-      // scroll drag the first finger already started.
-      _zoomAlign = _focalAlignment();
+      _settleCtrl.stop();
+      final ctrl = _scrollCtrl;
+      final headerVisible = ctrl != null &&
+          ctrl.hasClients &&
+          ctrl.offset < _headerH - 1;
+      if (!_morphActive) {
+        // Fresh gesture: the built grid IS the start rung. Capture the
+        // pivot (photo under the fingers) while the real layout is live.
+        _morphStartProgress = _zoomIndex.toDouble();
+        _zoomProgress.value = _morphStartProgress;
+        // The title box must never scale: with it in view the rung swaps
+        // stay plain.
+        _morphEnabled = !headerVisible && _lastFiles != null;
+        _zoomAlign = _focalAlignment();
+        _pivotFileId = null;
+        _pivotFingerLocal = null;
+        final mid = _pinchMid();
+        final obj = _gridKey.currentContext?.findRenderObject();
+        final files = _lastFiles;
+        if (mid != null && obj is RenderBox && files != null) {
+          _pivotFingerLocal = obj.globalToLocal(mid);
+          final idx = _hitTileIndex(mid);
+          if (idx != null && idx < files.length) {
+            _pivotFileId = files[idx].id;
+          } else if (files.isNotEmpty &&
+              ctrl != null &&
+              ctrl.hasClients) {
+            // Finger over a header/gap: anchor on the tile nearest the
+            // focal point's document position.
+            _pivotFileId =
+                files[_nearestFlatToLocalY(_pivotFingerLocal!.dy)].id;
+          }
+        }
+        if (_pivotFileId == null) _morphEnabled = false;
+        _heldDecodeWidth = _currentDecodeWidth();
+        _heldCompact = _currentCompact();
+      }
+      _gestureStartProgress = _zoomProgress.value;
       setState(() {
         _pinchActive = true;
+        _morphActive = _morphActive || _morphEnabled;
+        _morphClosing = false;
         _pinchSpanBaseline = _pinchSpan();
       });
     }
+  }
+
+  /// Flat index of the tile whose center is nearest the given grid-local
+  /// y (current rung's layout). y is monotone in flat index, so a linear
+  /// walk with early-out is fine for a once-per-gesture call.
+  int _nearestFlatToLocalY(double localY) {
+    final files = _lastFiles!;
+    final ctrl = _scrollCtrl!;
+    final docY = ctrl.offset + localY - _chromeTop();
+    final oracle = _oracleFor(_zoomIndex);
+    var best = 0;
+    var bestD = double.infinity;
+    for (var i = 0; i < files.length; i++) {
+      final d = (oracle.rectFor(i).center.dy - docY).abs();
+      if (d < bestD) {
+        best = i;
+        bestD = d;
+      } else if (d > bestD + 600) {
+        break;
+      }
+    }
+    return best;
   }
 
   void _onPointerMove(PointerMoveEvent event) {
@@ -368,21 +453,24 @@ class PicturesTabState extends State<PicturesTab>
       _pinchSpanBaseline = span;
       return;
     }
-    final relative = span / baseline;
-    if (relative > 1.25 && _zoomIndex < _zoomLevels.length - 1) {
-      _queueStepZoom(1, relative, span); // spread → zoom in, bigger tiles
+    // Log-of-span: the layout follows the fingers CONTINUOUSLY across the
+    // whole ladder — no thresholds, no dead bands, no snap-back. Spread
+    // (bigger span) walks toward bigger tiles (higher rung index).
+    final axis = _axisOf(_gestureStartProgress) + math.log(span / baseline);
+    final next = _progressOfAxis(
+        axis.clamp(_axis.first, _axis.last).toDouble());
+    if (_morphEnabled) {
+      if ((next - _zoomProgress.value).abs() > 0.0005) {
+        _zoomProgress.value = next;
+      }
       return;
     }
-    if (relative < 0.8 && _zoomIndex > 0) {
-      _queueStepZoom(-1, relative, span); // pinch → zoom out, denser grid
-      return;
+    // Title visible: plain rung swaps at the halfway points.
+    _zoomProgress.value = next;
+    final rounded = next.round();
+    if (rounded != _zoomIndex) {
+      setState(() => _zoomIndex = rounded);
     }
-    // Between steps the grid follows the fingers directly (paint-only).
-    // At the ladder ends there is no next level, so the scale is pinned:
-    // pinching past the extreme shows nothing that would snap back.
-    final upper = _zoomIndex < _zoomLevels.length - 1 ? 1.32 : 1.0;
-    final lower = _zoomIndex > 0 ? 0.78 : 1.0;
-    _pinchScale.value = relative.clamp(lower, upper);
   }
 
   /// Commit one ladder step and hand the accumulated finger scale to the
@@ -404,167 +492,117 @@ class PicturesTabState extends State<PicturesTab>
     );
   }
 
-  void _captureGhost(double startScale, double endScale) {
-    final ro = _repaintKey.currentContext?.findRenderObject();
-    if (ro is! RenderRepaintBoundary) return;
-    try {
-      final img = ro.toImageSync(
-          pixelRatio: MediaQuery.of(context).devicePixelRatio);
-      _ghostImage?.dispose();
-      _ghostImage = img;
-      _ghostStart = startScale;
-      _ghostEnd = endScale;
-    } catch (_) {}
-  }
-
-  Widget _ghostOverlay() {
-    return Positioned.fill(
-      child: IgnorePointer(
-        child: AnimatedBuilder(
-          animation: _settleCtrl,
-          builder: (context, _) {
-            final tCurve =
-                Curves.easeOutCubic.transform(_settleCtrl.value);
-            final scale = _ghostStart + (_ghostEnd - _ghostStart) * tCurve;
-            return Opacity(
-              // Dead by the halfway point; the incoming grid owns
-              // the second half of the handoff.
-              opacity: (1 - _settleCtrl.value * 2).clamp(0.0, 1.0),
-              child: Transform.scale(
-                scale: scale,
-                alignment: _zoomAlign,
-                child: SizedBox.expand(
-                  child: RawImage(image: _ghostImage, fit: BoxFit.fill),
-                ),
-              ),
-            );
-          },
-        ),
-      ),
-    );
-  }
-
   Offset? _pinchMid() {
     if (_pinchPointers.length < 2) return null;
     final pts = _pinchPointers.values.toList();
     return (pts[0] + pts[1]) / 2;
   }
 
-  /// A pinch threshold crossing: remember the gesture's pivot NOW (both
-  /// fingers still down) and commit on the frame boundary, where the
-  /// repaint boundary is painted-clean and the outgoing level can be
-  /// snapshotted reliably.
-  void _queueStepZoom(int direction, double relative, double span) {
-    _pendingStepDir = direction;
-    _pendingRelative = relative;
-    _pendingSpan = span;
-    _zoomAlign = _focalAlignment();
-    _pendingMid = _pinchMid();
-    _pendingPivot =
-        _pendingMid == null ? null : _hitTileIndex(_pendingMid!);
-    if (_stepScheduled) return;
-    _stepScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _stepScheduled = false;
-      final dir = _pendingStepDir;
-      _pendingStepDir = null;
-      if (!mounted || dir == null) return;
-      _stepZoom(dir, _pendingRelative, _pendingSpan, _pendingMid,
-          _pendingPivot);
+  /// Settle finished: land the REAL grid on the target rung with the
+  /// pivot photo still under the fingers, then fade the travel layer out
+  /// over the committed grid.
+  void _commitMorph() {
+    if (!_morphActive || !mounted) return;
+    final target = _settleTo.round().clamp(0, _zoomLevels.length - 1);
+    final offset = _commitOffsetFor(target);
+    setState(() {
+      _zoomIndex = target;
+      _morphStartProgress = target.toDouble();
+      _morphClosing = true;
     });
-    WidgetsBinding.instance.ensureVisualUpdate();
+    if (offset != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final ctrl = _scrollCtrl;
+        if (!mounted || ctrl == null || !ctrl.hasClients) return;
+        _followJump = true; // chrome must not react to this jump
+        final lowest = widget.embedded ? 0.0 : _headerH;
+        ctrl.jumpTo(offset
+            .clamp(lowest, math.max(lowest, ctrl.position.maxScrollExtent))
+            .toDouble());
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) => _followJump = false);
+      });
+    }
+    _persistZoomLevel();
   }
 
-  void _stepZoom(int direction, double relative, double span, Offset? mid,
-      int? pivotIndex) {
-    final newIdx =
-        (_zoomIndex + direction).clamp(0, _zoomLevels.length - 1);
-    if (newIdx == _zoomIndex) return;
-    final oldEff = _effCols(_zoomIndex);
-    final newEff = _effCols(newIdx);
-    final ctrl = _scrollCtrl;
-    final headerVisible = ctrl != null &&
-        ctrl.hasClients &&
-        ctrl.offset < _headerH - 1;
-    if (!headerVisible) {
-      _captureGhost(_pinchScale.value, oldEff / newEff);
-    } else {
-      _ghostImage?.dispose();
-      _ghostImage = null;
-    }
-    _fadeIncoming = !headerVisible;
-    setState(() => _zoomIndex = newIdx);
-    _pinchSpanBaseline = span;
-    _pinchScale.value = 1.0;
-    _settleFrom = (relative * newEff / oldEff).clamp(0.4, 2.4);
-    if (headerVisible) {
-      // Plain swap under the title; nothing animates over it.
-      _settleFrom = 1.0;
-      _settleCtrl.value = 1.0;
-    } else {
-      _settleCtrl.forward(from: 0);
-    }
-    _repositionForPivot(pivotIndex, mid, newIdx, headerVisible);
-    if (!_pinchActive) _persistZoomLevel();
+  void _endMorph() {
+    if (!mounted) return;
+    setState(() {
+      _morphActive = false;
+      _morphClosing = false;
+    });
   }
 
-  /// Top-of-tile y and tile height for [flatIndex] in the CURRENT level's
-  /// layout. Fixed-column levels only (the justified rung's rows depend on
-  /// resolved aspect ratios).
-  (double, double)? _tileGeometry(int flatIndex) {
+  /// Scroll offset that puts the pivot tile's center back under the
+  /// fingers on [rung] — every rung, justified included.
+  double? _commitOffsetFor(int rung) {
     final files = _lastFiles;
-    final obj = _gridKey.currentContext?.findRenderObject();
-    if (files == null || obj is! RenderBox) return null;
-    final level = _zoomLevels[_zoomIndex];
-    if (level.isJustified) return null;
+    final id = _pivotFileId;
+    final finger = _pivotFingerLocal;
+    if (files == null || id == null || finger == null) return null;
+    final idx = files.indexWhere((f) => f.id == id);
+    if (idx < 0) return null;
+    final rect = _oracleFor(rung).rectFor(idx);
+    return _chromeTop() + rect.center.dy - finger.dy;
+  }
+
+  GalleryLayoutOracle _oracleFor(int rung) {
+    final level = _zoomLevels[rung];
     final orientation = MediaQuery.of(context).orientation;
-    final cols = orientation == Orientation.landscape
+    final cols = level.isJustified
+        ? 0
+        : (orientation == Orientation.landscape
+            ? (level.columns * 1.5).round().clamp(2, 42)
+            : level.columns);
+    final obj = _gridKey.currentContext?.findRenderObject();
+    final width = obj is RenderBox && obj.hasSize
+        ? obj.size.width
+        : MediaQuery.sizeOf(context).width;
+    return GalleryLayoutOracle.obtain(
+      files: _lastFiles!,
+      columns: cols,
+      grouping: switch (level.grouping) {
+        _Grouping.year => GalleryGrouping.year,
+        _Grouping.month => GalleryGrouping.month,
+        _Grouping.day => GalleryGrouping.day,
+      },
+      width: width,
+      ratioOf: _ratioOf,
+      ratioEpoch: _ratioEpoch,
+    );
+  }
+
+  double _chromeTop() => widget.embedded
+      ? 0.0
+      : _headerH + MediaQuery.paddingOf(context).top + 56;
+
+  double _ratioOf(CnestFile f) {
+    final cached = _ratioCache[f.id];
+    if (cached != null) return cached;
+    final ext = f.filename.split('.').last.toLowerCase();
+    return const {'mp4', 'mov', 'avi', 'mkv'}.contains(ext) ? 16 / 9 : 1.0;
+  }
+
+  bool _currentCompact() {
+    final level = _zoomLevels[_zoomIndex];
+    final orientation = MediaQuery.of(context).orientation;
+    final columns = orientation == Orientation.landscape
         ? (level.columns * 1.5).round().clamp(2, 42)
         : level.columns;
-    final sections = switch (level.grouping) {
-      _Grouping.year => groupByYear(files),
-      _Grouping.month => groupByMonth(files),
-      _Grouping.day => groupByDate(files),
-    };
-    final width = obj.size.width;
-    final tileH = (width - (cols - 1) * 1.5) / cols;
-    var y = widget.embedded
-        ? 0.0
-        : _headerH + MediaQuery.paddingOf(context).top + 56;
-    var index = flatIndex;
-    for (final section in sections) {
-      y += 36; // date header extent
-      if (index < section.files.length) {
-        return (y + (index ~/ cols) * (tileH + 1.5), tileH);
-      }
-      index -= section.files.length;
-      final rows = (section.files.length / cols).ceil();
-      y += rows * tileH + (rows - 1) * 1.5;
-    }
-    return null;
+    return columns >= 6;
   }
 
-  /// Scrolls the NEW level so the pivot tile lands back under the fingers
-  /// — this is what makes "that photo zoomed into place" read literally.
-  /// Fixed-column levels only; the justified rung keeps its offset.
-  void _repositionForPivot(
-      int? pivotIndex, Offset? mid, int newIdx, bool headerVisible) {
-    if (pivotIndex == null || mid == null || headerVisible) return;
-    final ctrl = _scrollCtrl;
-    final obj = _gridKey.currentContext?.findRenderObject();
-    if (ctrl == null || obj is! RenderBox) return;
-    final geo = _tileGeometry(pivotIndex);
-    if (geo == null) return;
-    final (y, tileH) = geo;
-    final fingerLocalY = obj.globalToLocal(mid).dy;
-    final target = y - fingerLocalY + tileH / 2;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !ctrl.hasClients) return;
-      final lowest = widget.embedded ? 0.0 : _headerH;
-      ctrl.jumpTo(target
-          .clamp(lowest, math.max(lowest, ctrl.position.maxScrollExtent))
-          .toDouble());
-    });
+  /// Top-of-tile y (in scroll space) and tile height for [flatIndex] in
+  /// the CURRENT rung's layout — every rung, justified included (the
+  /// layout oracle mirrors the slivers exactly).
+  (double, double)? _tileGeometry(int flatIndex) {
+    final files = _lastFiles;
+    if (files == null || flatIndex < 0 || flatIndex >= files.length) {
+      return null;
+    }
+    final rect = _oracleFor(_zoomIndex).rectFor(flatIndex);
+    return (_chromeTop() + rect.top, rect.height);
   }
 
   /// Viewer page changed: keep that photo's tile built and on screen so
@@ -572,6 +610,7 @@ class PicturesTabState extends State<PicturesTab>
   /// viewer the same way. Resolved by FILE ID: the grid can refresh and
   /// reorder while the viewer is open, so a raw index would go stale.
   void _followViewerFile(String fileId) {
+    if (_morphActive) return; // can't happen mid-viewer; guard anyway
     final files = _lastFiles;
     if (files == null) return;
     final idx = files.indexWhere((f) => f.id == fileId);
@@ -593,6 +632,173 @@ class PicturesTabState extends State<PicturesTab>
         .toDouble());
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _followJump = false);
+    // Warm the landed region while the viewer still covers the grid, so
+    // every tile is painted before any pop.
+    _prewarmRegion(idx);
+  }
+
+  static const int _prewarmSpan = 40;
+
+  int _currentDecodeWidth() {
+    final level = _zoomLevels[_zoomIndex];
+    final orientation = MediaQuery.of(context).orientation;
+    final columns = orientation == Orientation.landscape
+        ? (level.columns * 1.5).round().clamp(2, 42)
+        : level.columns;
+    return columns >= 12
+        ? MediaBudget.denseThumbDecodeWidth
+        : MediaBudget.thumbDecodeWidth;
+  }
+
+  /// Fills the ThumbStore (MediaStore/disk rungs only, never network) and
+  /// pre-decodes tiles around [centerIndex] — the covered grid finishes
+  /// painting before the viewer pops.
+  void _prewarmRegion(int centerIndex) {
+    final files = _lastFiles;
+    if (files == null) return;
+    final lo = math.max(0, centerIndex - _prewarmSpan ~/ 2);
+    final hi = math.min(files.length, lo + _prewarmSpan);
+    final width = _currentDecodeWidth();
+    for (var i = lo; i < hi; i++) {
+      final f = files[i];
+      unawaited(ThumbStore.instance.prefetch(f).then((_) {
+        if (!mounted) return;
+        final p = ThumbStore.instance.providerFor(f.id, width: width);
+        if (p != null) {
+          unawaited(precacheImage(p, context, onError: (_, _) {}));
+        }
+      }));
+    }
+  }
+
+  /// The travel layer: tiles nearest the pivot rendered at a Rect.lerp of
+  /// the two bracketing rungs' layouts, with per-rung scroll offsets
+  /// pinned so the pivot photo stays under the fingers at BOTH ends — the
+  /// Albums morph, on the photo grid. The window is capped; the scaled
+  /// real grid underneath covers the remainder.
+  Widget _buildMorphLayer(List<CnestFile> files) {
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: ValueListenableBuilder<double>(
+          valueListenable: _zoomProgress,
+          builder: (context, p, _) {
+            final finger = _pivotFingerLocal;
+            final id = _pivotFileId;
+            if (finger == null || id == null || files.isEmpty) {
+              return const SizedBox.shrink();
+            }
+            final pivotFlat = files.indexWhere((f) => f.id == id);
+            if (pivotFlat < 0) return const SizedBox.shrink();
+            final lo = p.floor().clamp(0, _zoomLevels.length - 1);
+            final hi = p.ceil().clamp(0, _zoomLevels.length - 1);
+            final f = (p - lo).clamp(0.0, 1.0).toDouble();
+            final oLo = _oracleFor(lo);
+            final oHi = _oracleFor(hi);
+            // Offsets that keep the pivot's center at the finger y in each
+            // rung's layout (chrome offset cancels out of the difference).
+            final offLo = oLo.rectFor(pivotFlat).center.dy - finger.dy;
+            final offHi = oHi.rectFor(pivotFlat).center.dy - finger.dy;
+            Rect lerpRect(int i) => Rect.lerp(
+                  oLo.rectFor(i).translate(0, -offLo),
+                  oHi.rectFor(i).translate(0, -offHi),
+                  f,
+                )!;
+            final viewH = MediaQuery.sizeOf(context).height;
+            // Window: walk outward from the pivot while tiles still touch
+            // the inflated viewport. y is monotone in flat index in BOTH
+            // layouts, so the walk terminates correctly. Capped: the
+            // dimmed, scaled real grid covers everything beyond it.
+            const cap = 220;
+            var loIdx = pivotFlat;
+            var hiIdx = pivotFlat;
+            while (loIdx > 0 &&
+                hiIdx - loIdx < cap &&
+                lerpRect(loIdx - 1).bottom > -viewH * 0.25) {
+              loIdx--;
+            }
+            while (hiIdx < files.length - 1 &&
+                hiIdx - loIdx < cap &&
+                lerpRect(hiIdx + 1).top < viewH * 1.25) {
+              hiIdx++;
+            }
+            final layer = Stack(
+              clipBehavior: Clip.none,
+              children: [
+                // Date headers of both rungs cross-fade at their own
+                // travelling positions; tiles themselves never fade.
+                for (final h in oLo.headers)
+                  if (1 - f > 0.02)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: h.y - offLo,
+                      height: GalleryLayoutOracle.headerExtent,
+                      child: Opacity(
+                        opacity: (1 - f).clamp(0.0, 1.0),
+                        child: _morphHeader(h.label),
+                      ),
+                    ),
+                for (final h in oHi.headers)
+                  if (f > 0.02 && hi != lo)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: h.y - offHi,
+                      height: GalleryLayoutOracle.headerExtent,
+                      child: Opacity(
+                        opacity: f.clamp(0.0, 1.0),
+                        child: _morphHeader(h.label),
+                      ),
+                    ),
+                for (var i = loIdx; i <= hiIdx; i++)
+                  Positioned.fromRect(
+                    key: ValueKey('morph-${files[i].id}'),
+                    rect: lerpRect(i),
+                    child: GalleryGridItem(
+                      file: files[i],
+                      decodeWidth: _heldDecodeWidth,
+                      compact: _heldCompact,
+                    ),
+                  ),
+              ],
+            );
+            if (!_morphClosing) return layer;
+            // Commit: fade the travel layer out over the landed grid
+            // (covers any decode-tier swaps the prewarm missed).
+            return TweenAnimationBuilder<double>(
+              key: const ValueKey('morph-close'),
+              tween: Tween(begin: 1, end: 0),
+              duration: const Duration(milliseconds: 150),
+              onEnd: _endMorph,
+              builder: (context, o, child) =>
+                  Opacity(opacity: o, child: child),
+              child: layer,
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _morphHeader(String label) {
+    final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
+    return Container(
+      color: Theme.of(context).scaffoldBackgroundColor,
+      alignment: Alignment.centerLeft,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: cs.onSurface.withAlpha(180),
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          fontFamily: t.fontFamily,
+        ),
+      ),
+    );
   }
 
   void _ensureHeaderReachable() {
@@ -619,8 +825,9 @@ class PicturesTabState extends State<PicturesTab>
       _pinchSpanBaseline = null;
     } else if (_pinchActive) {
       // The measured pair changed (a finger of three lifted): re-baseline
-      // so the next threshold is relative to the real span.
+      // AND re-anchor progress so the layout doesn't leap.
       _pinchSpanBaseline = _pinchSpan();
+      _gestureStartProgress = _zoomProgress.value;
     }
     // Finger up ALWAYS ends a drag-select — even when the anchor tile's
     // long-press recognizer already died mid-drag.
@@ -629,14 +836,26 @@ class PicturesTabState extends State<PicturesTab>
     // remains after a pinch shouldn't fling the list.
     if (_pinchPointers.isEmpty && _pinchActive) {
       setState(() => _pinchActive = false);
-      // Release any leftover between-step scale without a snap — unless
-      // a step commit is queued for the next frame (it settles itself).
-      if (!_stepScheduled && (_pinchScale.value - 1).abs() > 0.01) {
-        _settleFrom = _pinchScale.value;
-        _pinchScale.value = 1.0;
-        _settleCtrl.forward(from: 0);
+      if (_morphActive) {
+        // Settle the SAME progress variable to the nearest rung — the
+        // release is indistinguishable from a slow finger.
+        _settleFrom = _zoomProgress.value;
+        _settleTo = _zoomProgress.value
+            .round()
+            .clamp(0, _zoomLevels.length - 1)
+            .toDouble();
+        if ((_settleTo - _settleFrom).abs() < 0.001) {
+          _zoomProgress.value = _settleTo;
+          _commitMorph();
+        } else {
+          _settleCtrl.forward(from: 0);
+        }
+      } else {
+        // Plain path (title visible): the rung already swapped discretely.
+        _zoomProgress.value = _zoomIndex.toDouble();
+        _morphStartProgress = _zoomIndex.toDouble();
+        _persistZoomLevel();
       }
-      _persistZoomLevel();
     }
   }
 
@@ -650,18 +869,24 @@ class PicturesTabState extends State<PicturesTab>
     _resolvingRatios = true;
     try {
       var resolvedAny = false;
-      for (final file in missing.take(32)) {
+      for (final file in missing.take(64)) {
         _ratioCache[file.id] = await _measureRatio(file);
         resolvedAny = true;
       }
-      if (resolvedAny && mounted) setState(() {});
+      if (resolvedAny) _ratioEpoch++; // invalidates the layout oracle memo
+      // Ratios only shape the justified rung — don't rebuild the whole
+      // grid for them anywhere else.
+      if (resolvedAny && mounted && _zoomLevels[_zoomIndex].isJustified) {
+        setState(() {});
+      }
     } finally {
       _resolvingRatios = false;
     }
-    // More to do? Chain the next batch after this frame's reflow.
+    // More to do? Chain gently, off the frame pipeline.
     if (mounted && files.any((f) => !_ratioCache.containsKey(f.id))) {
-      WidgetsBinding.instance
-          .addPostFrameCallback((_) => _resolveRatios(files));
+      Future.delayed(const Duration(milliseconds: 32), () {
+        if (mounted) _resolveRatios(files);
+      });
     }
   }
 
@@ -683,6 +908,10 @@ class PicturesTabState extends State<PicturesTab>
         if (asset != null &&
             asset.orientatedWidth > 0 &&
             asset.orientatedHeight > 0) {
+          // Backfill the row (rotation-correct source) so the viewer's
+          // aspect-tight hero stops hitting the fullscreen fallback.
+          unawaited(DatabaseService().updateDimensions(
+              file.id, asset.orientatedWidth, asset.orientatedHeight));
           return asset.orientatedWidth / asset.orientatedHeight;
         }
       } catch (_) {}
@@ -698,7 +927,14 @@ class PicturesTabState extends State<PicturesTab>
       if (!isVideo && file.localPath != null) {
         final local = File(file.localPath!);
         if (await local.exists()) {
-          return await _ratioFromBytes(await local.readAsBytes()) ?? fallback;
+          // Header-only probe — no whole-file read on the UI heap.
+          final dims = await decodeImageDimsFromFile(local.path);
+          if (dims != null) {
+            unawaited(DatabaseService()
+                .updateDimensions(file.id, dims.$1, dims.$2));
+            return dims.$1 / dims.$2;
+          }
+          return fallback;
         }
       }
     } catch (_) {}
@@ -726,9 +962,8 @@ class PicturesTabState extends State<PicturesTab>
     _motionTimer?.cancel();
     _scrollCtrl?.dispose();
     _settleCtrl.dispose();
-    _pinchScale.dispose();
+    _zoomProgress.dispose();
     _autoScrollTimer?.cancel();
-    _ghostImage?.dispose();
     SyncService().syncNotifier.removeListener(_onSyncComplete);
     DatabaseService().removeListener(_onDatabaseChanged);
     _selectionClaim?.release();
@@ -818,6 +1053,7 @@ class PicturesTabState extends State<PicturesTab>
   bool _dragSelecting = false;
 
   void _beginDragSelect(String id, int index) {
+    if (_morphActive) return;
     _dragSelecting = true;
     _dragAnchorIndex = index;
     _dragBaseSelection = Set.of(_selectedIds);
@@ -1110,10 +1346,13 @@ class PicturesTabState extends State<PicturesTab>
     return FutureBuilder<List<CnestFile>>(
       future: _filesFuture,
       builder: (context, snapshot) {
-        if (!snapshot.hasData) {
+        // A refresh must never blank a populated grid: keep showing the
+        // last data through the FutureBuilder gap (a DB notify while the
+        // viewer was open used to drop the grid to a spinner at pop).
+        final files = snapshot.data ?? _lastFiles;
+        if (files == null) {
           return const Center(child: CircularProgressIndicator());
         }
-        final files = snapshot.data!;
         _lastFiles = files;
         WidgetsBinding.instance
             .addPostFrameCallback((_) => _ensureHeaderReachable());
@@ -1164,7 +1403,9 @@ class PicturesTabState extends State<PicturesTab>
         // Tiny tiles decode tiny — a 28-column grid must not hold hundreds
         // of 300px bitmaps. Badges vanish at dense levels (they'd be larger
         // than the tiles).
-        final decodeWidth = columns >= 12 ? 120 : (columns >= 6 ? 160 : 300);
+        final decodeWidth = columns >= 12
+            ? MediaBudget.denseThumbDecodeWidth
+            : MediaBudget.thumbDecodeWidth;
         final compact = columns >= 6;
 
         return RefreshIndicator(
@@ -1185,28 +1426,24 @@ class PicturesTabState extends State<PicturesTab>
                   child: Stack(
                     children: [
                       AnimatedBuilder(
-                    animation: Listenable.merge([_pinchScale, _settleCtrl]),
+                    animation: _zoomProgress,
                     builder: (context, child) {
-                      final settle = _settleFrom +
-                          (1 - _settleFrom) *
-                              Curves.easeOutCubic
-                                  .transform(_settleCtrl.value);
-                      final revealCtrl = _scrollCtrl;
-                      final headerVisible = revealCtrl != null &&
-                          revealCtrl.hasClients &&
-                          revealCtrl.offset < _headerH - 1;
-                      // The title box must never zoom: with it in view the
-                      // level swap is plain.
+                      if (!_morphActive) return child!;
+                      // During the morph the real grid is the REMAINDER: a
+                      // paint-only scale about the focal point (locally
+                      // exact near the pivot, so near-pivot duplicates sit
+                      // under the travel tiles invisibly) that dims as the
+                      // morph diverges. The travel layer above owns the
+                      // tiles near the fingers.
+                      final p = _zoomProgress.value;
                       final scale =
-                          headerVisible ? 1.0 : _pinchScale.value * settle;
-                      // Incoming layer rises to full opacity across the
-                      // whole handoff; the ghost above dies by halfway.
-                      final fade = _fadeIncoming
-                          ? Curves.easeOutCubic
-                              .transform(_settleCtrl.value)
-                          : 1.0;
+                          _effColsAt(_morphStartProgress) / _effColsAt(p);
+                      final dim = 1.0 -
+                          0.85 *
+                              math.min(
+                                  1.0, (p - _morphStartProgress).abs());
                       return Opacity(
-                        opacity: fade.clamp(0.0, 1.0),
+                        opacity: dim.clamp(0.15, 1.0),
                         child: Transform.scale(
                           scale: scale,
                           alignment: _zoomAlign,
@@ -1299,7 +1536,7 @@ class PicturesTabState extends State<PicturesTab>
                   ),
                   ),
                       ),
-                      if (_ghostImage != null) _ghostOverlay(),
+                      if (_morphActive) _buildMorphLayer(files),
                     ],
                   ),
                 ),
@@ -1416,64 +1653,32 @@ class PicturesTabState extends State<PicturesTab>
     ThemePackTokens t,
   ) {
     const spacing = 1.5;
-    const targetH = 220.0;
     final width = MediaQuery.sizeOf(context).width;
-
-    double ratioOf(CnestFile f) {
-      final cached = _ratioCache[f.id];
-      if (cached != null) return cached;
-      final ext = f.filename.split('.').last.toLowerCase();
-      return const {'mp4', 'mov', 'avi', 'mkv'}.contains(ext) ? 16 / 9 : 1.0;
-    }
-
-    // Partition into rows: fill until the row would render below targetH.
-    final rows = <List<CnestFile>>[];
-    var row = <CnestFile>[];
-    var ratioSum = 0.0;
-    for (final file in sectionFiles) {
-      row.add(file);
-      ratioSum += ratioOf(file);
-      if (ratioSum * targetH >= width - spacing * (row.length - 1)) {
-        rows.add(row);
-        row = [];
-        ratioSum = 0.0;
-      }
-    }
-    if (row.isNotEmpty) rows.add(row);
+    // ONE packer (gallery_layout.dart), shared with the layout oracle, so
+    // the rendered rows and the morph/pivot math can never drift apart.
+    final rows = packJustified(sectionFiles, width, _ratioOf);
 
     return SliverList(
       delegate: SliverChildBuilderDelegate(
         (context, rowIndex) {
-          final rowFiles = rows[rowIndex];
-          final innerWidth = width - spacing * (rowFiles.length - 1);
-          final sum = rowFiles.fold(0.0, (a, f) => a + ratioOf(f));
-          // A full row scales to exactly fill the width; a trailing
-          // underfull row keeps targetH and leaves the remainder empty.
-          final exactH = innerWidth / sum;
-          final isUnderfull = exactH > targetH * 1.6;
-          final rowH = isUnderfull ? targetH : exactH;
-
-          var globalIndex = sectionOffset;
-          for (var r = 0; r < rowIndex; r++) {
-            globalIndex += rows[r].length;
-          }
-
+          final row = rows[rowIndex];
+          final globalIndex = sectionOffset + row.start;
           return Padding(
             padding: const EdgeInsets.only(bottom: spacing),
             child: SizedBox(
-              height: rowH,
+              height: row.height,
               child: Row(
                 children: [
-                  for (var i = 0; i < rowFiles.length; i++) ...[
+                  for (var i = 0; i < row.files.length; i++) ...[
                     if (i > 0) const SizedBox(width: spacing),
                     // Full rows use integer flex so widths always sum to
                     // EXACTLY the viewport — fixed widths would overflow
                     // the Row by sub-pixel rounding.
-                    if (isUnderfull)
+                    if (row.underfull)
                       SizedBox(
-                        width: ratioOf(rowFiles[i]) * rowH,
+                        width: row.widths[i],
                         child: _tile(
-                          rowFiles[i],
+                          row.files[i],
                           globalIndex + i,
                           flatFiles,
                           cs,
@@ -1482,9 +1687,9 @@ class PicturesTabState extends State<PicturesTab>
                       )
                     else
                       Expanded(
-                        flex: (ratioOf(rowFiles[i]) * 1000).round(),
+                        flex: (row.widths[i] * 1000).round(),
                         child: _tile(
-                          rowFiles[i],
+                          row.files[i],
                           globalIndex + i,
                           flatFiles,
                           cs,
@@ -1690,39 +1895,15 @@ class GalleryGridItem extends StatefulWidget {
     this.compact = false,
   });
 
-  /// Synchronous peek at the session thumb memo — the viewer seeds its
-  /// placeholder from these so the hero flight never lands on black.
-  static Uint8List? memoAssetBytes(String id) =>
-      _GalleryGridItemState._memo[id]?.assetBytes;
-  static String? memoDiskPath(String id) =>
-      _GalleryGridItemState._memo[id]?.diskPath;
-
   @override
   State<GalleryGridItem> createState() => _GalleryGridItemState();
 }
 
-/// Resolved display source of a tile, memoized for the session so a
-/// remounted grid paints synchronously. Exactly one field is set.
-class _ThumbMemo {
-  final Uint8List? assetBytes;
-  final String? diskPath;
-  final bool localVerified;
-  const _ThumbMemo({this.assetBytes, this.diskPath, this.localVerified = false});
-}
-
 class _GalleryGridItemState extends State<GalleryGridItem> {
-  // Session memo of each tile's resolved source. Navigating home → gallery
-  // REMOUNTS every tile; without this the ladder re-runs asynchronously and
-  // every thumbnail flashes the grey placeholder for a frame ("flicker").
-  // Keyed by file id; evicted oldest-first and on identity change.
-  static final Map<String, _ThumbMemo> _memo = {};
-  static const int _memoCap = 300;
-
-  static void _memoize(String id, _ThumbMemo entry) {
-    _memo.remove(id);
-    if (_memo.length >= _memoCap) _memo.remove(_memo.keys.first);
-    _memo[id] = entry;
-  }
+  // The session-wide ThumbStore replaced the old per-class memo: ONE
+  // shared entry (and one ImageProvider per decode width) serves this
+  // grid, the viewer placeholder, the hero shuttle, and the filmstrip —
+  // identical bytes, one ImageCache entry, zero cross-surface re-decodes.
 
   // Rung 1: MediaStore thumbnail bytes, held in state so Flutter's image
   // cache hits across rebuilds (MemoryImage equality is by reference).
@@ -1747,7 +1928,7 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
   void _handleCorruptDiskThumb() {
     if (_wipedCorruptThumb || _diskThumbPath == null) return;
     _wipedCorruptThumb = true;
-    _memo.remove(widget.file.id);
+    ThumbStore.instance.evict(widget.file.id);
     final path = _diskThumbPath!;
     Future.microtask(() async {
       try {
@@ -1768,12 +1949,12 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
     super.initState();
     final ext = widget.file.filename.split('.').last.toLowerCase();
     _isVideo = ['mp4', 'mov', 'avi', 'mkv'].contains(ext);
-    // Memo hit: paint synchronously, no ladder, no flicker.
-    final memo = _memo[widget.file.id];
-    if (memo != null) {
-      _assetThumbBytes = memo.assetBytes;
-      _diskThumbPath = memo.diskPath;
-      _localVerified = memo.localVerified;
+    // Store hit: paint synchronously, no ladder, no flicker.
+    final entry = ThumbStore.instance.peek(widget.file.id);
+    if (entry != null && entry.hasSource) {
+      _assetThumbBytes = entry.bytes;
+      _diskThumbPath = entry.diskPath;
+      _localVerified = entry.localPath != null;
       _loading = false;
       return;
     }
@@ -1799,7 +1980,7 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
         o.contentHash == n.contentHash) {
       return;
     }
-    _memo.remove(n.id);
+    ThumbStore.instance.evict(n.id);
     setState(() {
       _assetThumbBytes = null;
       _diskThumbPath = null;
@@ -1839,7 +2020,7 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
               fileId: widget.file.id,
               cloudId: widget.file.cloudId,
             ));
-            _memoize(widget.file.id, _ThumbMemo(assetBytes: bytes));
+            ThumbStore.instance.putBytes(widget.file.id, bytes);
             if (mounted) {
               setState(() {
                 _assetThumbBytes = bytes;
@@ -1867,7 +2048,8 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
           fileId: widget.file.id,
           cloudId: widget.file.cloudId,
         ));
-        _memoize(widget.file.id, const _ThumbMemo(localVerified: true));
+        ThumbStore.instance
+            .putLocalPath(widget.file.id, widget.file.localPath!);
         if (mounted) {
           setState(() {
             _localVerified = true;
@@ -1953,7 +2135,7 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
         await atomicWriteBytes(cacheFile, decryptedBytes);
       }
 
-      _memoize(widget.file.id, _ThumbMemo(diskPath: cacheFile.path));
+      ThumbStore.instance.putDiskPath(widget.file.id, cacheFile.path);
       if (mounted) {
         setState(() {
           _diskThumbPath = cacheFile.path;
@@ -1998,6 +2180,28 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
     );
   }
 
+  /// Canonical provider first (the shared ImageCache entry every surface
+  /// uses), then per-tile fallbacks for rungs the store doesn't hold
+  /// (e.g. the in-flight-upload video thumb).
+  ImageProvider? _displayProvider() {
+    final store = ThumbStore.instance
+        .providerFor(widget.file.id, width: widget.decodeWidth);
+    if (store != null) return store;
+    final bytes = _assetThumbBytes;
+    if (bytes != null) {
+      return ResizeImage(MemoryImage(bytes), width: widget.decodeWidth);
+    }
+    final disk = _diskThumbPath;
+    if (disk != null) {
+      return ResizeImage(FileImage(File(disk)), width: widget.decodeWidth);
+    }
+    final local = widget.file.localPath;
+    if (!_isVideo && _localVerified && local != null) {
+      return ResizeImage(FileImage(File(local)), width: widget.decodeWidth);
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -2005,45 +2209,13 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
     Widget errorTile(_, _, _) =>
         Container(color: cs.surfaceContainerHighest);
 
-    // Rung 1 — MediaStore bytes.
-    if (_assetThumbBytes != null) {
+    // One unified paint path over the resolved source.
+    final provider = _displayProvider();
+    if (provider != null) {
       return Stack(fit: StackFit.expand, children: [
-        Image.memory(
-          _assetThumbBytes!,
+        Image(
+          image: provider,
           fit: BoxFit.cover,
-          cacheWidth: widget.decodeWidth,
-          errorBuilder: errorTile,
-        ),
-        if (_isVideo && !widget.compact) _videoOverlay(cs),
-      ]);
-    }
-
-    // Rung 2 — local original, Flutter decodes at cacheWidth. Only when the
-    // content guard verified it (set in _loadThumbnail); a bare localPath is
-    // not enough — it might point at stale/different bytes.
-    if (!_isVideo && _localVerified && widget.file.localPath != null) {
-      final localFile = File(widget.file.localPath!);
-      if (localFile.existsSync()) {
-        return Stack(fit: StackFit.expand, children: [
-          Image.file(
-            localFile,
-            fit: BoxFit.cover,
-            cacheWidth: widget.decodeWidth,
-            gaplessPlayback: true,
-            errorBuilder: errorTile,
-          ),
-          if (_isVideo && !widget.compact) _videoOverlay(cs),
-        ]);
-      }
-    }
-
-    // Rung 3 — decrypted thumb on disk.
-    if (_diskThumbPath != null) {
-      return Stack(fit: StackFit.expand, children: [
-        Image.file(
-          File(_diskThumbPath!),
-          fit: BoxFit.cover,
-          cacheWidth: widget.decodeWidth,
           gaplessPlayback: true,
           errorBuilder: (context, error, stackTrace) {
             _handleCorruptDiskThumb();

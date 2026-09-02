@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
@@ -193,6 +194,17 @@ class EncryptionService {
     final digest = await _sha256.hash(bytes);
     return _hex(digest.bytes);
   }
+
+  /// Isolate-offloaded whole-file hash for the DISPLAY path: pure-Dart
+  /// SHA-256 completes synchronously, so hashing a photo on the main
+  /// isolate froze frames (the gallery's black-tile stalls). Same code,
+  /// same digest — only the isolate changes. Nothing secret crosses the
+  /// port: the path is a plaintext local file the UI already reads.
+  static Future<String> hashFileInBackground(String path) =>
+      trace(
+          'sha256HashBg',
+          () => Isolate.run(
+              () async => _hashPlaintext(await File(path).readAsBytes())));
 
   /// Encrypts [fileBytes] and returns the ciphertext plus the plaintext
   /// SHA-256 hex. One disk read (the caller's `readAsBytes`); the hash and the

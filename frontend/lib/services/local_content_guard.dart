@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -5,6 +6,7 @@ import 'dart:typed_data';
 import 'package:photo_manager/photo_manager.dart';
 
 import '../src/models/file_model.dart';
+import 'database_service.dart';
 import 'encryption_service.dart';
 
 /// Decides whether a local gallery file may be trusted as a display shortcut
@@ -72,10 +74,25 @@ class LocalContentGuard {
       final key = '${file.id}|$len|$mtime';
       final cached = _verdicts[key];
       if (cached != null) return cached;
-
-      final bytes = await f.readAsBytes();
-      final ok = await EncryptionService.hashPlaintext(bytes) == file.contentHash;
+      // L2: the persisted verdict table — a photo is hashed once EVER for
+      // a given (len, mtime), not once per session. Best-effort: a DB
+      // hiccup (or a test with no database) must never break
+      // verification itself.
+      bool? stored;
+      try {
+        stored = await DatabaseService().getGuardVerdict(key);
+      } catch (_) {}
+      if (stored != null) {
+        _verdicts[key] = stored;
+        return stored;
+      }
+      // Miss: hash on a BACKGROUND isolate. Pure-Dart SHA-256 completes
+      // synchronously, so hashing here froze a frame per first-seen tile.
+      final ok = await EncryptionService.hashFileInBackground(f.path) ==
+          file.contentHash;
       _verdicts[key] = ok;
+      unawaited(
+          DatabaseService().putGuardVerdict(key, ok).catchError((_) {}));
       return ok;
     } catch (_) {
       return false; // any resolution failure → prefer the cloud blob
@@ -106,9 +123,20 @@ class LocalContentGuard {
       if (!needsHash) return f.readAsBytes();
       final mtime = (await f.lastModified()).millisecondsSinceEpoch;
       final key = '${file.id}|$len|$mtime';
-      final cached = _verdicts[key];
-      if (cached == false) return null;
-      if (cached == true) return f.readAsBytes();
+      var cached = _verdicts[key];
+      if (cached == null) {
+        try {
+          cached = await DatabaseService().getGuardVerdict(key);
+        } catch (_) {}
+      }
+      if (cached == false) {
+        _verdicts[key] = false;
+        return null;
+      }
+      if (cached == true) {
+        _verdicts[key] = true;
+        return f.readAsBytes();
+      }
       final expected = file.contentHash!;
       final bytes = await Isolate.run(() async {
         final b = await File(path).readAsBytes();
@@ -116,6 +144,9 @@ class LocalContentGuard {
         return ok ? b : null;
       });
       _verdicts[key] = bytes != null;
+      unawaited(DatabaseService()
+          .putGuardVerdict(key, bytes != null)
+          .catchError((_) {}));
       return bytes;
     } catch (_) {
       return null;
