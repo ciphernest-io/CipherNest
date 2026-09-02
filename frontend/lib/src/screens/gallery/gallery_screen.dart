@@ -37,6 +37,9 @@ class _GalleryScreenState extends State<GalleryScreen> {
 
   void _selectTab(int index) {
     if (index == _bottomNavIndex) return;
+    // Selection is modal to the Pictures tab — leaving the tab exits it,
+    // so the floating bar can never act on photos that aren't visible.
+    _picturesKey.currentState?.exitSelection();
     setState(() => _bottomNavIndex = index);
     // Tab content changes under the overlays: reset scroll-driven state so
     // pills are visible and back-to-top is gone, then let the now-visible
@@ -109,7 +112,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
           // the selection actions fill it edge to edge. Same top rule, so
           // it never rides into the title box, and being an overlay it
           // never pushes the photos down.
-          if (selection) {
+          if (selection && _bottomNavIndex == 0) {
             return Positioned(
               top: top,
               left: 10,

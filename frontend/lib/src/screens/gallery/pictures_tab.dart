@@ -332,6 +332,10 @@ class PicturesTabState extends State<PicturesTab>
   void _onPointerDown(PointerDownEvent event) {
     _pinchPointers[event.pointer] = event.position;
     if (_pinchPointers.length == 2) {
+      // A second finger during drag-select ends the drag first (anchor
+      // and auto-scroll timer die) — otherwise the timer kept scrolling
+      // from a frozen point for the rest of the pinch.
+      if (_dragSelecting) _endDragSelect();
       // Second finger down: this is a pinch. The physics swap cancels any
       // scroll drag the first finger already started.
       _zoomAlign = _focalAlignment();

@@ -1425,6 +1425,12 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                           curve: Curves.easeOutCubic,
                           child: PageView.builder(
                           controller: _pageController,
+                          // Build current ±1: neighbours preload + decode
+                          // their full image before the swipe arrives, so
+                          // the handoff is milliseconds, Samsung-style.
+                          // Bounded (3 live pages), unlike the old
+                          // keep-alive that retained every visited page.
+                          allowImplicitScrolling: true,
                           // While zoomed, horizontal drags pan the image,
                           // not the pager; while pinching or mid vertical
                           // swipe, the pager must not drag underneath the
@@ -3099,10 +3105,10 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
   Future<void> _loadImagesImpl() async {
     if (!mounted) return;
 
-    // STEP 1 — placeholder, ALWAYS. Try the same three rungs the grid uses so
-    // the viewer's first frame matches the cell the user just tapped instead
-    // of black-flashing into a spinner.
-    await _loadPlaceholder();
+    // STEP 1 — placeholder, launched CONCURRENTLY with the full load:
+    // neither waits on the other; whichever is ready first paints (the
+    // grid-memo seed usually already painted frame 1).
+    unawaited(_loadPlaceholder());
 
     // STEP 2 — full image. Local original wins ONLY when the content guard
     // verifies it matches the vault entry (size gate always; hash for
@@ -3401,7 +3407,13 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
         : null;
     final hasLocal = localFile != null && localFile.existsSync();
 
-    return Stack(
+    // Only the FOCUSED page may fly: during an edge-back gesture the
+    // pager can sit between two pages, and without this gate BOTH pages'
+    // heroes launched on pop (the double fly-back). Preloaded neighbours
+    // (allowImplicitScrolling) would even make it three.
+    return HeroMode(
+      enabled: widget.isFocused,
+      child: Stack(
       fit: StackFit.expand,
       children: [
         // A+B. One zoom surface for placeholder AND full image — a single
@@ -3497,8 +3509,10 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
                     if (wasSync) return child;
                     return AnimatedOpacity(
                       opacity: frame == null ? 0.0 : 1.0,
-                      duration: ThemeController().tokens.dur,
-                      curve: ThemeController().tokens.easeOut,
+                      // Same picture in two resolutions — a fast reveal,
+                      // not a scene change.
+                      duration: const Duration(milliseconds: 120),
+                      curve: Curves.easeOut,
                       child: child,
                     );
                   },
@@ -3607,6 +3621,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
             ),
           ),
       ],
+      ),
     );
   }
 }
