@@ -138,7 +138,6 @@ class PicturesTabState extends State<PicturesTab>
       vsync: this, duration: const Duration(milliseconds: 240));
   double _settleFrom = 3.0;
   double _settleTo = 3.0;
-  Alignment _zoomAlign = Alignment.center;
   List<CnestFile>? _lastFiles;
   bool _followJump = false;
 
@@ -196,7 +195,6 @@ class PicturesTabState extends State<PicturesTab>
     return (_zoomLevels.length - 1).toDouble();
   }
 
-  double _effColsAt(double p) => _effCols(0) / math.exp(_axisOf(p));
 
   // Aspect ratios (w/h) for the justified layout, resolved lazily off the
   // MediaStore entry / local file / cached thumb. Static so ratios survive
@@ -390,7 +388,6 @@ class PicturesTabState extends State<PicturesTab>
         _pivotFilesRef = null;
         _pivotFlatCache = null;
         _warmedTier = null;
-        _zoomAlign = _focalAlignment();
         _pivotFileId = null;
         _pivotFingerLocal = null;
         final mid = _pinchMid();
@@ -483,25 +480,6 @@ class PicturesTabState extends State<PicturesTab>
     if (rounded != _zoomIndex) {
       setState(() => _zoomIndex = rounded);
     }
-  }
-
-  /// Commit one ladder step and hand the accumulated finger scale to the
-  /// new grid: the new level enters at the visually-equivalent scale and
-  /// settles to 1 while its tiles fade in — one continuous motion can walk
-  /// the whole ladder without a visible stop.
-  /// Focal point of the two fingers, as a transform alignment: the photo
-  /// under the pinch stays put across the handoff (the "pivot").
-  Alignment _focalAlignment() {
-    final obj = _gridKey.currentContext?.findRenderObject();
-    if (obj is! RenderBox || _pinchPointers.length < 2) {
-      return Alignment.center;
-    }
-    final pts = _pinchPointers.values.toList();
-    final mid = obj.globalToLocal((pts[0] + pts[1]) / 2);
-    return Alignment(
-      (mid.dx / obj.size.width) * 2 - 1,
-      (mid.dy / obj.size.height) * 2 - 1,
-    );
   }
 
   Offset? _pinchMid() {
@@ -770,7 +748,9 @@ class PicturesTabState extends State<PicturesTab>
             // the inflated viewport. y is monotone in flat index in BOTH
             // layouts, so the walk terminates correctly. Capped: the
             // dimmed, scaled real grid covers everything beyond it.
-            const cap = 220;
+            // Covers a full 12-column viewport; only the year rung's
+            // 13dp specks fall back to plain background at the fringes.
+            const cap = 380;
             var loIdx = pivotFlat;
             var hiIdx = pivotFlat;
             while (loIdx > 0 &&
@@ -802,19 +782,20 @@ class PicturesTabState extends State<PicturesTab>
             final layer = Stack(
               clipBehavior: Clip.none,
               children: [
-                // Title-fixed mode: the untouched real grid stays behind;
-                // an opaque backdrop hides its (static) content below the
-                // title so only the travelling tiles are seen.
-                if (_titleFixedMorph)
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    top: chromeTop - _gestureStartOffset,
-                    bottom: 0,
-                    child: ColoredBox(
-                        color:
-                            Theme.of(context).scaffoldBackgroundColor),
-                  ),
+                // Opaque backdrop: the real grid (kept mounted for its
+                // state) is fully hidden during the morph — any scaled
+                // remnant of it behind the travel layer read as a "ghost
+                // grid". In title-fixed mode it starts below the title.
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  top: _titleFixedMorph
+                      ? chromeTop - _gestureStartOffset
+                      : 0,
+                  bottom: 0,
+                  child: ColoredBox(
+                      color: Theme.of(context).scaffoldBackgroundColor),
+                ),
                 // Date headers of both rungs cross-fade at their own
                 // travelling positions; tiles themselves never fade.
                 for (final h in oLo.headers)
@@ -1559,44 +1540,10 @@ class PicturesTabState extends State<PicturesTab>
                       AnimatedBuilder(
                     animation: _zoomProgress,
                     builder: (context, child) {
-                      if (!_morphActive || _titleFixedMorph) return child!;
-                      // During the morph the real grid is the REMAINDER: a
-                      // paint-only scale about the focal point (locally
-                      // exact near the pivot, so near-pivot duplicates sit
-                      // under the travel tiles invisibly) that dims as the
-                      // morph diverges. The travel layer above owns the
-                      // tiles near the fingers.
-                      final p = _zoomProgress.value;
-                      final scale =
-                          _effColsAt(_morphStartProgress) / _effColsAt(p);
-                      final dim = 1.0 -
-                          0.85 *
-                              math.min(
-                                  1.0, (p - _morphStartProgress).abs());
-                      // Anchor the backdrop scale where the pivot ACTUALLY
-                      // sits (clamp-aware), so it shadows the travel layer
-                      // instead of pulling edge rows toward the fingers.
-                      var align = _zoomAlign;
-                      final bgFiles = _lastFiles;
-                      final pivotFlat =
-                          bgFiles == null ? null : _pivotFlatFor(bgFiles);
-                      if (pivotFlat != null) {
-                        final o = _oracleFor(_zoomIndex);
-                        final anchorY = _chromeTop() +
-                            o.rectFor(pivotFlat).center.dy -
-                            _morphScrollOffset(o, pivotFlat);
-                        final h = MediaQuery.sizeOf(context).height;
-                        align = Alignment(
-                            _zoomAlign.x, (anchorY / h) * 2 - 1);
-                      }
-                      return Opacity(
-                        opacity: dim.clamp(0.15, 1.0),
-                        child: Transform.scale(
-                          scale: scale,
-                          alignment: align,
-                          child: child,
-                        ),
-                      );
+                      // The travel layer's opaque backdrop hides the real
+                      // grid during a morph — no transform here; a scaled
+                      // remnant read as a ghost grid.
+                      return child!;
                     },
                     child: RepaintBoundary(
                     key: _repaintKey,
