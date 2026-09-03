@@ -152,6 +152,11 @@ class PicturesTabState extends State<PicturesTab>
   Offset? _pivotFingerLocal;
   int _heldDecodeWidth = MediaBudget.thumbDecodeWidth;
   bool _heldCompact = false;
+  bool _titleFixedMorph = false;
+  double _gestureStartOffset = 0;
+  List<CnestFile>? _pivotFilesRef;
+  int? _pivotFlatCache;
+  int? _warmedTier;
 
   /// Tail padding that keeps offset == _headerH reachable when a far
   /// zoom-out makes the whole library shorter than the viewport —
@@ -375,9 +380,16 @@ class PicturesTabState extends State<PicturesTab>
         // pivot (photo under the fingers) while the real layout is live.
         _morphStartProgress = _zoomIndex.toDouble();
         _zoomProgress.value = _morphStartProgress;
-        // The title box must never scale: with it in view the rung swaps
-        // stay plain.
-        _morphEnabled = !headerVisible && _lastFiles != null;
+        // Title visible → the morph still runs, but anchored to the
+        // CONTENT TOP with the scroll offset frozen, so the title is
+        // never scaled, dimmed, or pulled.
+        _titleFixedMorph = headerVisible;
+        _gestureStartOffset =
+            (ctrl != null && ctrl.hasClients) ? ctrl.offset : 0;
+        _morphEnabled = _lastFiles != null;
+        _pivotFilesRef = null;
+        _pivotFlatCache = null;
+        _warmedTier = null;
         _zoomAlign = _focalAlignment();
         _pivotFileId = null;
         _pivotFingerLocal = null;
@@ -504,25 +516,41 @@ class PicturesTabState extends State<PicturesTab>
   void _commitMorph() {
     if (!_morphActive || !mounted) return;
     final target = _settleTo.round().clamp(0, _zoomLevels.length - 1);
-    final offset = _commitOffsetFor(target);
+    final ctrl = _scrollCtrl;
+    final files = _lastFiles;
+    var filler = _bottomFiller;
+    if (ctrl != null && ctrl.hasClients && files != null) {
+      final o = _oracleFor(target);
+      final viewport = ctrl.position.viewportDimension;
+      if (!widget.embedded) {
+        // Filler computed SYNCHRONOUSLY with the swap: a post-frame
+        // correction let a short layout drag the title into view for a
+        // frame.
+        final contentH = _chromeTop() +
+            o.totalHeight +
+            MediaQuery.paddingOf(context).bottom +
+            96;
+        filler = math.max(0.0, _headerH + viewport - contentH);
+      }
+      if (!_titleFixedMorph) {
+        final pivotFlat = _pivotFlatFor(files);
+        if (pivotFlat != null) {
+          // SAME-frame jump: the rebuilt grid must never paint a frame
+          // at the old offset (that was the end-of-transition ghost
+          // flash behind the travel layer).
+          _followJump = true;
+          ctrl.jumpTo(_morphScrollOffset(o, pivotFlat));
+          WidgetsBinding.instance
+              .addPostFrameCallback((_) => _followJump = false);
+        }
+      }
+    }
     setState(() {
       _zoomIndex = target;
       _morphStartProgress = target.toDouble();
+      _bottomFiller = filler;
       _morphClosing = true;
     });
-    if (offset != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final ctrl = _scrollCtrl;
-        if (!mounted || ctrl == null || !ctrl.hasClients) return;
-        _followJump = true; // chrome must not react to this jump
-        final lowest = widget.embedded ? 0.0 : _headerH;
-        ctrl.jumpTo(offset
-            .clamp(lowest, math.max(lowest, ctrl.position.maxScrollExtent))
-            .toDouble());
-        WidgetsBinding.instance
-            .addPostFrameCallback((_) => _followJump = false);
-      });
-    }
     _persistZoomLevel();
   }
 
@@ -532,19 +560,6 @@ class PicturesTabState extends State<PicturesTab>
       _morphActive = false;
       _morphClosing = false;
     });
-  }
-
-  /// Scroll offset that puts the pivot tile's center back under the
-  /// fingers on [rung] — every rung, justified included.
-  double? _commitOffsetFor(int rung) {
-    final files = _lastFiles;
-    final id = _pivotFileId;
-    final finger = _pivotFingerLocal;
-    if (files == null || id == null || finger == null) return null;
-    final idx = files.indexWhere((f) => f.id == id);
-    if (idx < 0) return null;
-    final rect = _oracleFor(rung).rectFor(idx);
-    return _chromeTop() + rect.center.dy - finger.dy;
   }
 
   GalleryLayoutOracle _oracleFor(int rung) {
@@ -671,6 +686,49 @@ class PicturesTabState extends State<PicturesTab>
     }
   }
 
+  /// Scroll offset for [o]'s rung that keeps the pivot under the fingers,
+  /// clamped to the rung's valid range so the layout edges stay pinned at
+  /// the extremes; frozen in title-fixed mode.
+  double _morphScrollOffset(GalleryLayoutOracle o, int pivotFlat) {
+    if (_titleFixedMorph) return _gestureStartOffset;
+    final ctrl = _scrollCtrl;
+    final viewport = ctrl != null && ctrl.hasClients
+        ? ctrl.position.viewportDimension
+        : MediaQuery.sizeOf(context).height;
+    final lowest = widget.embedded ? 0.0 : _headerH;
+    final bottomPad =
+        widget.embedded ? 8.0 : MediaQuery.paddingOf(context).bottom + 96;
+    final maxOff = math.max(
+        lowest, _chromeTop() + o.totalHeight + bottomPad - viewport);
+    final raw = _chromeTop() +
+        o.rectFor(pivotFlat).center.dy -
+        (_pivotFingerLocal?.dy ?? viewport / 2);
+    return raw.clamp(lowest, maxOff).toDouble();
+  }
+
+  int? _pivotFlatFor(List<CnestFile> files) {
+    if (identical(files, _pivotFilesRef)) return _pivotFlatCache;
+    final id = _pivotFileId;
+    if (id == null) return null;
+    final idx = files.indexWhere((f) => f.id == id);
+    _pivotFilesRef = files;
+    _pivotFlatCache = idx < 0 ? null : idx;
+    return _pivotFlatCache;
+  }
+
+  int _tierFor(int rung) {
+    final level = _zoomLevels[rung];
+    final orientation = MediaQuery.of(context).orientation;
+    final cols = level.isJustified
+        ? 2
+        : (orientation == Orientation.landscape
+            ? (level.columns * 1.5).round().clamp(2, 42)
+            : level.columns);
+    return cols >= 12
+        ? MediaBudget.denseThumbDecodeWidth
+        : MediaBudget.thumbDecodeWidth;
+  }
+
   /// The travel layer: tiles nearest the pivot rendered at a Rect.lerp of
   /// the two bracketing rungs' layouts, with per-rung scroll offsets
   /// pinned so the pivot photo stays under the fingers at BOTH ends — the
@@ -687,20 +745,24 @@ class PicturesTabState extends State<PicturesTab>
             if (finger == null || id == null || files.isEmpty) {
               return const SizedBox.shrink();
             }
-            final pivotFlat = files.indexWhere((f) => f.id == id);
-            if (pivotFlat < 0) return const SizedBox.shrink();
+            final pivotFlat = _pivotFlatFor(files);
+            if (pivotFlat == null) return const SizedBox.shrink();
             final lo = p.floor().clamp(0, _zoomLevels.length - 1);
             final hi = p.ceil().clamp(0, _zoomLevels.length - 1);
             final f = (p - lo).clamp(0.0, 1.0).toDouble();
             final oLo = _oracleFor(lo);
             final oHi = _oracleFor(hi);
-            // Offsets that keep the pivot's center at the finger y in each
-            // rung's layout (chrome offset cancels out of the difference).
-            final offLo = oLo.rectFor(pivotFlat).center.dy - finger.dy;
-            final offHi = oHi.rectFor(pivotFlat).center.dy - finger.dy;
+            // Scroll offset per rung: pivot-anchored, CLAMPED to the
+            // valid range (at the top the top row stays pinned and lower
+            // rows travel to it, instead of everything being pulled to
+            // the fingers); in title-fixed mode the offset is frozen so
+            // the title never moves.
+            final offLo = _morphScrollOffset(oLo, pivotFlat);
+            final offHi = _morphScrollOffset(oHi, pivotFlat);
+            final chromeTop = _chromeTop();
             Rect lerpRect(int i) => Rect.lerp(
-                  oLo.rectFor(i).translate(0, -offLo),
-                  oHi.rectFor(i).translate(0, -offHi),
+                  oLo.rectFor(i).translate(0, chromeTop - offLo),
+                  oHi.rectFor(i).translate(0, chromeTop - offHi),
                   f,
                 )!;
             final viewH = MediaQuery.sizeOf(context).height;
@@ -721,9 +783,38 @@ class PicturesTabState extends State<PicturesTab>
                 lerpRect(hiIdx + 1).top < viewH * 1.25) {
               hiIdx++;
             }
+            // Decode-tier prewarm: warm the approaching rung's decode
+            // width before commit, so the landed grid paints instantly
+            // instead of flashing while it re-decodes (the end-of-
+            // transition "ghost grid").
+            final nearTier = _tierFor(f > 0.5 ? hi : lo);
+            if (nearTier != _heldDecodeWidth && _warmedTier != nearTier) {
+              _warmedTier = nearTier;
+              for (var i = loIdx; i <= hiIdx; i++) {
+                final pv = ThumbStore.instance
+                    .providerFor(files[i].id, width: nearTier);
+                if (pv != null) {
+                  unawaited(
+                      precacheImage(pv, context, onError: (_, _) {}));
+                }
+              }
+            }
             final layer = Stack(
               clipBehavior: Clip.none,
               children: [
+                // Title-fixed mode: the untouched real grid stays behind;
+                // an opaque backdrop hides its (static) content below the
+                // title so only the travelling tiles are seen.
+                if (_titleFixedMorph)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: chromeTop - _gestureStartOffset,
+                    bottom: 0,
+                    child: ColoredBox(
+                        color:
+                            Theme.of(context).scaffoldBackgroundColor),
+                  ),
                 // Date headers of both rungs cross-fade at their own
                 // travelling positions; tiles themselves never fade.
                 for (final h in oLo.headers)
@@ -731,7 +822,7 @@ class PicturesTabState extends State<PicturesTab>
                     Positioned(
                       left: 0,
                       right: 0,
-                      top: h.y - offLo,
+                      top: chromeTop + h.y - offLo,
                       height: GalleryLayoutOracle.headerExtent,
                       child: Opacity(
                         opacity: (1 - f).clamp(0.0, 1.0),
@@ -743,7 +834,7 @@ class PicturesTabState extends State<PicturesTab>
                     Positioned(
                       left: 0,
                       right: 0,
-                      top: h.y - offHi,
+                      top: chromeTop + h.y - offHi,
                       height: GalleryLayoutOracle.headerExtent,
                       child: Opacity(
                         opacity: f.clamp(0.0, 1.0),
@@ -890,6 +981,45 @@ class PicturesTabState extends State<PicturesTab>
     }
   }
 
+  /// One-shot, trickled backfill of missing width/height rows (MediaStore
+  /// orientation-corrected values, else a header probe of the local
+  /// original). Null dims force the viewer's fullscreen-hero fallback —
+  /// the "some photos open worse than others" class. Cloud-only files
+  /// backfill on first view instead (real dimensions only, never thumbs).
+  static bool _dimsSweepStarted = false;
+  Future<void> _backfillDimsSweep(List<CnestFile> files) async {
+    if (_dimsSweepStarted || widget.embedded) return;
+    _dimsSweepStarted = true;
+    final missing = files
+        .where((f) => f.width == null || f.height == null)
+        .take(400)
+        .toList();
+    for (final f in missing) {
+      if (!mounted) return;
+      try {
+        if (f.assetId != null) {
+          final asset = await AssetEntity.fromId(f.assetId!);
+          if (asset != null &&
+              asset.orientatedWidth > 0 &&
+              asset.orientatedHeight > 0) {
+            await DatabaseService().updateDimensions(
+                f.id, asset.orientatedWidth, asset.orientatedHeight);
+            continue;
+          }
+        }
+        final local = f.localPath;
+        if (local != null && File(local).existsSync()) {
+          final dims = await decodeImageDimsFromFile(local);
+          if (dims != null) {
+            await DatabaseService()
+                .updateDimensions(f.id, dims.$1, dims.$2);
+          }
+        }
+      } catch (_) {}
+      await Future.delayed(const Duration(milliseconds: 20));
+    }
+  }
+
   Future<double> _measureRatio(CnestFile file) async {
     final ext = file.filename.split('.').last.toLowerCase();
     final isVideo = const {'mp4', 'mov', 'avi', 'mkv'}.contains(ext);
@@ -996,6 +1126,7 @@ class PicturesTabState extends State<PicturesTab>
     }
     final images =
         await DatabaseService().getFilesByType(CnestFileType.image);
+    unawaited(_backfillDimsSweep(images));
     if (_favoritesOnly) {
       return images.where((f) => f.isFavorite).toList();
     }
@@ -1428,7 +1559,7 @@ class PicturesTabState extends State<PicturesTab>
                       AnimatedBuilder(
                     animation: _zoomProgress,
                     builder: (context, child) {
-                      if (!_morphActive) return child!;
+                      if (!_morphActive || _titleFixedMorph) return child!;
                       // During the morph the real grid is the REMAINDER: a
                       // paint-only scale about the focal point (locally
                       // exact near the pivot, so near-pivot duplicates sit
@@ -1442,11 +1573,27 @@ class PicturesTabState extends State<PicturesTab>
                           0.85 *
                               math.min(
                                   1.0, (p - _morphStartProgress).abs());
+                      // Anchor the backdrop scale where the pivot ACTUALLY
+                      // sits (clamp-aware), so it shadows the travel layer
+                      // instead of pulling edge rows toward the fingers.
+                      var align = _zoomAlign;
+                      final bgFiles = _lastFiles;
+                      final pivotFlat =
+                          bgFiles == null ? null : _pivotFlatFor(bgFiles);
+                      if (pivotFlat != null) {
+                        final o = _oracleFor(_zoomIndex);
+                        final anchorY = _chromeTop() +
+                            o.rectFor(pivotFlat).center.dy -
+                            _morphScrollOffset(o, pivotFlat);
+                        final h = MediaQuery.sizeOf(context).height;
+                        align = Alignment(
+                            _zoomAlign.x, (anchorY / h) * 2 - 1);
+                      }
                       return Opacity(
                         opacity: dim.clamp(0.15, 1.0),
                         child: Transform.scale(
                           scale: scale,
-                          alignment: _zoomAlign,
+                          alignment: align,
                           child: child,
                         ),
                       );
@@ -1568,6 +1715,13 @@ class PicturesTabState extends State<PicturesTab>
           _toggleSelected(file.id);
           return;
         }
+        // Insurance: this tile's decode must be live before the flight
+        // starts (no-op when already cached — the common case).
+        final pv =
+            ThumbStore.instance.providerFor(file.id, width: decodeWidth);
+        if (pv != null) {
+          unawaited(precacheImage(pv, context, onError: (_, _) {}));
+        }
         // Fade route: the hero flies while the gallery dims behind it
         // instead of sliding away.
         final result = await Navigator.push(
@@ -1582,6 +1736,7 @@ class PicturesTabState extends State<PicturesTab>
                 files: flatFiles,
                 initialIndex: globalIndex,
                 onViewedFileChanged: _followViewerFile,
+                placeholderDecodeWidth: decodeWidth,
               ),
             ),
           ),

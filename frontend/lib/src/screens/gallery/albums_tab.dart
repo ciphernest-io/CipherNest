@@ -139,6 +139,7 @@ class AlbumsTabState extends State<AlbumsTab>
   double _headerH = 0;
   Timer? _motionTimer;
   bool _headerLocked = true;
+  double _bottomFiller = 0;
 
   @override
   void didChangeDependencies() {
@@ -164,6 +165,23 @@ class AlbumsTabState extends State<AlbumsTab>
 
   /// Re-publish scroll-derived chrome state (used after tab switches).
   void reportChrome() => _onScrollTick();
+
+  /// Keeps offset == _headerH reachable when the morph (or a settled
+  /// short layout) shrinks the content — otherwise the clamp pulls the
+  /// scroll down and the title box gets dragged into view mid-pinch.
+  void _ensureHeaderReachable() {
+    if (!mounted) return;
+    final ctrl = _scrollCtrl;
+    if (ctrl == null || !ctrl.hasClients) return;
+    final maxExtent = ctrl.position.maxScrollExtent;
+    final withoutFiller = maxExtent - _bottomFiller;
+    final needed = (_headerH - withoutFiller)
+        .clamp(0.0, _headerH + ctrl.position.viewportDimension)
+        .toDouble();
+    if ((needed - _bottomFiller).abs() > 1) {
+      setState(() => _bottomFiller = needed);
+    }
+  }
 
   bool _onScrollNotification(ScrollNotification n) {
     final chrome = widget.chrome;
@@ -254,6 +272,10 @@ class AlbumsTabState extends State<AlbumsTab>
       final v = Curves.easeOutCubic.transform(_settleCtrl.value);
       setState(() =>
           _viewProgress = _settleFrom + (_settleTo - _settleFrom) * v);
+    });
+    _settleCtrl.addStatusListener((status) {
+      // One more rebuild after the settle so the pinch spacer drops.
+      if (status == AnimationStatus.completed && mounted) setState(() {});
     });
     SyncService().syncNotifier.addListener(_reload);
     // Rebuild album covers when files are added, deleted, or restored —
@@ -353,6 +375,8 @@ class AlbumsTabState extends State<AlbumsTab>
     if (_loading) return const Center(child: CircularProgressIndicator());
 
     final cs = Theme.of(context).colorScheme;
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _ensureHeaderReachable());
 
     return Listener(
       behavior: HitTestBehavior.translucent,
@@ -431,6 +455,14 @@ class AlbumsTabState extends State<AlbumsTab>
               for (final album in _unbacked) _unbackedCard(album, cs),
             ]),
         ],
+        // Header-reachability filler; during the pinch a full viewport of
+        // slack is added so the live height changes can never clamp the
+        // scroll into the title box.
+        SizedBox(
+            height: _bottomFiller +
+                ((_pinchActive || _settleCtrl.isAnimating)
+                    ? MediaQuery.sizeOf(context).height
+                    : 0)),
       ],
       ),
       ),

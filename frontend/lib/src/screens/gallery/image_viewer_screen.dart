@@ -67,6 +67,11 @@ class ImageViewerScreen extends StatefulWidget {
   /// index: the gallery can refresh and reorder while the viewer is open.
   final ValueChanged<String>? onViewedFileChanged;
 
+  /// Decode width the launching grid used for this photo's thumbnail —
+  /// the placeholder reuses the EXACT provider key so the hero flight
+  /// lands on an already-decoded image, never a fresh decode.
+  final int placeholderDecodeWidth;
+
   const ImageViewerScreen({
     super.key,
     required this.files,
@@ -74,6 +79,7 @@ class ImageViewerScreen extends StatefulWidget {
     this.standalone = false,
     this.fromRecycleBin = false,
     this.onViewedFileChanged,
+    this.placeholderDecodeWidth = MediaBudget.thumbDecodeWidth,
   });
 
   @override
@@ -1533,6 +1539,8 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                                 key: ValueKey(_currentFiles[index].id),
                                 file: _currentFiles[index],
                                 index: index,
+                                placeholderWidth:
+                                    widget.placeholderDecodeWidth,
                                 onLoaded: (loadedIdx) =>
                                     _handleCurrentPhotoLoaded(loadedIdx),
                                 isFocused: index == _currentIndex,
@@ -2772,6 +2780,9 @@ class _SinglePhotoView extends StatefulWidget {
   /// a stall during a USER pause must stay a pause.
   final bool videoUiHold;
 
+  /// See [ImageViewerScreen.placeholderDecodeWidth].
+  final int placeholderWidth;
+
   /// Reports this page's video controller + init handler to the screen so
   /// the dock (pill / mute / scrubber) can drive playback. (index, null,
   /// null) = this page's video is gone.
@@ -2791,6 +2802,7 @@ class _SinglePhotoView extends StatefulWidget {
     required this.onEdgeOvershoot,
     required this.onVideoBinding,
     this.videoUiHold = false,
+    this.placeholderWidth = MediaBudget.thumbDecodeWidth,
   });
 
   @override
@@ -3040,7 +3052,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
   /// identical ImageCache entry, so the hero flight lands on pixels that
   /// are already decoded.
   ImageProvider? _storeThumbProvider() => ThumbStore.instance
-      .providerFor(widget.file.id, width: MediaBudget.thumbDecodeWidth);
+      .providerFor(widget.file.id, width: widget.placeholderWidth);
 
   /// Backfills null width/height rows from the decoded full image so the
   /// aspect-tight hero stops hitting the fullscreen fallback. Silent DB

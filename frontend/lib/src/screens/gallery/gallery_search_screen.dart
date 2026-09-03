@@ -182,6 +182,8 @@ class _GallerySearchScreenState extends State<GallerySearchScreen> {
                     child: ImageViewerScreen(
                       files: matches,
                       initialIndex: i,
+                      // Matches this grid's tile decode width.
+                      placeholderDecodeWidth: 200,
                     ),
                   ),
                 ),
