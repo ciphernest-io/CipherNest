@@ -125,6 +125,15 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   double _dragDy = 0;
   bool _sheetTriggered = false;
 
+  // Samsung split-details: swipe up docks the photo into the top half and
+  // slides the details in below (an in-place split, not a drawer over the
+  // photo). Swipe down on the photo, or back, closes it.
+  bool _detailsOpen = false;
+  final ScrollController _detailsScroll = ScrollController();
+  // Cumulative downward pull past the top of the details list — a pull-to-
+  // dismiss on the panel itself (not just the photo).
+  double _detailsPull = 0;
+
   // Swipe-down-to-close, driven by the same raw-pointer tracking as the
   // details sheet — NOT by a Dismissible. Dismissible's vertical drag
   // recognizer plus the PageView's horizontal one covered both axes of the
@@ -175,10 +184,23 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   // strip; the bar then scrolls under a FIXED center playhead to scrub.
   // Collapses on tap, page change, or when the scrub exits the segment.
   bool _videoExpanded = false;
-  // Scrub throttling state (see _handleStripScrollUpdate).
-  DateTime _lastScrubSeek = DateTime.fromMillisecondsSinceEpoch(0);
+  // Scrub state (see _handleStripScrollUpdate). Seeks are SERIALIZED: only one
+  // seekTo is in flight at a time and it always targets the latest position,
+  // so slow scrubbing never ricochets between past/future frames (ExoPlayer
+  // completes overlapping async seeks out of order).
   double? _pendingScrubFraction;
   bool _resumeAfterScrub = false;
+  // Live scrub seeks are throttled fire-and-forget (NOT awaited): awaiting a
+  // seek serialized them so the frame only updated when the finger STOPPED. A
+  // short throttle keeps the displayed frame chasing the finger live, with
+  // small steps that keep ExoPlayer from flicking backwards.
+  DateTime _lastScrubSeek = DateTime.fromMillisecondsSinceEpoch(0);
+  // The dense preview frame painted over the video WHILE scrubbing (instant,
+  // no decoder latency). Null when not scrubbing → the live video shows.
+  final ValueNotifier<Uint8List?> _scrubPreview = ValueNotifier(null);
+  // Current scrub position as a 0..1 fraction (null when not scrubbing) so the
+  // time readout tracks the finger even though the live video isn't seeking.
+  final ValueNotifier<double?> _scrubFraction = ValueNotifier(null);
 
   // --- Center-locked filmstrip geometry (Samsung) ---
   // Photos are 3:4, videos 4:3 (same height, wider), the expanded video is
@@ -189,13 +211,19 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   static const double _photoSlot = 36.0; // 30 wide thumb + 6 margins
   static const double _videoSlot = 59.0; // 53 wide (4:3 of 40) + 6
   static const double _frameTileW = 44.0; // expanded per-second tile
-  static const double _minFrameTileW = 16.0; // thinnest legible film sliver
   static const double _vSlot = 36.0; // landscape rail: uniform slots
   Axis _stripAxis = Axis.horizontal;
   // Captured by the strip's LayoutBuilder each build; the offset math needs
   // the real leading pad + viewport (pad clamps to 0 on small screens).
   double _stripLeadPad = 0;
   double _stripViewport = 0;
+  // Fires shortly after strip scrolling stops to re-center the selected photo,
+  // in case a ScrollEndNotification never arrives for a light flick.
+  Timer? _stripSettleTimer;
+  // The strip must LAND on the opened photo, not start at slot 0 and animate
+  // across to it. Set once the strip has a real layout and we've jumped it to
+  // the initial index.
+  bool _stripLanded = false;
 
   static bool _isVideoFile(CnestFile f) {
     final ext = f.filename.split('.').last.toLowerCase();
@@ -206,13 +234,13 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   /// long ones as many tiles as fit the segment without a sliver dropping
   /// below [_minFrameTileW] — density is what makes the scrub read as silk.
   int _expandedFrameCount(Duration d) {
-    final bySeconds = d.inSeconds.clamp(1, 30).toInt();
-    // The strip may not have laid out yet when preloading frames — fall back
-    // to the screen width so preload and expand agree on the count.
-    final viewport =
-        _stripViewport > 0 ? _stripViewport : MediaQuery.sizeOf(context).width;
-    final byWidth = max(1, (viewport * 0.72) ~/ _minFrameTileW);
-    return min(bySeconds, byWidth);
+    // Roughly one cut per second (Samsung), but FLOORED so a short clip shows
+    // a few distinct frames (not ten thin slivers) and CAPPED so a long clip
+    // doesn't become a hundred tiles. Depends only on duration, so preload and
+    // expand always agree on the count (same cache key) — a mismatch made the
+    // expanded film read a freshly-allocated empty list and look blank.
+    final secs = (d.inMilliseconds / 1000.0).round();
+    return secs.clamp(3, 20);
   }
 
   /// Expanded tile width shrinks so the whole segment never exceeds ~72% of
@@ -222,7 +250,11 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     final controller = _activeVideo;
     if (controller == null || _stripViewport <= 0) return _frameTileW;
     final frames = _expandedFrameCount(controller.value.duration);
-    return min(_frameTileW, (_stripViewport * 0.72) / frames);
+    // Fixed scrub SPAN (~68% of the bar) regardless of frame count, so a short
+    // clip's 3-4 frames each become WIDE and the film is still long enough to
+    // scrub — instead of a tiny 3-tile stub. Long clips pack more, thinner
+    // tiles into the same span.
+    return (_stripViewport * 0.68) / frames;
   }
 
   double _slotWidth(int index) {
@@ -248,12 +280,16 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     );
     _loadVideoDurationHint();
     WidgetsBinding.instance.addPostFrameCallback(
-      (_) => _scrollToIndex(_currentIndex),
+      (_) => _jumpStripToIndex(_currentIndex),
     );
   }
 
   @override
   void dispose() {
+    _stripSettleTimer?.cancel();
+    _scrubPreview.dispose();
+    _scrubFraction.dispose();
+    _detailsScroll.dispose();
     _pageController.dispose();
     _filmStripController.dispose();
     _fullSeedCache.clear();
@@ -316,6 +352,16 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     );
   }
 
+  /// Instantly places the strip so [index] is centered — no visible slide.
+  /// Used for the initial landing so the opened photo is already centered
+  /// rather than starting at slot 0 and animating across.
+  void _jumpStripToIndex(int index) {
+    if (!_filmStripController.hasClients) return;
+    final target = _stripOffsetFor(index)
+        .clamp(0.0, _filmStripController.position.maxScrollExtent);
+    _filmStripController.jumpTo(target);
+  }
+
   /// Reads the strip's current scroll position, finds the item closest to
   /// screen-center, and jumps the main PageView to it. Called on every
   /// ScrollUpdateNotification while the user is dragging or the strip is
@@ -352,6 +398,8 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       // Scrubbed past the segment — collapse and let selection take over.
       setState(() => _videoExpanded = false);
       _pendingScrubFraction = null;
+      _scrubPreview.value = null;
+      _scrubFraction.value = null;
       if (_resumeAfterScrub) {
         _resumeAfterScrub = false;
         controller.play();
@@ -361,19 +409,38 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     }
     if (duration <= Duration.zero) return;
     final fraction = ((centerX - segStart) / segWidth).clamp(0.0, 1.0);
-    // Scrub politely: pause playback, throttle seeks (ExoPlayer chokes on a
-    // seek per scroll tick — playback looks frozen), and let ScrollEnd land
-    // the final precise seek.
+    // Pause the live video and paint the DENSE preview frame instead of
+    // seeking on every tick: the preview is a cache lookup (zero latency) so
+    // it tracks the finger continuously, where a live seek "waits then jumps".
     if (controller.value.isPlaying) {
       controller.pause();
       _resumeAfterScrub = true;
     }
     _pendingScrubFraction = fraction;
-    final now = DateTime.now();
-    if (now.difference(_lastScrubSeek) >= const Duration(milliseconds: 180)) {
-      _lastScrubSeek = now;
-      controller.seekTo(duration * fraction);
+    _scrubFraction.value = fraction; // live time readout follows the finger
+    final file = _currentFiles[_currentIndex];
+    final preview =
+        _ExpandedVideoStripState.previewFrame(file.id, duration, fraction);
+    if (preview != null) {
+      _scrubPreview.value = preview;
+    } else {
+      // Preview not extracted yet (still filling) — fall back to a throttled
+      // live seek so scrubbing still shows *something*.
+      _liveScrubSeek(duration * fraction);
     }
+  }
+
+  /// Fallback live seek while the dense preview is still extracting: throttled,
+  /// fire-and-forget so the frame keeps up as best the decoder allows.
+  void _liveScrubSeek(Duration target) {
+    final controller = _activeVideo;
+    if (controller == null) return;
+    final now = DateTime.now();
+    if (now.difference(_lastScrubSeek) < const Duration(milliseconds: 45)) {
+      return;
+    }
+    _lastScrubSeek = now;
+    controller.seekTo(target);
   }
 
   /// Called when an expanded-scrub drag/fling settles: issue the exact final
@@ -382,13 +449,26 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     final controller = _activeVideo;
     final fraction = _pendingScrubFraction;
     _pendingScrubFraction = null;
+    final resuming = _resumeAfterScrub;
+    _resumeAfterScrub = false;
     if (controller != null && fraction != null) {
       final duration = controller.value.duration;
+      // Exact final landing — unthrottled, so the resting frame is precise.
       if (duration > Duration.zero) controller.seekTo(duration * fraction);
     }
-    if (_resumeAfterScrub) {
-      _resumeAfterScrub = false;
+    if (resuming) {
       controller?.play();
+      _scrubPreview.value = null; // playback covers it immediately
+      _scrubFraction.value = null;
+    } else {
+      // Keep the preview one beat so the seeked live frame is presented before
+      // we reveal it (no flash back to the pre-scrub frame). The time readout
+      // clears with it — by then the controller reports the landed position.
+      Future.delayed(const Duration(milliseconds: 120), () {
+        if (!mounted) return;
+        _scrubPreview.value = null;
+        _scrubFraction.value = null;
+      });
     }
   }
 
@@ -397,12 +477,15 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   /// expanded — the scrub position IS the resting position.)
   void _snapStripToNearest() {
     if (!_filmStripController.hasClients || _videoExpanded) return;
-    final index = _indexForStripOffset(_filmStripController.offset);
-    final target = _stripOffsetFor(index);
+    // Center the SELECTED photo (the source of truth after any scroll), not
+    // just the nearest slot — so a light swipe that didn't change the
+    // selection always glides the strip back onto the current photo.
+    final target = _stripOffsetFor(_currentIndex)
+        .clamp(0.0, _filmStripController.position.maxScrollExtent);
     if ((target - _filmStripController.offset).abs() < 0.5) return;
     _filmStripController.animateTo(
       target,
-      duration: const Duration(milliseconds: 150),
+      duration: const Duration(milliseconds: 180),
       curve: Curves.easeOut,
     );
   }
@@ -434,6 +517,8 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   void _collapseCurrentVideo() {
     if (!_videoExpanded) return;
     setState(() => _videoExpanded = false);
+    _scrubPreview.value = null;
+    _scrubFraction.value = null;
     _restoreStripPosition();
   }
 
@@ -518,12 +603,11 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       if (_fullSeedCache.containsKey(file.id)) return;
       final bytes = await LocalContentGuard.verifiedRead(file);
       if (bytes == null || !mounted) return;
+      // Seed the BYTES only. A swipe reads them synchronously and decodes
+      // one frame with the placeholder behind — cheap. Decode-precaching a
+      // full 2560px neighbour here spiked the ImageCache and evicted the
+      // CURRENT photo's decode, blacking it for ~2 frames.
       _stashFullSeed(file.id, bytes);
-      unawaited(precacheImage(
-        ResizeImage.resizeIfNeeded(
-            MediaBudget.viewerDecodeWidth, null, MemoryImage(bytes)),
-        context,
-      ));
       return;
     }
 
@@ -552,12 +636,8 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       );
       await atomicWriteBytes(File(fullPath), decryptedBytes);
       if (!mounted) return;
+      // Seed bytes only (see the local branch): no decode-precache spike.
       _stashFullSeed(file.id, decryptedBytes);
-      unawaited(precacheImage(
-        ResizeImage.resizeIfNeeded(
-            MediaBudget.viewerDecodeWidth, null, MemoryImage(decryptedBytes)),
-        context,
-      ));
     } catch (e) {
       // Silent fail
     } finally {
@@ -868,6 +948,11 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         source: source,
         editedBytes: edited,
         replaceOriginal: mode == _SaveMode.replace,
+        // Save-as-copy edits collect in their own vault folder instead of
+        // the Folders root (replace keeps the original's placement).
+        folderId: mode == _SaveMode.replace
+            ? null
+            : await _ensureNamedFolder('Edited'),
       );
       if (!mounted) return;
       Navigator.of(context).pop(); // dismiss progress
@@ -1218,38 +1303,30 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     });
   }
 
-  void _showDetailsSheet() {
-    final file = _currentFiles[_currentIndex];
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      // Samsung's info sheet sits on the base background, not the raised
-      // sheet surface; the corner shape still comes from bottomSheetTheme.
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      builder: (ctx) => DraggableScrollableSheet(
-        initialChildSize: 0.55,
-        minChildSize: 0.3,
-        maxChildSize: 0.85,
-        expand: false,
-        builder: (_, controller) => _InfoSheetBody(
-          file: file,
-          scrollController: controller,
-          canEdit: !widget.fromRecycleBin,
-          onEdit: () async {
-            final changed = await _showEditInfo(file);
-            // Sheet's own BuildContext (`ctx`) — safe to pop once we know
-            // the sheet is still mounted. Bouncing it closed forces a
-            // fresh open to re-read the updated filename / capture date.
-            if (!changed) return;
-            if (!ctx.mounted) return;
-            Navigator.of(ctx).pop();
-          },
-        ),
-      ),
-    );
+  /// Samsung split: dock the photo to the top half and slide the details in
+  /// below (in-place, not a drawer). Idempotent.
+  void _openDetails() {
+    if (_detailsOpen) return;
+    setState(() => _detailsOpen = true);
+  }
+
+  void _closeDetails() {
+    if (!_detailsOpen) return;
+    setState(() => _detailsOpen = false);
+    // The filmstrip is unmounted while the split details are open (the controls
+    // block is gated out by `!_detailsOpen`). On remount it would otherwise
+    // reappear scrolled to the first item, which then drives the pager — and so
+    // the info panel — back to photo 0. Restore it onto the current photo, the
+    // same way the chrome-toggle path does.
+    _restoreStripPosition();
   }
 
   Future<bool> _onWillPop() async {
+    // Back closes the split first, then leaves the viewer.
+    if (_detailsOpen) {
+      _closeDetails();
+      return false;
+    }
     Navigator.pop(context, _hasDeleted);
     return false;
   }
@@ -1292,16 +1369,20 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                 ),
                 leading: IconButton(
                   icon: ThemeIcon('arrowLeft'),
-                  onPressed: () => Navigator.pop(context, _hasDeleted),
+                  onPressed: () {
+                    if (_detailsOpen) {
+                      _closeDetails();
+                    } else {
+                      Navigator.pop(context, _hasDeleted);
+                    }
+                  },
                 ),
                 actions: [
                   // Export affordances are wrong for a binned file — bin
                   // mode keeps the bar to Restore / Info / Delete forever.
                   if (!widget.fromRecycleBin) ...[
-                    IconButton(
-                      icon: ThemeIcon('arrowsCounterClockwise'),
-                      onPressed: () {},
-                    ),
+                    // (Rotate lives in the in-app editor; the old top-bar
+                    // rotate button was a no-op and has been removed.)
                     PopupMenuButton<String>(
                       icon:
                           ThemeIcon('dotsThreeVertical', color: overlayColor),
@@ -1363,13 +1444,22 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
             final photoRightPadding = isLandscape && _showControls
                 ? 80.0 + MediaQuery.paddingOf(context).right
                 : 0.0;
+            // Split-details: the photo docks into the top ~48%, details fill
+            // the bottom ~52%. Both animate together so the photo shrinks up
+            // as the panel slides in (Samsung), never a drawer over the photo.
+            final screenH = MediaQuery.sizeOf(context).height;
+            final detailsH = _detailsOpen ? screenH * 0.52 : 0.0;
+            const splitDur = Duration(milliseconds: 300);
+            const splitCurve = Curves.easeOutCubic;
             return Stack(
               children: [
                 // --- MAIN PHOTO AREA ---
-                Positioned(
+                AnimatedPositioned(
+                  duration: splitDur,
+                  curve: splitCurve,
                   left: 0,
                   top: 0,
-                  bottom: 0,
+                  bottom: detailsH,
                   right: photoRightPadding,
                   child: Listener(
                     onPointerDown: (event) {
@@ -1419,15 +1509,24 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                           _dragDy.abs() > _dragDx.abs() * 1.2) {
                         setState(() => _verticalDragLock = true);
                       }
-                      // Deliberate swipe-up: far enough, and clearly more
-                      // vertical than horizontal.
-                      if (_dragDy < -60 && _dragDy.abs() > _dragDx.abs() * 1.5) {
+                      // Deliberate swipe-up: dock into the split details view
+                      // (ignored if already open).
+                      if (!_detailsOpen &&
+                          _dragDy < -60 &&
+                          _dragDy.abs() > _dragDx.abs() * 1.5) {
                         _sheetTriggered = true;
-                        _showDetailsSheet();
+                        _openDetails();
                         return;
                       }
-                      // Deliberate swipe-down: start the drag-follow close.
+                      // Deliberate swipe-down.
                       if (_dragDy > 24 && _dragDy > _dragDx.abs() * 1.5) {
+                        if (_detailsOpen) {
+                          // Close the split back to full-screen photo instead
+                          // of dismissing the viewer.
+                          _sheetTriggered = true;
+                          _closeDetails();
+                          return;
+                        }
                         setState(() {
                           _dismissDragging = true;
                           _dismissDy = _dragDy;
@@ -1571,11 +1670,85 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                   ),
                 ),
 
-                // --- CONTROLS ---
-                if (_showControls)
+                // --- SCRUB PREVIEW ---
+                // The dense preview frame painted over the video while
+                // scrubbing (instant, continuous). Below the controls so the
+                // film strip the finger is dragging stays visible on top.
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: ValueListenableBuilder<Uint8List?>(
+                      valueListenable: _scrubPreview,
+                      builder: (context, bytes, _) {
+                        if (bytes == null) return const SizedBox.shrink();
+                        return ColoredBox(
+                          // Match the viewer background (white in light mode)
+                          // so scrubbing doesn't flash a black letterbox.
+                          color: Theme.of(context).scaffoldBackgroundColor,
+                          child: Image.memory(
+                            bytes,
+                            fit: BoxFit.contain,
+                            gaplessPlayback: true,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+
+                // --- CONTROLS --- (hidden while the split details are open)
+                if (_showControls && !_detailsOpen)
                   isLandscape
                       ? _buildLandscapeControls(theme, overlayColor)
                       : _buildPortraitControls(theme, overlayColor),
+
+                // --- SPLIT DETAILS PANEL ---
+                // Slides up from the bottom into the lower ~52%. Off-screen
+                // (top == screenH) when closed.
+                AnimatedPositioned(
+                  duration: splitDur,
+                  curve: splitCurve,
+                  left: 0,
+                  right: 0,
+                  height: screenH * 0.52,
+                  top: _detailsOpen ? screenH * 0.48 : screenH,
+                  child: Material(
+                    color: theme.scaffoldBackgroundColor,
+                    child: _detailsOpen
+                        ? NotificationListener<ScrollNotification>(
+                            // Pull the list down past its top to dismiss the
+                            // panel — the drawer is swipeable, not just the
+                            // photo above it.
+                            onNotification: (n) {
+                              if (n is ScrollStartNotification) {
+                                _detailsPull = 0;
+                              } else if (n is OverscrollNotification &&
+                                  n.overscroll < 0) {
+                                _detailsPull += -n.overscroll;
+                                if (_detailsPull > 90) {
+                                  _detailsPull = 0;
+                                  _closeDetails();
+                                }
+                              } else if (n is ScrollUpdateNotification &&
+                                  n.metrics.pixels > 0) {
+                                _detailsPull = 0;
+                              }
+                              return false;
+                            },
+                            child: _InfoSheetBody(
+                              key: ValueKey(_currentFiles[_currentIndex].id),
+                              file: _currentFiles[_currentIndex],
+                              scrollController: _detailsScroll,
+                              canEdit: !widget.fromRecycleBin,
+                              onEdit: () async {
+                                final changed = await _showEditInfo(
+                                    _currentFiles[_currentIndex]);
+                                if (changed && mounted) setState(() {});
+                              },
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                ),
               ],
             );
           },
@@ -1780,6 +1953,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       durationHint: _videoDurationHint,
       vertical: vertical,
       onPlayPause: _handlePlayPause,
+      scrubFraction: _scrubFraction,
     );
     // Frame capture mints a NEW LIVE vault file — an edit affordance, so it
     // is hidden in bin mode (playback and mute stay: viewing, not editing).
@@ -1853,6 +2027,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         editedBytes: bytes,
         replaceOriginal: false,
         copyLabel: 'frame',
+        // Tuck captured frames into a dedicated vault folder instead of
+        // littering the Folders root.
+        folderId: await _ensureNamedFolder('Video Screenshots'),
       );
       if (!mounted) return;
       setState(() {
@@ -1870,6 +2047,18 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         Notify.error(err.title);
       }
     }
+  }
+
+  /// Finds (or creates) a root-level vault folder by [name], so editor
+  /// artifacts (captured frames, edited copies) don't scatter across the
+  /// Folders root. Name-matched at the root level; a peer's same-named
+  /// folder is reused once it syncs in.
+  Future<String?> _ensureNamedFolder(String name) async {
+    final roots = await DatabaseService().getFolders();
+    for (final f in roots) {
+      if (f.name.trim().toLowerCase() == name.toLowerCase()) return f.id;
+    }
+    return DatabaseService().createFolder(name);
   }
 
   Future<void> _handlePlayPause() async {
@@ -1961,6 +2150,13 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       duration: duration,
       frameCount: _expandedFrameCount(duration),
     ));
+    // Dense preview set for smooth scrubbing (painted over the video while the
+    // finger moves; the visible film tiles above stay sparse).
+    unawaited(_ExpandedVideoStripState.preloadPreview(
+      fileId: file.id,
+      source: source,
+      duration: duration,
+    ));
   }
 
   Widget _buildFilmstrip({required Axis axis}) {
@@ -2004,6 +2200,18 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         }
         if (viewport > 50) _stripLeadPad = leadPad;
 
+        // First real layout: land centered on the opened photo (jump, no
+        // slide). initState's post-frame can fire before the strip has a
+        // valid viewport; this is the guaranteed placement.
+        if (!_stripLanded && viewport > 50 && _currentFiles.isNotEmpty) {
+          _stripLanded = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _filmStripController.hasClients) {
+              _jumpStripToIndex(_currentIndex);
+            }
+          });
+        }
+
         return NotificationListener<ScrollNotification>(
           onNotification: (notification) {
             if (notification is ScrollStartNotification &&
@@ -2012,17 +2220,31 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
             } else if (notification is ScrollEndNotification) {
               final wasUser = _userScrollingStrip;
               _userScrollingStrip = false;
-              if (wasUser) {
-                if (_videoExpanded) {
-                  _finishScrub();
-                } else {
-                  _snapStripToNearest();
-                }
+              if (_videoExpanded) {
+                if (wasUser) _finishScrub();
+              } else {
+                // Always re-center the settled slot — even a light drag that
+                // didn't change the selection must glide back to center (it's
+                // a no-op when already centered). Not gated on wasUser: a
+                // flick can start a ballistic without a drag-start we saw.
+                _snapStripToNearest();
               }
             }
-            if (notification is ScrollUpdateNotification &&
-                _userScrollingStrip) {
-              _handleStripScrollUpdate();
+            if (notification is ScrollUpdateNotification) {
+              if (_userScrollingStrip) _handleStripScrollUpdate();
+              // Settle-debounce: re-center the selected photo shortly after
+              // scrolling stops, robust to a missing ScrollEnd on a light
+              // flick. Not while a video is expanded (the scrub position IS
+              // the resting position) or on the vertical rail.
+              if (!_videoExpanded && _stripAxis == Axis.horizontal) {
+                _stripSettleTimer?.cancel();
+                _stripSettleTimer =
+                    Timer(const Duration(milliseconds: 140), () {
+                  if (mounted && !_userScrollingStrip && !_videoExpanded) {
+                    _snapStripToNearest();
+                  }
+                });
+              }
             }
             return false;
           },
@@ -2219,7 +2441,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         ),
         IconButton(
           icon: ThemeIcon('info'),
-          onPressed: _showDetailsSheet,
+          onPressed: _openDetails,
           color: overlayColor,
         ),
         IconButton(
@@ -2251,7 +2473,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
         ),
       IconButton(
         icon: ThemeIcon('info'),
-        onPressed: _showDetailsSheet,
+        onPressed: _openDetails,
         color: overlayColor,
       ),
       IconButton(
@@ -2269,7 +2491,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       IconButton(
         icon: ThemeIcon('trash'),
         onPressed: _handleDelete,
-        color: danger,
+        color: overlayColor,
       ),
     ];
     if (vertical) {
@@ -2370,6 +2592,7 @@ class _InfoSheetBody extends StatefulWidget {
   /// False in recycle-bin mode: renaming a binned file is a zombie edit.
   final bool canEdit;
   const _InfoSheetBody({
+    super.key,
     required this.file,
     required this.scrollController,
     required this.onEdit,
@@ -2471,19 +2694,11 @@ class _InfoSheetBodyState extends State<_InfoSheetBody> {
 
     return ListView(
       controller: widget.scrollController,
-      padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+      // Always draggable so a short details list still reports the downward
+      // overscroll the split uses for pull-to-dismiss.
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
       children: [
-        Center(
-          child: Container(
-            width: 40,
-            height: 4,
-            margin: const EdgeInsets.only(bottom: 20),
-            decoration: BoxDecoration(
-              color: cs.onSurface.withAlpha(60),
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-        ),
         // Header row: date · time (bold) + Edit
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -3968,11 +4183,15 @@ class _VideoPill extends StatelessWidget {
   final Duration? durationHint;
   final bool vertical;
   final VoidCallback onPlayPause;
+  // While non-null, the readout shows this scrub position (0..1 of duration)
+  // instead of the live controller position, which doesn't move mid-scrub.
+  final ValueNotifier<double?>? scrubFraction;
   const _VideoPill({
     required this.controller,
     required this.durationHint,
     required this.vertical,
     required this.onPlayPause,
+    this.scrubFraction,
   });
 
   static String _fmt(Duration? d) {
@@ -4022,24 +4241,46 @@ class _VideoPill extends StatelessWidget {
     );
   }
 
+  Widget _live() {
+    final c = controller;
+    if (c == null) {
+      return _content(
+        playing: false,
+        position: Duration.zero,
+        duration: durationHint,
+      );
+    }
+    return ValueListenableBuilder<VideoPlayerValue>(
+      valueListenable: c,
+      builder: (_, value, _) => _content(
+        playing: value.isPlaying,
+        position: value.position,
+        duration:
+            value.duration > Duration.zero ? value.duration : durationHint,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final c = controller;
-    final Widget content = c == null
-        ? _content(
-            playing: false,
-            position: Duration.zero,
-            duration: durationHint,
-          )
-        : ValueListenableBuilder<VideoPlayerValue>(
-            valueListenable: c,
-            builder: (_, value, _) => _content(
-              playing: value.isPlaying,
-              position: value.position,
-              duration: value.duration > Duration.zero
-                  ? value.duration
-                  : durationHint,
-            ),
+    final sf = scrubFraction;
+    final Widget content = sf == null
+        ? _live()
+        : ValueListenableBuilder<double?>(
+            valueListenable: sf,
+            builder: (_, frac, _) {
+              if (frac == null) return _live();
+              final c = controller;
+              final duration =
+                  (c != null && c.value.duration > Duration.zero)
+                      ? c.value.duration
+                      : durationHint;
+              final pos = duration == null
+                  ? Duration.zero
+                  : duration * frac.clamp(0.0, 1.0);
+              // Paused while scrubbing; show the scrub position live.
+              return _content(playing: false, position: pos, duration: duration);
+            },
           );
 
     return GestureDetector(
@@ -4124,8 +4365,89 @@ class _ExpandedVideoStripState extends State<_ExpandedVideoStrip> {
   // one MediaMetadataRetriever pass per frame, so never pay twice.
   static final Map<String, List<Uint8List?>> _frameCache = {};
   static final Set<String> _extracting = {};
+  // Every mounted strip waiting on a key's frames. The extraction pass (which
+  // may have been kicked off by the SCREEN at video-bind, before any strip
+  // existed) notifies ALL of them as each frame lands — so a strip that
+  // expands mid-extraction repaints instead of freezing at its first, mostly
+  // empty, frame set.
+  static final Map<String, Set<void Function()>> _frameListeners = {};
 
   String get _cacheKey => '${widget.file.id}#${widget.frameCount}';
+
+  static void _notifyFrames(String key) {
+    final listeners = _frameListeners[key];
+    if (listeners == null) return;
+    for (final cb in listeners.toList()) {
+      cb();
+    }
+  }
+
+  // ---- Dense scrub-preview frames (separate from the visible film tiles) ----
+  // Seeking the live video while dragging is decoder-latency bound (it "waits
+  // then jumps"). Instead we pre-extract a DENSE set of frames and paint the
+  // nearest one instantly as the finger moves — continuous, zero-latency — and
+  // only seek the real video when the drag ends.
+  static final Map<String, List<Uint8List?>> _previewCache = {};
+  static final Set<String> _previewExtracting = {};
+
+  static int previewCount(Duration d) {
+    // ~6 preview frames per second so short clips feel truly continuous, a
+    // solid floor for sub-second clips, capped so a long clip stays bounded.
+    final secs = d.inMilliseconds / 1000.0;
+    return (secs * 6).round().clamp(8, 40);
+  }
+
+  static String _previewKey(String fileId, Duration d) =>
+      '$fileId#p${previewCount(d)}';
+
+  /// Nearest extracted preview frame for [fraction] (0..1), searching outward
+  /// so a not-yet-filled slot falls back to the closest ready neighbour.
+  static Uint8List? previewFrame(
+      String fileId, Duration duration, double fraction) {
+    final frames = _previewCache[_previewKey(fileId, duration)];
+    if (frames == null || frames.isEmpty) return null;
+    final i = (fraction * (frames.length - 1)).round().clamp(0, frames.length - 1);
+    if (frames[i] != null) return frames[i];
+    for (var d = 1; d < frames.length; d++) {
+      if (i - d >= 0 && frames[i - d] != null) return frames[i - d];
+      if (i + d < frames.length && frames[i + d] != null) return frames[i + d];
+    }
+    return null;
+  }
+
+  static Future<void> preloadPreview({
+    required String fileId,
+    required String? source,
+    required Duration duration,
+  }) async {
+    if (source == null || duration <= Duration.zero) return;
+    final count = previewCount(duration);
+    final key = _previewKey(fileId, duration);
+    _previewCache.putIfAbsent(key, () => List<Uint8List?>.filled(count, null));
+    if (_previewExtracting.contains(key)) return;
+    final frames = _previewCache[key]!;
+    if (!frames.contains(null)) return;
+    _previewExtracting.add(key);
+    try {
+      final totalMs = duration.inMilliseconds;
+      for (var i = 0; i < count; i++) {
+        if (frames[i] != null) continue;
+        try {
+          frames[i] = await VideoThumbnail.thumbnailData(
+            video: source,
+            imageFormat: ImageFormat.JPEG,
+            timeMs: (totalMs * i / (count - 1)).round().clamp(0, totalMs),
+            maxWidth: 360,
+            quality: 60,
+          );
+        } catch (_) {
+          // Leave the slot null; previewFrame falls back to a neighbour.
+        }
+      }
+    } finally {
+      _previewExtracting.remove(key);
+    }
+  }
 
   /// Extracts the film's frames into the shared cache. The screen calls this
   /// the moment a video binds — while the user is still watching the small
@@ -4139,14 +4461,23 @@ class _ExpandedVideoStripState extends State<_ExpandedVideoStrip> {
     void Function()? onFrame,
   }) async {
     final key = '$fileId#$frameCount';
+    if (onFrame != null) {
+      (_frameListeners[key] ??= <void Function()>{}).add(onFrame);
+    }
     _frameCache.putIfAbsent(
       key,
       () => List<Uint8List?>.filled(frameCount, null),
     );
+    final frames = _frameCache[key]!;
+    // Already complete: paint this listener immediately. Already extracting:
+    // the running pass will drive every registered listener (including the one
+    // we just added), so just return.
+    if (!frames.contains(null)) {
+      onFrame?.call();
+      return;
+    }
     if (_extracting.contains(key)) return;
     if (source == null) return;
-    final frames = _frameCache[key]!;
-    if (!frames.contains(null)) return;
     _extracting.add(key);
     try {
       final totalMs = duration.inMilliseconds;
@@ -4164,11 +4495,15 @@ class _ExpandedVideoStripState extends State<_ExpandedVideoStrip> {
         } catch (_) {
           // Tile stays dark; keep extracting the rest.
         }
-        onFrame?.call();
+        _notifyFrames(key); // repaint every waiting strip, not just the caller
       }
     } finally {
       _extracting.remove(key);
     }
+  }
+
+  void _onFramesUpdated() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -4179,15 +4514,20 @@ class _ExpandedVideoStripState extends State<_ExpandedVideoStrip> {
       source: widget.source,
       duration: widget.duration,
       frameCount: widget.frameCount,
-      onFrame: () {
-        if (mounted) setState(() {});
-      },
+      onFrame: _onFramesUpdated,
     ));
   }
 
   @override
+  void dispose() {
+    _frameListeners[_cacheKey]?.remove(_onFramesUpdated);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final frames = _frameCache[_cacheKey]!;
+    final frames = _frameCache[_cacheKey] ??
+        List<Uint8List?>.filled(widget.frameCount, null);
     final placeholder = Theme.of(context).colorScheme.surfaceContainerHighest;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
