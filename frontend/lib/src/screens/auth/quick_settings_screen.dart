@@ -176,9 +176,9 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
               const SizedBox(height: 24),
               _SettingRow(
                 icon: 'arrowsClockwise',
-                title: 'Auto-sync new photos in the background',
+                title: 'Back up new photos automatically',
                 subtitle:
-                    "We'll only sync photos taken after today. To pull in old photos, use Migration in Settings later.",
+                    "We'll back up photos taken from now on. To also bring in older photos, open \"Add to CipherNest\" after setup.",
                 value: _autoSyncOn,
                 onChanged: _toggleAutoSync,
               ),

@@ -246,11 +246,10 @@ Future<bool> showBackupAlbumChoiceSheet(
             ),
           ),
           ListTile(
-            leading: const ThemeIcon('images'),
+            leading: const ThemeIcon('infinity'),
             title: const Text('All albums'),
             subtitle: Text(
-              'Camera, screenshots, WhatsApp: everything, including new '
-              'albums later',
+              'Includes new albums later',
               style:
                   TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 12),
             ),

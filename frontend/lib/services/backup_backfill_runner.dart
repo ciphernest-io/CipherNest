@@ -148,8 +148,10 @@ class BackupBackfillRunner {
               await BackupSelectionService().clearBackfill(album.name);
               task.complete('${album.name} backed up · ${result.synced}');
             } else if (result.cancelled) {
-              // Keep the flag: the next sync cycle picks up what's left.
-              task.complete('${album.name} paused — resumes next sync');
+              // User cancelled: stop importing existing photos for good.
+              // The pending flags are cleared below so it never resumes;
+              // enrollment stays, so NEW photos still back up.
+              task.complete('${album.name} backup stopped');
             } else {
               task.fail(
                   '${album.name}: ${result.failed} failed — will retry');
@@ -158,6 +160,15 @@ class BackupBackfillRunner {
             debugPrint('Backfill failed for ${album.name}: $e');
             task.fail('Could not back up ${album.name}');
           }
+        }
+      }
+      // A user cancel stops the import of existing photos permanently:
+      // drop every remaining pending flag so the next sync cycle does NOT
+      // resurrect the backfill. Enrollment is untouched, so newly added
+      // photos continue to back up.
+      if (_cancelAll) {
+        for (final name in await BackupSelectionService().pendingBackfills()) {
+          await BackupSelectionService().clearBackfill(name);
         }
       }
     } finally {
