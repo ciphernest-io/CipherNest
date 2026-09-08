@@ -9,7 +9,11 @@ import '../../widgets/theme_icon.dart';
 import '../gallery/image_viewer_screen.dart';
 import '../gallery/pictures_tab.dart' show GalleryGridItem;
 import 'recycle_bin_screen.dart'
-    show FolderPathText, confirmRestoreFolder, confirmPurgeFolder;
+    show
+        FolderPathText,
+        confirmRestoreFolder,
+        confirmPurgeFolder,
+        restoreFileToSafePlace;
 
 /// Read-only look inside a deleted folder before deciding its fate:
 /// cascade-binned subfolders as rows, cascade-binned files as a grid.
@@ -82,10 +86,10 @@ class _FolderBinDetailScreenState extends State<FolderBinDetailScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Restore "${file.filename}"?'),
-        content: Text(
-            'The file returns to your vault. It shows at the top level '
-            'until "${widget.folder.name}" is restored — then it rejoins '
-            'the folder.'),
+        content: const Text(
+            'The file returns to your vault in a "Restored" folder (its '
+            'original folder is in the Recycle Bin). Move it anywhere you '
+            'like from there.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -97,8 +101,8 @@ class _FolderBinDetailScreenState extends State<FolderBinDetailScreen> {
       ),
     );
     if (ok != true) return;
-    await DatabaseService().restoreFile(file.id);
-    Notify.info('"${file.filename}" restored');
+    await restoreFileToSafePlace(file);
+    Notify.info('"${file.filename}" restored to "Restored"');
   }
 
   @override

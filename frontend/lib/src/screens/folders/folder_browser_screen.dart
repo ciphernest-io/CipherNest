@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../services/activity_center.dart';
 import '../../../services/audio_player_service.dart';
@@ -27,6 +28,7 @@ import '../../utils/file_visuals.dart';
 import '../../widgets/activity_pill.dart';
 import '../../widgets/doc_thumbnail.dart';
 import '../capture/capture_screen.dart';
+import '../documents/document_viewer_screen.dart';
 import 'upload_picker_session.dart';
 import '../../widgets/file_actions.dart';
 import '../../widgets/folder_picker_sheet.dart';
@@ -34,6 +36,12 @@ import '../../widgets/friendly_error_sheet.dart';
 import '../../widgets/theme_icon.dart';
 import '../gallery/image_viewer_screen.dart';
 import '../gallery/pictures_tab.dart' show GalleryGridItem;
+
+/// How folder contents are ordered. Persisted device-wide (one preference
+/// across every folder) under [_kSortPrefKey].
+enum _FolderSort { nameAsc, nameDesc, dateNewest, dateOldest }
+
+const String _kSortPrefKey = 'folder_sort_mode';
 
 /// The virtual folder tree, browsed one level at a time: subfolder rows on
 /// top, files as Drive-style rows below (thumbnail left, name/size/date
@@ -73,6 +81,13 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   bool _isUploading = false;
   String? _openingFileId;
 
+  // Sort + search over the current level's contents (both suppressed in
+  // picker mode, where the browser is a destination chooser).
+  _FolderSort _sort = _FolderSort.dateNewest;
+  bool _searching = false;
+  String _query = '';
+  final TextEditingController _searchCtrl = TextEditingController();
+
   /// Fresh row for the folder being viewed (widget.folder goes stale the
   /// moment a rename/hide lands elsewhere). Null at root.
   CnestFolder? _self;
@@ -84,6 +99,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   void initState() {
     super.initState();
     DatabaseService().addListener(_reload);
+    _loadSort();
     _reload();
   }
 
@@ -91,7 +107,54 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   void dispose() {
     DatabaseService().removeListener(_reload);
     _selectionClaim?.release();
+    _searchCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadSort() async {
+    final prefs = await SharedPreferences.getInstance();
+    final idx = prefs.getInt(_kSortPrefKey);
+    if (idx == null || idx < 0 || idx >= _FolderSort.values.length) return;
+    if (!mounted) return;
+    setState(() => _sort = _FolderSort.values[idx]);
+  }
+
+  Future<void> _setSort(_FolderSort mode) async {
+    setState(() => _sort = mode);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_kSortPrefKey, mode.index);
+  }
+
+  /// Case-insensitive substring match on name; empty query matches all.
+  bool _matchesQuery(String name) =>
+      _query.isEmpty || name.toLowerCase().contains(_query.toLowerCase());
+
+  /// Applies the active sort to a copy of [items]. Folders and files share
+  /// the comparators — [nameOf]/[dateOf] adapt each type.
+  List<T> _sorted<T>(
+      List<T> items, String Function(T) nameOf, DateTime? Function(T) dateOf) {
+    final out = List<T>.from(items);
+    int byName(T a, T b) =>
+        nameOf(a).toLowerCase().compareTo(nameOf(b).toLowerCase());
+    int byDate(T a, T b) {
+      final da = dateOf(a), db = dateOf(b);
+      if (da == null && db == null) return byName(a, b);
+      if (da == null) return 1; // undated sinks to the bottom
+      if (db == null) return -1;
+      return da.compareTo(db);
+    }
+
+    switch (_sort) {
+      case _FolderSort.nameAsc:
+        out.sort(byName);
+      case _FolderSort.nameDesc:
+        out.sort((a, b) => byName(b, a));
+      case _FolderSort.dateNewest:
+        out.sort((a, b) => byDate(b, a));
+      case _FolderSort.dateOldest:
+        out.sort(byDate);
+    }
+    return out;
   }
 
   Future<void> _reload() async {
@@ -169,16 +232,15 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     );
   }
 
-  Future<void> _renameCurrent() async {
-    final folder = widget.folder!;
+  Future<void> _renameFolder(CnestFolder folder) async {
     final name =
         await _promptForName(title: 'Rename folder', initial: folder.name);
     if (name == null || name.isEmpty || name == folder.name) return;
+    if (await _siblingNameTaken(name)) return;
     await DatabaseService().renameFolder(folder.id, name);
   }
 
-  Future<void> _moveCurrent() async {
-    final folder = widget.folder!;
+  Future<void> _moveFolder(CnestFolder folder) async {
     final pick = await showFolderPicker(context,
         title: 'Move "${folder.name}" to', excludeSubtreeOf: folder.id);
     if (pick == null) return;
@@ -188,8 +250,10 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     }
   }
 
-  Future<void> _deleteCurrent() async {
-    final folder = widget.folder!;
+  /// [popAfter] pops this screen once the delete lands — true when the folder
+  /// being deleted is the one currently open (the app-bar menu), false when
+  /// it is a row in the list (the parent stays put).
+  Future<void> _deleteFolder(CnestFolder folder, {bool popAfter = false}) async {
     // Subtree totals, not the direct-children chip — the dialog must state
     // what the cascade will ACTUALLY bin.
     final sub = await DatabaseService().getFolderSubtreeCounts(folder.id);
@@ -227,7 +291,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     );
     if (confirmed != true) return;
     await DatabaseService().deleteFolder(folder.id);
-    if (mounted) Navigator.of(context).pop();
+    if (popAfter && mounted) Navigator.of(context).pop();
   }
 
   // ---- File selection ---------------------------------------------------
@@ -270,6 +334,69 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       _selectedIds.clear();
     });
     _updateSelectionClaim();
+  }
+
+  /// Confirms, then soft-deletes ONE file to the Recycle Bin (30-day
+  /// restore, same as folder delete).
+  Future<void> _deleteOneFile(CnestFile file) async {
+    final ok = await _confirmDeleteFiles(1);
+    if (ok != true) return;
+    await DatabaseService().deleteFile(file.id);
+    if (mounted) Notify.info('Moved to Recycle Bin');
+  }
+
+  Future<void> _deleteSelectedFiles() async {
+    final ids = List<String>.from(_selectedIds);
+    if (ids.isEmpty) return;
+    final ok = await _confirmDeleteFiles(ids.length);
+    if (ok != true) return;
+    final task = ids.length >= 5
+        ? ActivityCenter().start(
+            kind: ActivityKind.binOp,
+            label: 'Deleting 0/${ids.length}…',
+            total: ids.length)
+        : null;
+    final done = await honestCount<String>(
+      ids,
+      (id) => DatabaseService().deleteFile(id),
+      onEach: (d) => task?.update(d, label: 'Deleting $d/${ids.length}…'),
+    );
+    final failed = ids.length - done;
+    final msg = 'Moved $done to Recycle Bin'
+        '${failed > 0 ? ' · $failed failed' : ''}';
+    if (task != null) {
+      failed > 0 ? task.fail(msg) : task.complete(msg);
+    } else {
+      failed > 0 ? Notify.error(msg) : Notify.info(msg);
+    }
+    if (!mounted) return;
+    setState(() {
+      _selectionMode = false;
+      _selectedIds.clear();
+    });
+    _updateSelectionClaim();
+  }
+
+  Future<bool?> _confirmDeleteFiles(int n) {
+    final noun = n == 1 ? 'this file' : 'these $n files';
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(n == 1 ? 'Delete file?' : 'Delete $n files?'),
+        content: Text(
+            'Move $noun to the Recycle Bin? You can restore for 30 days.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Delete',
+                style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
+          ),
+        ],
+      ),
+    );
   }
 
   // The in-body selection bar sits right under the AppBar — exactly where
@@ -337,67 +464,166 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+
+    return PopScope(
+      // Back button DESELECTS / closes search before it pops the page.
+      canPop: !_selectionMode && !_searching,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_selectionMode) {
+          setState(() {
+            _selectionMode = false;
+            _selectedIds.clear();
+          });
+          _updateSelectionClaim();
+        } else if (_searching) {
+          _closeSearch();
+        }
+      },
+      child: Scaffold(
+        appBar: _buildAppBar(cs),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : Column(
+                children: [
+                  if (_selectionMode && !_isPicker) _buildSelectionBar(),
+                  Expanded(child: _buildBody(cs)),
+                ],
+              ),
+        bottomNavigationBar: _isPicker ? _buildPickerFooter(cs) : null,
+        floatingActionButton: _selectionMode || _isPicker
+            ? null
+            : FloatingActionButton.extended(
+                onPressed: _isUploading ? null : _showBrowserUploadSheet,
+                backgroundColor: cs.primary,
+                icon: _isUploading
+                    ? SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                            color: cs.onPrimary, strokeWidth: 2))
+                    : ThemeIcon('uploadSimple', color: cs.onPrimary),
+                // Counted progress lives in the activity pill; the FAB just
+                // shows busy + disabled.
+                label: Text(_isUploading ? 'Encrypting...' : 'Upload'),
+              ),
+      ),
+    );
+  }
+
+  void _closeSearch() {
+    _searchCtrl.clear();
+    setState(() {
+      _searching = false;
+      _query = '';
+    });
+  }
+
+  PreferredSizeWidget _buildAppBar(ColorScheme cs) {
     final title =
         _isPicker ? 'Choose a folder' : (widget.folder?.name ?? 'Folders');
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+    if (_searching) {
+      return AppBar(
+        leading: IconButton(
+            icon: const ThemeIcon('arrowLeft'), onPressed: _closeSearch),
+        titleSpacing: 0,
+        title: TextField(
+          controller: _searchCtrl,
+          autofocus: true,
+          decoration: InputDecoration(
+            hintText: 'Search this folder',
+            border: InputBorder.none,
+            hintStyle: TextStyle(color: cs.onSurface.withAlpha(120)),
+          ),
+          onChanged: (v) => setState(() => _query = v.trim()),
+        ),
         actions: [
           IconButton(
-            tooltip: 'New folder',
-            icon: const ThemeIcon('plus'),
-            onPressed: _createFolder,
+            tooltip: _query.isEmpty ? 'Close search' : 'Clear',
+            icon: const ThemeIcon('x'),
+            onPressed: () {
+              // Clear the text; if it was already empty, close the search bar.
+              if (_query.isEmpty) {
+                _closeSearch();
+              } else {
+                _searchCtrl.clear();
+                setState(() => _query = '');
+              }
+            },
           ),
-          if (widget.folder != null && !_isPicker)
-            PopupMenuButton<String>(
-              icon: const ThemeIcon('dotsThreeVertical'),
-              onSelected: (v) => switch (v) {
-                'rename' => _renameCurrent(),
-                'move' => _moveCurrent(),
-                'hide' => DatabaseService().setFolderHidden(
-                    _folderId!, !((_self ?? widget.folder!).isHidden)),
-                'delete' => _deleteCurrent(),
-                _ => null,
-              },
-              itemBuilder: (_) => [
-                const PopupMenuItem(value: 'rename', child: Text('Rename')),
-                const PopupMenuItem(value: 'move', child: Text('Move')),
-                PopupMenuItem(
-                    value: 'hide',
-                    child: Text((_self ?? widget.folder!).isHidden
-                        ? 'Unhide'
-                        : 'Hide from Photos & other views')),
-                const PopupMenuItem(value: 'delete', child: Text('Delete')),
-              ],
-            ),
         ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
+      );
+    }
+
+    return AppBar(
+      title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      actions: [
+        IconButton(
+          tooltip: 'New folder',
+          icon: const ThemeIcon('plus'),
+          onPressed: _createFolder,
+        ),
+        if (widget.folder != null && !_isPicker)
+          PopupMenuButton<String>(
+            icon: const ThemeIcon('dotsThreeVertical'),
+            onSelected: (v) => switch (v) {
+              'rename' => _renameFolder(widget.folder!),
+              'move' => _moveFolder(widget.folder!),
+              'hide' => DatabaseService().setFolderHidden(
+                  _folderId!, !((_self ?? widget.folder!).isHidden)),
+              'delete' => _deleteFolder(widget.folder!, popAfter: true),
+              _ => null,
+            },
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'rename', child: Text('Rename')),
+              const PopupMenuItem(value: 'move', child: Text('Move')),
+              PopupMenuItem(
+                  value: 'hide',
+                  child: Text((_self ?? widget.folder!).isHidden
+                      ? 'Unhide'
+                      : 'Hide from Photos & other views')),
+              const PopupMenuItem(value: 'delete', child: Text('Delete')),
+            ],
+          ),
+        if (!_isPicker) _buildSortButton(),
+        if (!_isPicker)
+          IconButton(
+            tooltip: 'Search',
+            icon: const ThemeIcon('magnifyingGlass'),
+            onPressed: () => setState(() => _searching = true),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildSortButton() {
+    String labelFor(_FolderSort m) => switch (m) {
+          _FolderSort.nameAsc => 'Name (A–Z)',
+          _FolderSort.nameDesc => 'Name (Z–A)',
+          _FolderSort.dateNewest => 'Date (newest)',
+          _FolderSort.dateOldest => 'Date (oldest)',
+        };
+    return PopupMenuButton<_FolderSort>(
+      tooltip: 'Sort',
+      icon: const ThemeIcon('sortAscending'),
+      initialValue: _sort,
+      onSelected: _setSort,
+      itemBuilder: (_) => [
+        for (final m in _FolderSort.values)
+          PopupMenuItem(
+            value: m,
+            child: Row(
               children: [
-                if (_selectionMode && !_isPicker) _buildSelectionBar(),
-                Expanded(child: _buildBody(cs)),
+                Opacity(
+                    opacity: m == _sort ? 1 : 0,
+                    child: const ThemeIcon('check', size: 16)),
+                const SizedBox(width: 8),
+                Text(labelFor(m)),
               ],
             ),
-      bottomNavigationBar: _isPicker ? _buildPickerFooter(cs) : null,
-      floatingActionButton: _selectionMode || _isPicker
-          ? null
-          : FloatingActionButton.extended(
-              onPressed: _isUploading ? null : _showBrowserUploadSheet,
-              backgroundColor: cs.primary,
-              icon: _isUploading
-                  ? SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                          color: cs.onPrimary, strokeWidth: 2))
-                  : ThemeIcon('uploadSimple', color: cs.onPrimary),
-              // Counted progress lives in the activity pill; the FAB just
-              // shows busy + disabled.
-              label: Text(_isUploading ? 'Encrypting...' : 'Upload'),
-            ),
+          ),
+      ],
     );
   }
 
@@ -750,6 +976,11 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
               icon: const ThemeIcon('visibility_off'),
               onPressed: _selectedIds.isEmpty ? null : _hideSelectedFiles,
             ),
+            IconButton(
+              tooltip: 'Delete',
+              icon: ThemeIcon('trash', color: cs.error),
+              onPressed: _selectedIds.isEmpty ? null : _deleteSelectedFiles,
+            ),
           ],
         ),
       ),
@@ -779,11 +1010,34 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       );
     }
 
+    // Filter by the live search query, then order by the active sort.
     // System folders ("Phone Backup" tree) sit BELOW user folders as one
     // unobtrusive row each — the auto-sync machinery must not clutter the
     // root's user-created organization.
-    final userFolders = _folders.where((f) => !f.isSystem).toList();
-    final systemFolders = _folders.where((f) => f.isSystem).toList();
+    final folders =
+        _folders.where((f) => _matchesQuery(f.name)).toList();
+    final files = _sorted(
+      _files.where((f) => _matchesQuery(f.filename)).toList(),
+      (f) => f.filename,
+      (f) => f.createdAt,
+    );
+    final userFolders = _sorted(
+      folders.where((f) => !f.isSystem).toList(),
+      (f) => f.name,
+      (f) => f.createdAt,
+    );
+    final systemFolders = _sorted(
+      folders.where((f) => f.isSystem).toList(),
+      (f) => f.name,
+      (f) => f.createdAt,
+    );
+
+    if (_query.isNotEmpty && folders.isEmpty && files.isEmpty) {
+      return Center(
+        child: Text('No matches for "$_query"',
+            style: TextStyle(color: cs.onSurface.withAlpha(140))),
+      );
+    }
 
     return CustomScrollView(
       slivers: [
@@ -797,12 +1051,12 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
             itemCount: systemFolders.length,
             itemBuilder: (context, i) => _folderRow(cs, systemFolders[i]),
           ),
-        if (_folders.isNotEmpty && _files.isNotEmpty)
+        if (folders.isNotEmpty && files.isNotEmpty)
           const SliverToBoxAdapter(child: Divider(height: 1)),
-        if (_files.isNotEmpty)
+        if (files.isNotEmpty)
           SliverList.builder(
-            itemCount: _files.length,
-            itemBuilder: (context, i) => _fileRow(cs, _files[i]),
+            itemCount: files.length,
+            itemBuilder: (context, i) => _fileRow(cs, files[i]),
           ),
         const SliverToBoxAdapter(child: SizedBox(height: 24)),
       ],
@@ -827,16 +1081,28 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
           : PopupMenuButton<String>(
               icon: ThemeIcon('dotsThreeVertical',
                   color: cs.onSurface.withAlpha(120), size: 20),
+              // System ("Phone Backup") folders keep the conservative menu:
+              // renaming/deleting the auto-sync tree has special semantics,
+              // so only Hide is offered there.
               itemBuilder: (_) => [
+                if (!f.isSystem) ...[
+                  const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                  const PopupMenuItem(value: 'move', child: Text('Move')),
+                ],
                 PopupMenuItem(
                     value: 'hide',
                     child: Text(f.isHidden
                         ? 'Unhide'
                         : 'Hide from Photos & other views')),
+                if (!f.isSystem)
+                  const PopupMenuItem(value: 'delete', child: Text('Delete')),
               ],
               onSelected: (v) => switch (v) {
+                'rename' => _renameFolder(f),
+                'move' => _moveFolder(f),
                 'hide' =>
                   DatabaseService().setFolderHidden(f.id, !f.isHidden),
+                'delete' => _deleteFolder(f),
                 _ => null,
               },
             ),
@@ -973,6 +1239,10 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
                         child: Text(file.isHidden
                             ? 'Unhide'
                             : 'Hide from views')),
+                    PopupMenuItem(
+                        value: 'delete',
+                        child: Text('Delete',
+                            style: TextStyle(color: cs.error))),
                   ],
                   onSelected: (v) => switch (v) {
                     'send' => sendFilesPlain(context, [file]),
@@ -981,6 +1251,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
                     'move' => _moveOneFile(file),
                     'hide' =>
                       DatabaseService().setFileHidden(file.id, !file.isHidden),
+                    'delete' => _deleteOneFile(file),
                     _ => null,
                   },
                 )),
@@ -1020,9 +1291,14 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       }
       return;
     }
-    // Documents / other: decrypt to the app-private temp dir and hand off
-    // to the system viewer — the same secure-open pattern as the category
-    // tabs (plaintext never touches public storage).
+    // PDFs, text/Markdown, and images render in the in-app read-only viewer
+    // (in-memory, no disk). Everything else decrypts to the app-private temp
+    // dir and hands off to the system viewer.
+    if (canViewInApp(file.filename)) {
+      Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => DocumentViewerScreen(file: file)));
+      return;
+    }
     if (_openingFileId != null) return;
     setState(() => _openingFileId = file.id);
     try {
