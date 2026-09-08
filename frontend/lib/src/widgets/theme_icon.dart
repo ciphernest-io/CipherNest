@@ -62,6 +62,22 @@ IconData themeIconData(String name, {bool selected = false}) {
   return SymbolsGet.get(mat, _cutFor(pack));
 }
 
+/// The current pack's Material Symbol axes (fill / weight / grade) as an
+/// [IconThemeData]. The cut is baked into each IconData (via [themeIconData]);
+/// the fill/weight/grade are variable font axes a raw `Icon` reads from the
+/// ambient IconTheme. Feed this into the `iconTheme` of a ThemeData wrapping a
+/// subtree that renders raw `Icon`s — e.g. the bundled `pro_image_editor` — so
+/// its glyphs get the SAME fill/weight ThemeIcon applies everywhere else,
+/// instead of the flat unfilled default.
+IconThemeData themeIconAxes() {
+  final pack = ThemeController().pack;
+  return IconThemeData(
+    fill: _fillFor(pack),
+    weight: _weightFor(pack, selected: false),
+    grade: _gradeFor(pack),
+  );
+}
+
 // ===========================================================================
 // PHOSPHOR (camelCase) → MATERIAL SYMBOL (snake_case) name resolution
 // ===========================================================================
@@ -86,9 +102,17 @@ const Map<String, String> _phosphorToMaterial = {
   'arrowLeft': 'arrow_back',
   'arrowSquareOut': 'open_in_new',
   'broom': 'cleaning_services',
+  'browseActivity': 'browse_activity',
+  'autoRenew': 'autorenew',
+  'calendarClock': 'calendar_clock',
+  'syncProblem': 'sync_problem',
+  'sync': 'sync',
+  'event': 'event',
+  'checklist': 'checklist',
   'calendar': 'calendar_today',
   'camera': 'photo_camera',
   'caretDown': 'expand_more',
+  'caretUp': 'expand_less',
   'caretRight': 'chevron_right',
   'check': 'check',
   'checkCircle': 'check_circle',
@@ -185,6 +209,7 @@ const Map<String, String> _phosphorToMaterial = {
   'star': 'star',
   'stop': 'stop',
   'sun': 'light_mode',
+  'systemTheme': 'settings_system_daydream',
   'table': 'table_chart',
   'textT': 'text_fields',
   'timer': 'timer',
@@ -199,6 +224,20 @@ const Map<String, String> _phosphorToMaterial = {
   'wifiHigh': 'wifi',
   'x': 'close',
   'xCircle': 'cancel',
+  // Image-editor tool glyphs — mapped so the in-app editor borrows the
+  // current pack's Material Symbol cut instead of shipping classic Material
+  // Icons that clash with the rest of the app.
+  'redo': 'redo',
+  'crop': 'crop',
+  'cropRotate': 'crop_rotate',
+  'tune': 'tune',
+  'photoFilter': 'photo_filter',
+  'brush': 'brush',
+  'eraser': 'ink_eraser',
+  'flip': 'flip',
+  'rotateLeft': 'rotate_90_degrees_ccw',
+  'aspectRatio': 'aspect_ratio',
+  'restore': 'restore',
 };
 
 // ===========================================================================

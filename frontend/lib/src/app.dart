@@ -13,6 +13,7 @@ import '../services/video_streaming_server.dart';
 import 'config/constants.dart';
 import 'config/routes.dart';
 import 'config/theme_controller.dart';
+import 'config/theme_reveal.dart';
 import 'widgets/activity_pill.dart';
 
 class App extends StatefulWidget {
@@ -192,7 +193,11 @@ class _AppState extends State<App> with WidgetsBindingObserver {
           child: Listener(
             behavior: HitTestBehavior.translucent,
             onPointerDown: (_) => AppLockService().recordActivity(),
-            child: content,
+            // Boundary the theme-change circle reveal rasters the screen from.
+            child: RepaintBoundary(
+              key: ThemeReveal.boundaryKey,
+              child: content,
+            ),
           ),
         );
       },
