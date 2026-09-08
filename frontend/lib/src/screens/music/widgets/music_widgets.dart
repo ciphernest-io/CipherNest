@@ -1,7 +1,10 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../../../../services/audio_player_service.dart';
+import '../../../../services/database_service.dart';
 import '../../../config/theme_controller.dart';
 import '../../../models/file_model.dart';
 import '../../../widgets/doc_thumbnail.dart';
@@ -45,6 +48,68 @@ class TrackArt extends StatelessWidget {
       width: size,
       height: size,
       borderRadius: BorderRadius.circular(t.rIc),
+      fallback: placeholder,
+    );
+  }
+}
+
+/// Playlist grid-tile art: renders the playlist's custom cover — a hidden
+/// vault image referenced by [coverFileId] — when one is set, otherwise the
+/// note-on-grey placeholder. Resolves the cover file lazily by id so the
+/// caller only has to pass the album's coverFileId.
+class PlaylistCover extends StatefulWidget {
+  final String? coverFileId;
+  final BorderRadius borderRadius;
+  const PlaylistCover({
+    super.key,
+    this.coverFileId,
+    this.borderRadius = BorderRadius.zero,
+  });
+
+  @override
+  State<PlaylistCover> createState() => _PlaylistCoverState();
+}
+
+class _PlaylistCoverState extends State<PlaylistCover> {
+  CnestFile? _cover;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolve();
+  }
+
+  @override
+  void didUpdateWidget(PlaylistCover old) {
+    super.didUpdateWidget(old);
+    if (old.coverFileId != widget.coverFileId) {
+      _cover = null;
+      _resolve();
+    }
+  }
+
+  Future<void> _resolve() async {
+    final id = widget.coverFileId;
+    if (id == null) return;
+    final f = await DatabaseService().getFileById(id);
+    if (mounted) setState(() => _cover = f);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final placeholder = Center(
+      child: ThemeIcon('album',
+          size: 56, color: cs.onSurface.withAlpha(170)),
+    );
+    final c = _cover;
+    if (widget.coverFileId == null || c == null) return placeholder;
+    return DocThumbnail(
+      key: ValueKey('pl_${c.id}'),
+      file: c,
+      width: double.infinity,
+      height: double.infinity,
+      borderRadius: widget.borderRadius,
       fallback: placeholder,
     );
   }
@@ -144,15 +209,28 @@ class MiniPlayerBar extends StatelessWidget {
         if (current == null) return const SizedBox.shrink();
         return SafeArea(
           top: false,
-          child: Container(
-            margin: const EdgeInsets.fromLTRB(10, 4, 10, 8),
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-            decoration: BoxDecoration(
-              color: cs.surfaceContainerHigh,
+          child: Padding(
+            // Reduced bottom gap so the taller bar extends DOWNWARD toward the
+            // screen edge instead of pushing its top up.
+            padding: const EdgeInsets.fromLTRB(10, 4, 10, 2),
+            child: ClipRRect(
               borderRadius: BorderRadius.circular(t.rPill),
-              border: Border.all(color: cs.outline.withAlpha(90)),
-            ),
-            child: Row(
+              // Frosted glass: blur + translucent fill so the list scrolls
+              // through behind it, instead of an opaque slab on the scaffold.
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                child: Container(
+                  // ~20% taller; symmetric vertical padding keeps the row
+                  // (art, text, controls) centered in the taller bar. The bar
+                  // grows downward via the reduced outer bottom gap above.
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 11),
+                  decoration: BoxDecoration(
+                    color: cs.surfaceContainerHigh.withValues(alpha: 0.68),
+                    borderRadius: BorderRadius.circular(t.rPill),
+                    border:
+                        Border.all(color: cs.outline.withValues(alpha: 0.30)),
+                  ),
+                  child: Row(
               children: [
                 const SizedBox(width: 4),
                 ClipOval(
@@ -252,6 +330,9 @@ class MiniPlayerBar extends StatelessWidget {
                 ),
                 const SizedBox(width: 2),
               ],
+                  ),
+                ),
+              ),
             ),
           ),
         );

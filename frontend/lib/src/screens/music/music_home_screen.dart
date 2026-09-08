@@ -5,11 +5,11 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../../services/audio_player_service.dart';
 import '../../../services/auto_sync_service.dart';
+import '../../../services/cover_art_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/notify.dart';
 import '../../../services/sync_service.dart';
-import '../../config/theme_controller.dart';
 import '../../models/album_model.dart';
 import '../../models/file_model.dart';
 import '../../widgets/activity_pill.dart';
@@ -17,8 +17,10 @@ import '../../widgets/file_actions.dart';
 import '../../widgets/theme_icon.dart';
 import '../share/share_dialog.dart';
 import 'audio_details_screen.dart';
+import 'music_actions.dart';
 import 'playlist_detail_screen.dart';
 import 'playlist_picker_sheet.dart';
+import 'playlists_morph.dart';
 import 'widgets/music_widgets.dart';
 
 /// The music library, Samsung Music-style: Favourites / Playlists / Tracks
@@ -32,10 +34,30 @@ class MusicHomeScreen extends StatefulWidget {
   State<MusicHomeScreen> createState() => _MusicHomeScreenState();
 }
 
-class _MusicHomeScreenState extends State<MusicHomeScreen> {
+class _MusicHomeScreenState extends State<MusicHomeScreen>
+    with SingleTickerProviderStateMixin {
   late Future<List<CnestFile>> _tracksFuture;
   late Future<List<CnestAlbum>> _playlistsFuture;
   final ScrollController _tracksController = ScrollController();
+
+  // Own the controller (not DefaultTabController) so the AppBar can react to
+  // the active tab: the + only belongs on Playlists, and search scopes to the
+  // tab you're on.
+  late final TabController _tabController =
+      TabController(length: 3, vsync: this, initialIndex: 2);
+
+  bool _searching = false;
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _query = '';
+
+  // Bottom room the lists reserve so their last item clears the floating,
+  // translucent mini player (0 when nothing is playing). Recomputed in build.
+  double _barSpace = 0;
+
+  // True while a gesture inside a tab must own the screen — dragging the
+  // alphabet rail, or pinch-zooming the Playlists grid — so tab-swiping is
+  // frozen and the gesture never flips to another tab.
+  bool _freezeTabs = false;
 
   // TrackRow: 48px art + 2×8 vertical padding.
   static const double _rowHeight = 64.0;
@@ -45,6 +67,10 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
     super.initState();
     SyncService().syncNotifier.addListener(_onDataChanged);
     DatabaseService().addListener(_onDataChanged);
+    // Rebuild the AppBar actions (the +) as the tab changes.
+    _tabController.addListener(() {
+      if (mounted) setState(() {});
+    });
     // AppBar carries a TabBar — the top-anchored activity pill drops below.
     _pillInset = ActivityPillInset.claim(kTextTabBarHeight);
     _refresh();
@@ -55,11 +81,27 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
     SyncService().syncNotifier.removeListener(_onDataChanged);
     DatabaseService().removeListener(_onDataChanged);
     _pillInset.release();
+    _tabController.dispose();
+    _searchCtrl.dispose();
     _tracksController.dispose();
     super.dispose();
   }
 
   late final InsetClaim _pillInset;
+
+  bool _matchesQuery(String text) =>
+      _query.isEmpty || text.toLowerCase().contains(_query.toLowerCase());
+
+  void _closeSearch() {
+    setState(() {
+      if (_query.isNotEmpty) {
+        _query = '';
+        _searchCtrl.clear();
+      } else {
+        _searching = false;
+      }
+    });
+  }
 
   void _onDataChanged() {
     if (mounted) _refresh();
@@ -151,6 +193,7 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
     final cs = Theme.of(context).colorScheme;
     return [
       const PopupMenuItem(value: 'playlist', child: Text('Add to playlist')),
+      const PopupMenuItem(value: 'cover', child: Text('Set as cover')),
       const PopupMenuItem(value: 'send', child: Text('Send file')),
       const PopupMenuItem(value: 'share', child: Text('Share secure link')),
       const PopupMenuItem(value: 'save', child: Text('Save to device')),
@@ -167,6 +210,8 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
     switch (action) {
       case 'playlist':
         PlaylistPickerSheet.show(context, file);
+      case 'cover':
+        setTrackCoverFlow(context, file, onUpdated: (_) => _refresh());
       case 'send':
         sendFilesPlain(context, [file]);
       case 'share':
@@ -187,44 +232,78 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 3,
-      initialIndex: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Music'),
-          actions: [
-            IconButton(
-              icon: const ThemeIcon('plus'),
-              onPressed: _createPlaylist,
-            ),
-            IconButton(
-              icon: const ThemeIcon('arrowsClockwise'),
-              onPressed: _handleSync,
-            ),
+    return Scaffold(
+      appBar: AppBar(
+        title: _searching
+            ? TextField(
+                controller: _searchCtrl,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: 'Search music',
+                  border: InputBorder.none,
+                ),
+                onChanged: (v) => setState(() => _query = v),
+              )
+            : const Text('Music'),
+        actions: _searching
+            ? [
+                IconButton(
+                  icon: const ThemeIcon('x'),
+                  onPressed: _closeSearch,
+                ),
+              ]
+            : [
+                // The + adds a playlist, so it only belongs on the Playlists
+                // tab; search stays the rightmost action everywhere.
+                if (_tabController.index == 1)
+                  IconButton(
+                    icon: const ThemeIcon('plus'),
+                    onPressed: _createPlaylist,
+                  ),
+                IconButton(
+                  icon: const ThemeIcon('magnifyingGlass'),
+                  onPressed: () => setState(() => _searching = true),
+                ),
+              ],
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const [
+            Tab(text: 'Favourites'),
+            Tab(text: 'Playlists'),
+            Tab(text: 'Tracks'),
           ],
-          bottom: const TabBar(
-            tabs: [
-              Tab(text: 'Favourites'),
-              Tab(text: 'Playlists'),
-              Tab(text: 'Tracks'),
-            ],
-          ),
         ),
-        body: Column(
-          children: [
-            Expanded(
-              child: TabBarView(
-                children: [
-                  _buildFavourites(),
-                  _buildPlaylists(),
-                  _buildTracks(),
-                ],
+      ),
+      body: AnimatedBuilder(
+        animation: AudioPlayerService(),
+        builder: (context, _) {
+          // The bar floats over the list (frosted glass), so reserve just
+          // enough scroll room to clear it when a track is playing.
+          _barSpace = AudioPlayerService().current != null
+              ? 64.0 + MediaQuery.of(context).padding.bottom
+              : 0.0;
+          return Stack(
+            children: [
+              Positioned.fill(
+                child: TabBarView(
+                  controller: _tabController,
+                  physics: _freezeTabs
+                      ? const NeverScrollableScrollPhysics()
+                      : null,
+                  children: [
+                    _buildFavourites(),
+                    _buildPlaylists(),
+                    _buildTracks(),
+                  ],
+                ),
               ),
-            ),
-            const MiniPlayerBar(),
-          ],
-        ),
+              const Align(
+                alignment: Alignment.bottomCenter,
+                child: MiniPlayerBar(),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -261,7 +340,7 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
       controller: controller,
       physics: const AlwaysScrollableScrollPhysics(),
       itemExtent: _rowHeight,
-      padding: EdgeInsets.zero,
+      padding: EdgeInsets.only(bottom: _barSpace),
       itemCount: files.length,
       itemBuilder: (context, index) => TrackRow(
         file: files[index],
@@ -291,9 +370,15 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
           if (!snap.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
-          final favs = snap.data!.where((f) => f.isFavorite).toList();
+          final favs = snap.data!
+              .where((f) =>
+                  f.isFavorite &&
+                  _matchesQuery(AudioPlayerService.displayTitle(f)))
+              .toList();
           if (favs.isEmpty) {
-            return _buildEmpty('No favourite tracks yet');
+            return _buildEmpty(_query.isEmpty
+                ? 'No favourite tracks yet'
+                : 'No matches in Favourites');
           }
           return _buildTrackList(favs, sourceName: 'Favourites');
         },
@@ -310,26 +395,37 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
           if (!snap.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
-          final files = snap.data!;
+          final files = snap.data!
+              .where((f) => _matchesQuery(AudioPlayerService.displayTitle(f)))
+              .toList();
           if (files.isEmpty) {
-            return _buildEmpty('No audio files yet');
+            return _buildEmpty(
+                _query.isEmpty ? 'No audio files yet' : 'No matching tracks');
           }
+          final list = _buildTrackList(
+            files,
+            sourceName: 'Tracks',
+            controller: _tracksController,
+          );
+          // The alphabet rail maps letters to positions in the FULL list, so
+          // it only makes sense unfiltered — drop it while searching.
+          if (_query.isNotEmpty) return list;
           return Stack(
             children: [
-              Positioned.fill(
-                right: 26,
-                child: _buildTrackList(
-                  files,
-                  sourceName: 'Tracks',
-                  controller: _tracksController,
-                ),
-              ),
+              Positioned.fill(right: 38, child: list),
               Positioned(
-                right: 2,
+                // Held ~14px off the right edge so the finger doesn't land in
+                // the system back-swipe zone while scrubbing the alphabet.
+                right: 14,
                 top: 0,
                 bottom: 0,
                 child: _AlphabetRail(
                   files: files,
+                  onActive: (active) {
+                    if (_freezeTabs != active) {
+                      setState(() => _freezeTabs = active);
+                    }
+                  },
                   onJump: (index) {
                     _tracksController.jumpTo(
                       (index * _rowHeight).clamp(
@@ -348,8 +444,6 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
   }
 
   Widget _buildPlaylists() {
-    final cs = Theme.of(context).colorScheme;
-    final t = ThemeController().tokens;
     return RefreshIndicator(
       onRefresh: _handleSync,
       child: FutureBuilder<List<CnestAlbum>>(
@@ -358,78 +452,49 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
           if (!snap.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
-          final playlists = snap.data!;
-          return GridView.builder(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.all(16),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              mainAxisSpacing: 16,
-              crossAxisSpacing: 16,
-              childAspectRatio: 0.82,
-            ),
-            itemCount: playlists.length,
-            itemBuilder: (context, index) {
-              final playlist = playlists[index];
-              return GestureDetector(
-                onTap: () async {
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          PlaylistDetailScreen(playlist: playlist),
-                    ),
-                  );
-                  _refresh();
-                },
-                onLongPress: playlist.isSmart
-                    ? null
-                    : () => _showPlaylistActions(playlist),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Container(
-                        width: double.infinity,
-                        decoration: BoxDecoration(
-                          color: cs.surfaceContainerHigh,
-                          borderRadius: BorderRadius.circular(t.rCardLg),
-                        ),
-                        child: Center(
-                          child: ThemeIcon(
-                            'musicNote',
-                            size: 56,
-                            color: cs.onSurface.withAlpha(170),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      playlist.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: cs.onSurface,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    Text(
-                      '${playlist.fileCount} tracks',
-                      style: TextStyle(
-                        color: cs.onSurface.withAlpha(120),
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
+          final playlists =
+              snap.data!.where((p) => _matchesQuery(p.name)).toList();
+          if (playlists.isEmpty && _query.isNotEmpty) {
+            return _buildEmpty('No matching playlists');
+          }
+          // Same pinch-to-zoom morph as gallery Albums (list / 3-across /
+          // 2-across), driven live by the fingers and snapped on release.
+          return PlaylistsMorphView(
+            playlists: playlists,
+            bottomPadding: _barSpace,
+            onPinchActive: (active) {
+              if (_freezeTabs != active) {
+                setState(() => _freezeTabs = active);
+              }
+            },
+            onOpen: (playlist) async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => PlaylistDetailScreen(playlist: playlist),
                 ),
               );
+              _refresh();
+            },
+            onLongPress: (playlist) {
+              if (!playlist.isSmart) _showPlaylistActions(playlist);
             },
           );
         },
       ),
     );
+  }
+
+  Future<void> _changePlaylistCover(CnestAlbum playlist) async {
+    final bytes = await CoverArtService.pickImageBytes();
+    if (bytes == null) return;
+    try {
+      await CoverArtService()
+          .setPlaylistCover(playlist: playlist, imageBytes: bytes);
+      _refresh();
+    } catch (e) {
+      Notify.error('Could not set cover: $e');
+    }
   }
 
   void _showPlaylistActions(CnestAlbum playlist) {
@@ -476,6 +541,16 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
               },
             ),
             ListTile(
+              leading: const ThemeIcon('image'),
+              title: Text(playlist.coverFileId == null
+                  ? 'Add cover image'
+                  : 'Change cover image'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _changePlaylistCover(playlist);
+              },
+            ),
+            ListTile(
               leading: ThemeIcon('trash', color: cs.error),
               title: Text('Delete playlist',
                   style: TextStyle(color: cs.error)),
@@ -495,59 +570,149 @@ class _MusicHomeScreenState extends State<MusicHomeScreen> {
 
 /// Samsung's fast-scroll rail: the alphabet down the right edge; tap or drag
 /// to jump the track list to the first title at that letter.
-class _AlphabetRail extends StatelessWidget {
+/// iOS-style fast-scroll index: press the alphabet and a magnified bubble
+/// pops up next to your finger; slide up/down and the bubble follows, the
+/// letter grows/changes, and the track list jumps to that letter live. Lift
+/// off and you stay where you landed.
+class _AlphabetRail extends StatefulWidget {
   final List<CnestFile> files;
   final ValueChanged<int> onJump;
-  const _AlphabetRail({required this.files, required this.onJump});
 
+  /// Fires true while a finger is dragging the rail, false on release — the
+  /// parent freezes tab-swiping so a rail drag never flips to another tab.
+  final ValueChanged<bool>? onActive;
+  const _AlphabetRail({required this.files, required this.onJump, this.onActive});
+
+  @override
+  State<_AlphabetRail> createState() => _AlphabetRailState();
+}
+
+class _AlphabetRailState extends State<_AlphabetRail> {
   static const _letters = [
     'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
     'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '#',
   ];
 
-  void _jumpToLetter(String letter) {
-    // First track whose title starts at/after the letter; '#' = first
-    // non-alphabetic title (they sort before 'A'... digits do — so '#'
-    // jumps to the very top of the non-letter block, i.e. index 0).
-    if (letter == '#') {
-      onJump(0);
-      return;
-    }
-    for (var i = 0; i < files.length; i++) {
-      final first = AudioPlayerService.displayTitle(files[i])
+  int? _activeIndex;
+  Offset _fingerGlobal = Offset.zero;
+  OverlayEntry? _bubble;
+
+  @override
+  void dispose() {
+    _bubble?.remove();
+    _bubble = null;
+    super.dispose();
+  }
+
+  int _firstTrackForLetter(String letter) {
+    // First track whose title starts at/after the letter; '#' = the very top
+    // (non-alphabetic titles sort before 'A').
+    if (letter == '#') return 0;
+    for (var i = 0; i < widget.files.length; i++) {
+      final first = AudioPlayerService.displayTitle(widget.files[i])
           .trimLeft()
           .toUpperCase();
       if (first.isEmpty) continue;
-      if (first.codeUnitAt(0) >= letter.codeUnitAt(0)) {
-        onJump(i);
-        return;
-      }
+      if (first.codeUnitAt(0) >= letter.codeUnitAt(0)) return i;
     }
-    onJump(files.length - 1);
+    return widget.files.length - 1;
   }
 
-  void _handleDrag(BuildContext context, Offset localPosition) {
+  void _update(Offset local, Offset global) {
     final box = context.findRenderObject() as RenderBox?;
     if (box == null) return;
-    final fraction = (localPosition.dy / box.size.height).clamp(0.0, 0.999);
-    _jumpToLetter(_letters[(fraction * _letters.length).floor()]);
+    final frac = (local.dy / box.size.height).clamp(0.0, 0.999);
+    final idx = (frac * _letters.length).floor().clamp(0, _letters.length - 1);
+    _fingerGlobal = global;
+    if (idx != _activeIndex) {
+      setState(() => _activeIndex = idx);
+      widget.onJump(_firstTrackForLetter(_letters[idx]));
+    }
+    // Follow the finger even within one letter's band.
+    if (_bubble == null) {
+      _bubble = OverlayEntry(builder: _buildBubble);
+      Overlay.of(context).insert(_bubble!);
+      widget.onActive?.call(true); // freeze tab-swiping for this drag
+    } else {
+      _bubble!.markNeedsBuild();
+    }
+  }
+
+  void _end() {
+    final wasActive = _bubble != null;
+    _bubble?.remove();
+    _bubble = null;
+    if (wasActive) widget.onActive?.call(false);
+    if (mounted) {
+      setState(() => _activeIndex = null);
+    } else {
+      _activeIndex = null;
+    }
+  }
+
+  Widget _buildBubble(BuildContext ctx) {
+    final idx = _activeIndex;
+    if (idx == null) return const SizedBox.shrink();
+    final cs = Theme.of(context).colorScheme;
+    const size = 60.0;
+    final screen = MediaQuery.of(ctx).size;
+    final top =
+        (_fingerGlobal.dy - size / 2).clamp(8.0, screen.height - size - 8);
+    // Sit to the LEFT of the finger so the rail and the finger don't hide it.
+    final left =
+        (_fingerGlobal.dx - size - 24).clamp(8.0, screen.width - size - 8);
+    return Positioned(
+      left: left,
+      top: top,
+      // Material ancestor: without one, Text painted straight into the
+      // Overlay shows the debug yellow double-underline.
+      child: IgnorePointer(
+        child: Material(
+          type: MaterialType.transparency,
+          child: Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              color: cs.primary,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withAlpha(60),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              _letters[idx],
+              style: TextStyle(
+                color: cs.onPrimary,
+                fontSize: 30,
+                fontWeight: FontWeight.w700,
+                decoration: TextDecoration.none,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return GestureDetector(
+    // Raw Listener so a press-and-hold (no movement needed) shows the bubble
+    // instantly and every subsequent move tracks the finger.
+    return Listener(
       behavior: HitTestBehavior.opaque,
-      onTapDown: (d) => _handleDrag(context, d.localPosition),
-      onVerticalDragUpdate: (d) => _handleDrag(context, d.localPosition),
+      onPointerDown: (e) => _update(e.localPosition, e.position),
+      onPointerMove: (e) => _update(e.localPosition, e.position),
+      onPointerUp: (_) => _end(),
+      onPointerCancel: (_) => _end(),
       child: Container(
         width: 22,
         padding: const EdgeInsets.symmetric(vertical: 8),
-        // minHeight = rail height keeps spaceEvenly spreading the letters
-        // over the whole rail exactly as before; FittedBox only scales down
-        // once the 27 letters are taller than the rail (landscape, or a
-        // small phone with the mini player). Drag mapping is by fraction of
-        // the rail height, so the scaled rail keeps the same letter mapping.
         child: LayoutBuilder(
           builder: (_, c) => FittedBox(
             fit: BoxFit.scaleDown,
@@ -559,13 +724,17 @@ class _AlphabetRail extends StatelessWidget {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
-                  for (final letter in _letters)
+                  for (var i = 0; i < _letters.length; i++)
                     Text(
-                      letter,
+                      _letters[i],
                       style: TextStyle(
-                        color: cs.onSurface.withAlpha(120),
+                        color: _activeIndex == i
+                            ? cs.primary
+                            : cs.onSurface.withAlpha(120),
                         fontSize: 9,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: _activeIndex == i
+                            ? FontWeight.w900
+                            : FontWeight.w600,
                       ),
                     ),
                 ],

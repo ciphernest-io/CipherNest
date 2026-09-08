@@ -148,6 +148,13 @@ class AudioPlayerService extends ChangeNotifier {
       return AudioSource.file(cached.path, tag: tag);
     }
     if (file.cloudId != null) {
+      // Progressive streaming through the loopback proxy: the first byte
+      // arrives in ~a second so playback starts effectively instantly, and
+      // the proxy writes every decrypted chunk it serves to its on-disk
+      // cache (video_<cloudId>.plain) AND prefetches ahead, so by the end of
+      // the track the whole file is cached — a replay or a later tap then
+      // plays entirely from disk with zero network. This is why tapping a
+      // song no longer waits on a full download+decrypt first.
       final url = await VideoStreamingServer().urlFor(file);
       return AudioSource.uri(Uri.parse(url), tag: tag);
     }
@@ -201,15 +208,56 @@ class AudioPlayerService extends ChangeNotifier {
     }
   }
 
-  Future<void> next() => _player.seekToNext();
-  Future<void> previous() async {
-    // Samsung behavior: past the first seconds, "previous" restarts the
-    // track; only near the start does it jump back a track.
-    if (_player.position > const Duration(seconds: 3)) {
-      await _player.seek(Duration.zero);
-    } else {
-      await _player.seekToPrevious();
+  /// The queue's play order: shuffle order while shuffling, natural order
+  /// otherwise. Manual skip steps through THIS so it always moves one track
+  /// and wraps the ends — independent of loop mode. (just_audio's own
+  /// seekToNext/seekToPrevious bake loop mode in: under LoopMode.one they
+  /// replay the same track, and under LoopMode.off they dead-end at the
+  /// queue's edges instead of wrapping — both of which the buttons should
+  /// never do.)
+  List<int> get _playOrder {
+    final n = _queue.length;
+    if (_player.shuffleModeEnabled) {
+      final s = _player.shuffleIndices;
+      if (s != null && s.length == n) return s;
     }
+    return [for (var i = 0; i < n; i++) i];
+  }
+
+  Future<void> _skipTo(int actualIndex) async {
+    // Preserve intent: keep playing if we were, and resume if the queue had
+    // run to completion (LoopMode.off past the last track).
+    final resume =
+        _player.playing || _player.processingState == ProcessingState.completed;
+    await _player.seek(Duration.zero, index: actualIndex);
+    if (resume && !_player.playing) unawaited(_player.play());
+  }
+
+  /// Manual next: always advances one track, wrapping the last back to the
+  /// first, whatever the loop mode.
+  Future<void> next() async {
+    final order = _playOrder;
+    if (order.isEmpty) return;
+    var pos = order.indexOf(_player.currentIndex ?? order.first);
+    if (pos < 0) pos = 0;
+    await _skipTo(order[(pos + 1) % order.length]);
+  }
+
+  /// Manual previous. With [allowRestart] (the transport BUTTON), Samsung
+  /// behavior: past the first few seconds it restarts the current track;
+  /// near the start it steps back a track. SWIPING passes false so it always
+  /// changes track — a swipe should never just rewind the current song.
+  /// Either way it wraps the first back to the last.
+  Future<void> previous({bool allowRestart = true}) async {
+    final order = _playOrder;
+    if (order.isEmpty) return;
+    if (allowRestart && _player.position > const Duration(seconds: 3)) {
+      await _player.seek(Duration.zero);
+      return;
+    }
+    var pos = order.indexOf(_player.currentIndex ?? order.first);
+    if (pos < 0) pos = 0;
+    await _skipTo(order[(pos - 1 + order.length) % order.length]);
   }
 
   Future<void> seek(Duration position) => _player.seek(position);

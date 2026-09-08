@@ -299,10 +299,18 @@ class VideoStreamingServer {
     _sessions[file.id] = session;
 
     // Warm the pipeline — the player's first request is always `bytes=0-`.
-    unawaited(
-      _ensureChunks(session, 0, math.min(_prefetchChunks, totalChunks) - 1)
-          .catchError((e) => debugPrint('VideoStreamingServer warmup: $e')),
-    );
+    // Skip it for AUDIO: that path streams the whole file continuously and
+    // drives its own per-chunk read-ahead, so an 8-chunk warmup here would
+    // only queue AHEAD of the first read and delay the first byte (for a
+    // small song, it would fetch the entire file before playback starts).
+    final isAudio =
+        _contentTypeForFilename(file.filename).startsWith('audio/');
+    if (!isAudio) {
+      unawaited(
+        _ensureChunks(session, 0, math.min(_prefetchChunks, totalChunks) - 1)
+            .catchError((e) => debugPrint('VideoStreamingServer warmup: $e')),
+      );
+    }
 
     return session;
   }
@@ -380,6 +388,31 @@ class VideoStreamingServer {
         416,
         headers: {'Content-Range': 'bytes */$total'},
       );
+    }
+
+    // AUDIO: serve the WHOLE remaining range as one continuous, decrypt-on-
+    // the-fly stream instead of a capped slice. The capped-range path made
+    // ExoPlayer stop a track short and skip to the next song: a header-based
+    // duration estimate (VBR mp3 with no Xing header) plus a response that
+    // ends before the file does reads as end-of-track. A single streamed
+    // response is consumed to the file's TRUE EOF, so the song plays out and
+    // the queue only advances when it actually finishes. Playback still
+    // starts in ~a second (bytes flow as they decrypt) and range-seeks still
+    // work (rangeStart is honored; a seek just opens a fresh stream from X).
+    final contentType = _contentTypeForFilename(session.file.filename);
+    if (contentType.startsWith('audio/')) {
+      rangeEnd = total - 1;
+      final headers = <String, String>{
+        'Content-Type': contentType,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': '${rangeEnd - rangeStart + 1}',
+        if (rangeHeader != null)
+          'Content-Range': 'bytes $rangeStart-$rangeEnd/$total',
+      };
+      final status = rangeHeader != null ? 206 : 200;
+      if (request.method == 'HEAD') return Response(status, headers: headers);
+      return Response(status,
+          body: _audioStream(session, rangeStart, rangeEnd), headers: headers);
     }
 
     // Cap the response size. HTTP allows the server to return less than the
@@ -506,6 +539,44 @@ class VideoStreamingServer {
         );
       }
       return bytes;
+    } finally {
+      await raf.close();
+    }
+  }
+
+  /// Streams plaintext [pStart]..[pEnd] chunk by chunk, ensuring each chunk
+  /// (plus a small read-ahead) is fetched + decrypted + on disk before it is
+  /// read. Yields bytes as they become available so the audio player starts
+  /// almost immediately and reads a single continuous body to EOF.
+  Stream<List<int>> _audioStream(
+    _StreamingSession session,
+    int pStart,
+    int pEnd,
+  ) async* {
+    final chunkSize = EncryptionService.plaintextChunkSize;
+    final raf = await session.cacheFile.open(mode: FileMode.read);
+    try {
+      var pos = pStart;
+      while (pos <= pEnd) {
+        final chunkIdx = pos ~/ chunkSize;
+        // Await ONLY the chunk under the read cursor (fast first byte), and
+        // fire the read-ahead in the background so decryption stays ahead of
+        // playback without blocking the first yield on a big batch.
+        await _ensureChunks(session, chunkIdx, chunkIdx);
+        final ahead =
+            math.min(chunkIdx + _prefetchChunks, session.totalChunks - 1);
+        if (ahead > chunkIdx) {
+          unawaited(_ensureChunks(session, chunkIdx + 1, ahead)
+              .catchError((e) => debugPrint('audio read-ahead: $e')));
+        }
+        final sliceEnd =
+            math.min(chunkIdx * chunkSize + chunkSize - 1, pEnd);
+        await raf.setPosition(pos);
+        final bytes = await raf.read(sliceEnd - pos + 1);
+        if (bytes.isEmpty) break; // defensive: never spin on a short read
+        yield bytes;
+        pos += bytes.length;
+      }
     } finally {
       await raf.close();
     }

@@ -50,7 +50,8 @@ const Set<String> _audioExts = {
   'mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'opus', 'wma'
 };
 const Set<String> _documentExts = {
-  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf', 'odt', 'csv'
+  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf', 'odt',
+  'csv', 'md', 'markdown'
 };
 
 class CnestFile {
@@ -117,6 +118,13 @@ class CnestFile {
   /// Recycle Bin always show hidden files.
   final bool isHidden;
 
+  /// User-edited audio tags (Edit-details form). Device-local overrides; null
+  /// means "use the tag embedded in the file".
+  final String? tagArtist;
+  final String? tagAlbum;
+  final String? tagAlbumArtist;
+  final String? tagGenre;
+
   CnestFile({
     required this.id,
     this.cloudId,
@@ -143,6 +151,10 @@ class CnestFile {
     this.folderId,
     this.deletedByFolderId,
     this.isHidden = false,
+    this.tagArtist,
+    this.tagAlbum,
+    this.tagAlbumArtist,
+    this.tagGenre,
   });
 
   Map<String, dynamic> toMap() {
@@ -172,6 +184,10 @@ class CnestFile {
       'folder_id': folderId,
       'deleted_by_folder_id': deletedByFolderId,
       'is_hidden': isHidden ? 1 : 0,
+      'tag_artist': tagArtist,
+      'tag_album': tagAlbum,
+      'tag_album_artist': tagAlbumArtist,
+      'tag_genre': tagGenre,
     };
   }
 
@@ -217,6 +233,10 @@ class CnestFile {
       folderId: folderId,
       deletedByFolderId: deletedByFolderId,
       isHidden: isHidden ?? this.isHidden,
+      tagArtist: tagArtist,
+      tagAlbum: tagAlbum,
+      tagAlbumArtist: tagAlbumArtist,
+      tagGenre: tagGenre,
     );
   }
 
@@ -247,6 +267,10 @@ class CnestFile {
       folderId: map['folder_id'] as String?,
       deletedByFolderId: map['deleted_by_folder_id'] as String?,
       isHidden: (map['is_hidden'] as int? ?? 0) == 1,
+      tagArtist: map['tag_artist'] as String?,
+      tagAlbum: map['tag_album'] as String?,
+      tagAlbumArtist: map['tag_album_artist'] as String?,
+      tagGenre: map['tag_genre'] as String?,
     );
   }
 }

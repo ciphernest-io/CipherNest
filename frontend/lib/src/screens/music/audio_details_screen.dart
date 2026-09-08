@@ -2,8 +2,13 @@ import 'package:flutter/material.dart';
 import '../../utils/byte_format.dart';
 import 'package:intl/intl.dart';
 
+import '../../../services/audio_art_parser.dart';
 import '../../../services/audio_player_service.dart';
+import '../../../services/cloud/cloud_service.dart';
+import '../../../services/cover_art_service.dart';
 import '../../../services/database_service.dart';
+import '../../../services/encryption_service.dart';
+import '../../../services/notify.dart';
 import '../../config/theme_controller.dart';
 import '../../models/file_model.dart';
 import '../../widgets/theme_icon.dart';
@@ -21,6 +26,31 @@ class AudioDetailsScreen extends StatefulWidget {
 
 class _AudioDetailsScreenState extends State<AudioDetailsScreen> {
   late CnestFile _file = widget.file;
+  AudioTags? _tags;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTags();
+  }
+
+  /// Reads the track's embedded tags (title/artist/album/…) on demand. The
+  /// tags sit at the start of the file, but decryptFile decrypts the whole
+  /// blob, so skip very large files. Best-effort: fields stay 'Unknown' on
+  /// any failure. Plaintext lives only in memory here.
+  Future<void> _loadTags() async {
+    final f = _file;
+    if (f.cloudId == null) return;
+    if (f.sizeBytes > 30 * 1024 * 1024) return;
+    try {
+      final enc = await CloudService().downloadFile(f.cloudId!);
+      final dec = await EncryptionService.decryptFile(enc);
+      final tags = AudioArtParser.tags(dec, f.filename);
+      if (mounted && tags != null) setState(() => _tags = tags);
+    } catch (_) {
+      // Leave the fields as 'Unknown'.
+    }
+  }
 
   String get _format {
     final ext = _file.filename.split('.').last.toLowerCase();
@@ -60,55 +90,150 @@ class _AudioDetailsScreenState extends State<AudioDetailsScreen> {
     return '—';
   }
 
-  Future<void> _rename() async {
-    final controller = TextEditingController(
-      text: AudioPlayerService.displayTitle(_file),
+  Widget _editField(TextEditingController c, String label,
+      {bool autofocus = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: TextField(
+        controller: c,
+        autofocus: autofocus,
+        decoration: InputDecoration(
+          labelText: label,
+          border: const OutlineInputBorder(),
+          isDense: true,
+        ),
+      ),
     );
-    final ext = _file.filename.contains('.')
-        ? '.${_file.filename.split('.').last}'
-        : '';
-    final name = await showDialog<String>(
+  }
+
+  /// Samsung-Music-style "Edit details": name (renames the file), plus the
+  /// audio tags. Prefills from the saved override, else the embedded tag.
+  Future<void> _showEditDetails() async {
+    String seed(String? override, String? parsed) => override ?? parsed ?? '';
+    final nameCtrl = TextEditingController(
+        text: AudioPlayerService.displayTitle(_file));
+    final artistCtrl =
+        TextEditingController(text: seed(_file.tagArtist, _tags?.artist));
+    final albumCtrl =
+        TextEditingController(text: seed(_file.tagAlbum, _tags?.album));
+    final albumArtistCtrl = TextEditingController(
+        text: seed(_file.tagAlbumArtist, _tags?.albumArtist));
+    final genreCtrl =
+        TextEditingController(text: seed(_file.tagGenre, _tags?.genre));
+
+    final saved = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Rename track'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(border: OutlineInputBorder()),
+      builder: (dctx) => AlertDialog(
+        title: const Text('Edit details'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _editField(nameCtrl, 'Name', autofocus: true),
+              _editField(artistCtrl, 'Artist'),
+              _editField(albumCtrl, 'Album'),
+              _editField(albumArtistCtrl, 'Album artist'),
+              _editField(genreCtrl, 'Genre'),
+            ],
+          ),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
+            onPressed: () => Navigator.pop(dctx, false),
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            onPressed: () => Navigator.pop(dctx, true),
             child: const Text('Save'),
           ),
         ],
       ),
     );
-    if (name == null || name.isEmpty) return;
+    if (saved != true) return;
 
-    final filename = '$name$ext';
-    await DatabaseService().renameFile(_file.id, filename);
-    final updated = CnestFile(
-      id: _file.id,
-      cloudId: _file.cloudId,
-      thumbnailCloudId: _file.thumbnailCloudId,
-      provider: _file.provider,
-      accountId: _file.accountId,
-      filename: filename,
-      sizeBytes: _file.sizeBytes,
-      createdAt: _file.createdAt,
-      isUploaded: _file.isUploaded,
-      localPath: _file.localPath,
-      assetId: _file.assetId,
-      isFavorite: _file.isFavorite,
-      type: _file.type,
+    String? nz(String s) => s.trim().isEmpty ? null : s.trim();
+    // Name renames the file (keeps its extension); empty keeps the current.
+    final ext = _file.filename.contains('.')
+        ? '.${_file.filename.split('.').last}'
+        : '';
+    final name = nameCtrl.text.trim();
+    if (name.isNotEmpty && '$name$ext' != _file.filename) {
+      await DatabaseService().renameFile(_file.id, '$name$ext');
+    }
+    await DatabaseService().updateAudioTags(
+      _file.id,
+      artist: nz(artistCtrl.text),
+      album: nz(albumCtrl.text),
+      albumArtist: nz(albumArtistCtrl.text),
+      genre: nz(genreCtrl.text),
     );
-    AudioPlayerService().updateFile(updated);
-    if (mounted) setState(() => _file = updated);
+    final updated = await DatabaseService().getFileById(_file.id);
+    if (updated != null) {
+      AudioPlayerService().updateFile(updated);
+      if (mounted) setState(() => _file = updated);
+    }
+  }
+
+  Future<void> _changeCover() async {
+    final bytes = await CoverArtService.pickImageBytes();
+    if (bytes == null) return;
+    try {
+      final updated = await CoverArtService()
+          .setTrackCover(track: _file, imageBytes: bytes);
+      if (mounted) setState(() => _file = updated);
+    } catch (e) {
+      Notify.error('Could not set cover: $e');
+    }
+  }
+
+  Future<void> _removeCover() async {
+    try {
+      final updated = await CoverArtService().removeTrackCover(_file);
+      if (mounted) setState(() => _file = updated);
+    } catch (e) {
+      Notify.error('Could not remove cover: $e');
+    }
+  }
+
+  void _showEditSheet() {
+    final cs = Theme.of(context).colorScheme;
+    final hasCover = _file.thumbnailCloudId != null;
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const ThemeIcon('pencilSimple'),
+              title: const Text('Edit details'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _showEditDetails();
+              },
+            ),
+            ListTile(
+              leading: const ThemeIcon('image'),
+              title: Text(hasCover ? 'Change cover photo' : 'Add cover photo'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _changeCover();
+              },
+            ),
+            if (hasCover)
+              ListTile(
+                leading: ThemeIcon('trash', color: cs.error),
+                title: Text('Remove cover photo',
+                    style: TextStyle(color: cs.error)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _removeCover();
+                },
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -116,8 +241,15 @@ class _AudioDetailsScreenState extends State<AudioDetailsScreen> {
     final cs = Theme.of(context).colorScheme;
     final t = ThemeController().tokens;
 
+    final tags = _tags;
+    String show(String? override, String? parsed) =>
+        override ?? parsed ?? 'Unknown';
     final fields = <(String, String)>[
-      ('Artist', 'Unknown'),
+      ('Title', AudioPlayerService.displayTitle(_file)),
+      ('Artist', show(_file.tagArtist, tags?.artist)),
+      ('Album', show(_file.tagAlbum, tags?.album)),
+      ('Album artist', show(_file.tagAlbumArtist, tags?.albumArtist)),
+      ('Genre', show(_file.tagGenre, tags?.genre)),
       ('Track length', _length),
       ('Format', _format),
       ('Size', _size),
@@ -131,14 +263,37 @@ class _AudioDetailsScreenState extends State<AudioDetailsScreen> {
         actions: [
           IconButton(
             icon: const ThemeIcon('pencilSimple'),
-            onPressed: _rename,
+            onPressed: _showEditSheet,
           ),
         ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
-          Center(child: TrackArt(size: 180, iconSize: 72, file: _file)),
+          Center(
+            child: GestureDetector(
+              onTap: _changeCover,
+              child: Stack(
+                children: [
+                  TrackArt(size: 180, iconSize: 72, file: _file),
+                  Positioned(
+                    right: 8,
+                    bottom: 8,
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: cs.surface.withAlpha(230),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: cs.outline.withAlpha(90)),
+                      ),
+                      child: ThemeIcon('camera',
+                          size: 16, color: cs.onSurface),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 20),
           Text(
             AudioPlayerService.displayTitle(_file),
@@ -151,7 +306,7 @@ class _AudioDetailsScreenState extends State<AudioDetailsScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Unknown',
+            _file.tagArtist ?? _tags?.artist ?? 'Unknown',
             textAlign: TextAlign.center,
             style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 13),
           ),

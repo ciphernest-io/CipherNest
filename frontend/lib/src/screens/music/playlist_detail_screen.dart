@@ -8,6 +8,7 @@ import '../../models/file_model.dart';
 import '../../widgets/theme_icon.dart';
 import '../share/share_dialog.dart';
 import 'audio_details_screen.dart';
+import 'music_actions.dart';
 import 'track_picker_screen.dart';
 import 'widgets/music_widgets.dart';
 
@@ -25,6 +26,10 @@ class PlaylistDetailScreen extends StatefulWidget {
 class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   late Future<List<CnestFile>> _filesFuture;
 
+  bool _searching = false;
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _query = '';
+
   @override
   void initState() {
     super.initState();
@@ -35,7 +40,22 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   @override
   void dispose() {
     DatabaseService().removeListener(_onDataChanged);
+    _searchCtrl.dispose();
     super.dispose();
+  }
+
+  bool _matchesQuery(String text) =>
+      _query.isEmpty || text.toLowerCase().contains(_query.toLowerCase());
+
+  void _closeSearch() {
+    setState(() {
+      if (_query.isNotEmpty) {
+        _query = '';
+        _searchCtrl.clear();
+      } else {
+        _searching = false;
+      }
+    });
   }
 
   void _onDataChanged() {
@@ -86,30 +106,51 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(widget.playlist.name,
-                maxLines: 1, overflow: TextOverflow.ellipsis),
-            FutureBuilder<List<CnestFile>>(
-              future: _filesFuture,
-              builder: (context, snap) => Text(
-                '${snap.data?.length ?? widget.playlist.fileCount} tracks',
-                style: TextStyle(
-                  color: cs.onSurface.withAlpha(140),
-                  fontSize: 12,
+        title: _searching
+            ? TextField(
+                controller: _searchCtrl,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: 'Search in playlist',
+                  border: InputBorder.none,
                 ),
+                onChanged: (v) => setState(() => _query = v),
+              )
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(widget.playlist.name,
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  FutureBuilder<List<CnestFile>>(
+                    future: _filesFuture,
+                    builder: (context, snap) => Text(
+                      '${snap.data?.length ?? widget.playlist.fileCount} tracks',
+                      style: TextStyle(
+                        color: cs.onSurface.withAlpha(140),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ),
-          ],
-        ),
-        actions: [
-          if (!widget.playlist.isSmart)
-            IconButton(
-              icon: const ThemeIcon('plus'),
-              onPressed: _addTracks,
-            ),
-        ],
+        actions: _searching
+            ? [
+                IconButton(
+                  icon: const ThemeIcon('x'),
+                  onPressed: _closeSearch,
+                ),
+              ]
+            : [
+                if (!widget.playlist.isSmart)
+                  IconButton(
+                    icon: const ThemeIcon('plus'),
+                    onPressed: _addTracks,
+                  ),
+                IconButton(
+                  icon: const ThemeIcon('magnifyingGlass'),
+                  onPressed: () => setState(() => _searching = true),
+                ),
+              ],
       ),
       body: FutureBuilder<List<CnestFile>>(
         future: _filesFuture,
@@ -118,8 +159,23 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
             return const Center(child: CircularProgressIndicator());
           }
           final files = snap.data!;
-          return Column(
-            children: [
+          final visible = _query.isEmpty
+              ? files
+              : files
+                  .where((f) =>
+                      _matchesQuery(AudioPlayerService.displayTitle(f)))
+                  .toList();
+          return AnimatedBuilder(
+            animation: AudioPlayerService(),
+            builder: (context, _) {
+              // Room for the floating, translucent mini player.
+              final barSpace = AudioPlayerService().current != null
+                  ? 64.0 + MediaQuery.of(context).padding.bottom
+                  : 0.0;
+              return Stack(
+                children: [
+                  Column(
+                    children: [
               // Shuffle + play, right-aligned above the list (Samsung).
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
@@ -144,29 +200,35 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                 ),
               ),
               Expanded(
-                child: files.isEmpty
+                child: visible.isEmpty
                     ? Center(
                         child: Text(
-                          widget.playlist.isSmart
-                              ? 'Nothing here yet'
-                              : 'No tracks yet — tap + to add some',
+                          _query.isNotEmpty
+                              ? 'No matching tracks'
+                              : widget.playlist.isSmart
+                                  ? 'Nothing here yet'
+                                  : 'No tracks yet. Tap + to add some.',
                           style: TextStyle(
                             color: cs.onSurface.withAlpha(120),
                           ),
                         ),
                       )
                     : ListView.builder(
-                        itemCount: files.length,
-                        padding: EdgeInsets.zero,
+                        itemCount: visible.length,
+                        padding: EdgeInsets.only(bottom: barSpace),
                         itemBuilder: (context, index) => TrackRow(
-                          file: files[index],
-                          onTap: () => _play(files, startIndex: index),
+                          file: visible[index],
+                          onTap: () => _play(visible, startIndex: index),
                           menuBuilder: (ctx) => [
                             if (!widget.playlist.isSmart)
                               const PopupMenuItem(
                                 value: 'remove',
                                 child: Text('Remove from playlist'),
                               ),
+                            const PopupMenuItem(
+                              value: 'cover',
+                              child: Text('Set as cover'),
+                            ),
                             const PopupMenuItem(
                               value: 'share',
                               child: Text('Share'),
@@ -175,14 +237,27 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                               value: 'details',
                               child: Text('Details'),
                             ),
+                            const PopupMenuItem(
+                              value: 'delete',
+                              child: Text('Delete'),
+                            ),
                           ],
                           onMenuSelected: (v) async {
-                            final file = files[index];
+                            final file = visible[index];
                             switch (v) {
                               case 'remove':
                                 await DatabaseService().removeFileFromAlbum(
                                     widget.playlist.id, file.id);
                                 _refresh();
+                              case 'cover':
+                                if (context.mounted) {
+                                  await setTrackCoverFlow(context, file);
+                                }
+                              case 'delete':
+                                if (context.mounted) {
+                                  await deleteTrack(context, file,
+                                      onDeleted: _refresh);
+                                }
                               case 'share':
                                 if (context.mounted) {
                                   ShareDialog.show(context, file);
@@ -202,8 +277,15 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                         ),
                       ),
               ),
-              const MiniPlayerBar(),
-            ],
+                    ],
+                  ),
+                  const Align(
+                    alignment: Alignment.bottomCenter,
+                    child: MiniPlayerBar(),
+                  ),
+                ],
+              );
+            },
           );
         },
       ),
