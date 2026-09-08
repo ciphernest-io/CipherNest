@@ -73,6 +73,18 @@ class KeyManagerService {
   static const _kSeedMac = 'seed_blob_mac_v1';
   static const _kSeedSalt = 'seed_blob_salt_v1';
 
+  // --- Password-wrapped mnemonic blob (SharedPreferences). ---
+  // Persistent (unlike the k_local crash-recovery blob below, which is wiped
+  // after signup). Lets Settings › "View recovery phrase" reveal the words
+  // after a password re-prompt. Storing the phrase adds no capability a
+  // password holder lacks — the password already unwraps the seed, which IS
+  // full vault access. Only present on vaults created/restored after this
+  // shipped.
+  static const _kMnemonicPwBlob = 'mnemonic_pw_blob_v1';
+  static const _kMnemonicPwNonce = 'mnemonic_pw_nonce_v1';
+  static const _kMnemonicPwMac = 'mnemonic_pw_mac_v1';
+  static const _kMnemonicPwSalt = 'mnemonic_pw_salt_v1';
+
   // --- Crash-recovery: mnemonic encrypted under k_local. ---
   static const _kSignupInProgress = 'signup_in_progress_v1';
   static const _kRecoveryShown = 'recovery_shown_v1';
@@ -138,6 +150,7 @@ class KeyManagerService {
     final seed = bip39.mnemonicToSeed(mnemonic); // 64 bytes
     await _installSeed(seed, password);
     await _encryptAndSaveMnemonicBlob(mnemonic);
+    await _encryptAndSaveMnemonicPwBlob(password, mnemonic);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kSignupInProgress, true);
     await prefs.setBool(_kRecoveryShown, false);
@@ -175,6 +188,7 @@ class KeyManagerService {
     }
     final seed = bip39.mnemonicToSeed(mnemonic);
     await _installSeed(seed, newPassword);
+    await _encryptAndSaveMnemonicPwBlob(newPassword, mnemonic);
   }
 
   // ---------------------------------------------------------------------------
@@ -187,6 +201,7 @@ class KeyManagerService {
   /// reinstall (MTR#1 F9).
   Uint8List? _stagedSeed;
   String? _stagedPassword;
+  String? _stagedMnemonic;
 
   /// True while a staged (uncommitted) recovery is loaded.
   bool get hasStagedRecovery => _stagedSeed != null;
@@ -208,6 +223,7 @@ class KeyManagerService {
     _kLocal = keys.kLocal;
     _stagedSeed = seed;
     _stagedPassword = newPassword;
+    _stagedMnemonic = mnemonic;
   }
 
   /// Persists the staged recovery — the phrase proved it owns the vault (or
@@ -224,11 +240,16 @@ class KeyManagerService {
       value: base64Encode(_vaultPublicKey!.bytes),
     );
     await _encryptAndSaveSeedBlob(password, seed);
+    final mnemonic = _stagedMnemonic;
+    if (mnemonic != null) {
+      await _encryptAndSaveMnemonicPwBlob(password, mnemonic);
+    }
     // Same rule as _installSeed: a new seed never inherits a biometric wrap.
     await disableBiometric();
     seed.fillRange(0, seed.length, 0);
     _stagedSeed = null;
     _stagedPassword = null;
+    _stagedMnemonic = null;
     _signupPassword = null;
   }
 
@@ -240,6 +261,7 @@ class KeyManagerService {
     seed.fillRange(0, seed.length, 0);
     _stagedSeed = null;
     _stagedPassword = null;
+    _stagedMnemonic = null;
     _vaultKeyPair = null;
     _vaultPublicKey = null;
     _kLocal = null;
@@ -275,6 +297,10 @@ class KeyManagerService {
       _kEncryptedMnemonic,
       _kEncryptedMnemonicNonce,
       _kEncryptedMnemonicMac,
+      _kMnemonicPwBlob,
+      _kMnemonicPwNonce,
+      _kMnemonicPwMac,
+      _kMnemonicPwSalt,
     ]) {
       await prefs.remove(key);
     }
@@ -319,6 +345,28 @@ class KeyManagerService {
     _vaultPublicKey = keys.publicKey;
     _kLocal = keys.kLocal;
     return true;
+  }
+
+  /// Re-wraps the on-device seed blob under a new password. The seed — and
+  /// therefore the vault keys and the recovery phrase — is UNCHANGED; only
+  /// the password that unlocks the local seed blob changes. Returns false if
+  /// [current] is wrong. The biometric wrap holds the same seed under its own
+  /// Keystore key, so it keeps working untouched.
+  Future<bool> changePassword(String current, String newPassword) async {
+    final seed = await _decryptSeedBlob(current);
+    if (seed == null) return false;
+    try {
+      await _encryptAndSaveSeedBlob(newPassword, seed);
+      // Re-wrap the persistent mnemonic blob (if any) under the new password
+      // so "View recovery phrase" keeps working after a password change.
+      final mnemonic = await revealMnemonic(current);
+      if (mnemonic != null) {
+        await _encryptAndSaveMnemonicPwBlob(newPassword, mnemonic);
+      }
+      return true;
+    } finally {
+      seed.fillRange(0, seed.length, 0);
+    }
   }
 
   /// Loads ONLY the public key from secure storage — the encrypt-only path
@@ -571,6 +619,58 @@ class KeyManagerService {
     await prefs.setString(_kEncryptedMnemonic, base64Encode(box.cipherText));
     await prefs.setString(_kEncryptedMnemonicNonce, base64Encode(nonce));
     await prefs.setString(_kEncryptedMnemonicMac, base64Encode(box.mac.bytes));
+  }
+
+  /// Persists the mnemonic encrypted under a password-derived key (Argon2id),
+  /// so it can be revealed later. Parallel to the seed blob and wrapped under
+  /// the SAME password.
+  Future<void> _encryptAndSaveMnemonicPwBlob(
+      String password, String mnemonic) async {
+    final salt = _randomBytes(16);
+    final kek = await _deriveKeyFromPassword(password, salt);
+    final nonce = _randomBytes(12);
+    final box = await AesGcm.with256bits()
+        .encrypt(utf8.encode(mnemonic), secretKey: kek, nonce: nonce);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kMnemonicPwBlob, base64Encode(box.cipherText));
+    await prefs.setString(_kMnemonicPwNonce, base64Encode(nonce));
+    await prefs.setString(_kMnemonicPwMac, base64Encode(box.mac.bytes));
+    await prefs.setString(_kMnemonicPwSalt, base64Encode(salt));
+  }
+
+  /// True when a persistent, password-wrapped mnemonic blob exists — i.e.
+  /// the vault was created or restored after view-phrase shipped. Older
+  /// vaults return false and cannot reveal their words.
+  Future<bool> canRevealMnemonic() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_kMnemonicPwBlob) != null;
+  }
+
+  /// Decrypts and returns the recovery phrase for a correct [password], or
+  /// null on a wrong password / when no persistent blob exists.
+  Future<String?> revealMnemonic(String password) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final blob = prefs.getString(_kMnemonicPwBlob);
+      final salt = prefs.getString(_kMnemonicPwSalt);
+      final nonce = prefs.getString(_kMnemonicPwNonce);
+      final mac = prefs.getString(_kMnemonicPwMac);
+      if (blob == null || salt == null || nonce == null || mac == null) {
+        return null;
+      }
+      final kek = await _deriveKeyFromPassword(password, base64Decode(salt));
+      final clear = await AesGcm.with256bits().decrypt(
+        SecretBox(
+          base64Decode(blob),
+          nonce: base64Decode(nonce),
+          mac: Mac(base64Decode(mac)),
+        ),
+        secretKey: kek,
+      );
+      return utf8.decode(clear);
+    } catch (_) {
+      return null; // wrong password
+    }
   }
 
   // ---------------------------------------------------------------------------

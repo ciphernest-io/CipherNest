@@ -76,7 +76,17 @@ class _ActiveSharesScreenState extends State<ActiveSharesScreen> {
         actions: [
           IconButton(
             icon: ThemeIcon('arrowsClockwise'),
-            onPressed: _refresh,
+            tooltip: 'Refresh',
+            onPressed: () {
+              _refresh();
+              // The list reload is instant (local DB), so without a nudge the
+              // button looks dead. Confirm it did something.
+              ScaffoldMessenger.of(context)
+                ..hideCurrentSnackBar()
+                ..showSnackBar(const SnackBar(
+                    content: Text('Refreshed'),
+                    duration: Duration(milliseconds: 900)));
+            },
           ),
         ],
       ),

@@ -1,17 +1,26 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 
 import '../../../services/activity_center.dart';
+import '../../../services/audio_player_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/notify.dart';
 import '../../../services/recycle_bin_service.dart';
 import '../../utils/bulk_ops.dart';
+import '../../utils/byte_format.dart';
+import '../../utils/file_visuals.dart';
 import '../../widgets/activity_pill.dart';
+import '../../widgets/doc_thumbnail.dart';
 import '../../models/file_model.dart';
 import '../../models/folder_model.dart';
 import '../gallery/image_viewer_screen.dart';
 import '../gallery/pictures_tab.dart' show GalleryGridItem;
+import '../music/widgets/music_widgets.dart' show TrackArt;
 import 'folder_bin_detail_screen.dart';
 
 const Duration kBinTtl = Duration(days: 30);
@@ -75,6 +84,32 @@ Future<bool> confirmPurgeFolder(
   return ok == true;
 }
 
+/// Root-level "Restored" folder id, created on first use. Files whose
+/// original folder no longer exists land here instead of loose at the root.
+Future<String?> _ensureRestoredFolder() async {
+  const name = 'Restored';
+  final roots = await DatabaseService().getFolders();
+  for (final f in roots) {
+    if (f.name.trim().toLowerCase() == name.toLowerCase()) return f.id;
+  }
+  return DatabaseService().createFolder(name);
+}
+
+/// Restores [file], then — when the folder it lived in is gone (deleted or
+/// purged) — tucks it into the "Restored" folder instead of leaving it loose
+/// at the vault root. A file that lived at the root stays at the root.
+Future<void> restoreFileToSafePlace(CnestFile file) async {
+  await DatabaseService().restoreFile(file.id);
+  final parentId = file.folderId;
+  if (parentId == null) return; // lived at root — belongs at root
+  final parent = await DatabaseService().getFolderById(parentId);
+  if (parent != null && !parent.isDeleted) return; // original folder is live
+  final restoredId = await _ensureRestoredFolder();
+  if (restoredId != null) {
+    await DatabaseService().moveFileToFolder(file.id, restoredId);
+  }
+}
+
 /// Original-location breadcrumb, Windows-style. Segments that are
 /// themselves deleted render greyed (decided: grey, no "(deleted)" suffix —
 /// drill-in disambiguates). Pass the folder id the item LIVED in.
@@ -125,7 +160,11 @@ class FolderPathText extends StatelessWidget {
 /// never flood the type tabs. Type tabs show individually-deleted files
 /// (plus orphans whose cause folder is gone).
 class RecycleBinScreen extends StatefulWidget {
-  const RecycleBinScreen({super.key});
+  const RecycleBinScreen({super.key, this.initialTab = 0});
+
+  /// Which tab to open on. 0 = Folders, 1 = Photos & Videos, 2 = Documents,
+  /// 3 = Music, 4 = Other. The gallery Menu opens straight to Photos & Videos.
+  final int initialTab;
 
   @override
   State<RecycleBinScreen> createState() => _RecycleBinScreenState();
@@ -134,6 +173,12 @@ class RecycleBinScreen extends StatefulWidget {
 class _RecycleBinScreenState extends State<RecycleBinScreen> {
   // AppBar carries a TabBar — the top-anchored activity pill drops below.
   late final InsetClaim _pillInset;
+
+  // Touch born in the system back-gesture zone: freeze the TabBarView so the
+  // edge-swipe-to-go-back isn't swallowed as a tab change (same guard the
+  // image viewer uses for its pager). Zero on button-nav phones, so their
+  // swipes are untouched.
+  bool _edgeBackGuard = false;
 
   @override
   void initState() {
@@ -151,13 +196,15 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
   Widget build(BuildContext context) {
     return DefaultTabController(
       length: 5,
+      initialIndex: widget.initialTab,
       child: Scaffold(
         appBar: AppBar(
+          centerTitle: false,
           title: const Text('Recycle Bin'),
           actions: [
             IconButton(
               tooltip: 'Search the bin',
-              icon: const ThemeIcon('list'),
+              icon: const ThemeIcon('magnifyingGlass'),
               onPressed: () =>
                   showSearch(context: context, delegate: _BinSearchDelegate()),
             ),
@@ -174,14 +221,36 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
             ],
           ),
         ),
-        body: const TabBarView(
-          children: [
-            _FoldersBinTab(),
-            _FilesBinTab(type: CnestFileType.image, noun: 'photo'),
-            _FilesBinTab(type: CnestFileType.document, noun: 'document'),
-            _FilesBinTab(type: CnestFileType.audio, noun: 'track'),
-            _FilesBinTab(type: CnestFileType.other, noun: 'file'),
-          ],
+        body: Listener(
+          onPointerDown: (event) {
+            final gz = MediaQuery.systemGestureInsetsOf(context);
+            if (gz.left <= 0 && gz.right <= 0) return; // button-nav: no-op
+            final x = event.position.dx;
+            final w = MediaQuery.sizeOf(context).width;
+            final atEdge = x <= gz.left || x >= w - gz.right;
+            if (atEdge != _edgeBackGuard) {
+              setState(() => _edgeBackGuard = atEdge);
+            }
+          },
+          onPointerUp: (_) {
+            if (_edgeBackGuard) setState(() => _edgeBackGuard = false);
+          },
+          onPointerCancel: (_) {
+            if (_edgeBackGuard) setState(() => _edgeBackGuard = false);
+          },
+          child: TabBarView(
+            // Frozen for an edge-born touch so the OS back-swipe wins.
+            physics: _edgeBackGuard
+                ? const NeverScrollableScrollPhysics()
+                : null,
+            children: const [
+              _FoldersBinTab(),
+              _FilesBinTab(type: CnestFileType.image, noun: 'photo'),
+              _FilesBinTab(type: CnestFileType.document, noun: 'document'),
+              _FilesBinTab(type: CnestFileType.audio, noun: 'track'),
+              _FilesBinTab(type: CnestFileType.other, noun: 'file'),
+            ],
+          ),
         ),
       ),
     );
@@ -313,6 +382,24 @@ class _FilesBinTabState extends State<_FilesBinTab> {
   bool _selectionMode = false;
   final Set<String> _selectedIds = {};
 
+  /// Photos & Videos get the gallery-style thumbnail grid; music gets the
+  /// Music-view track rows; every other type gets the documents-style row
+  /// list. Nothing opens/plays from the bin.
+  bool get _isImageTab => widget.type == CnestFileType.image;
+  bool get _isMusicTab => widget.type == CnestFileType.audio;
+
+  // Drag-to-select over the photo grid — mirrors the gallery: long-press
+  // anchors a tile, dragging sweeps a range, edges auto-scroll. Tiles tag
+  // themselves with MetaData(index) so a raw hit-test finds them mid-scroll.
+  final GlobalKey _gridKey = GlobalKey();
+  final ScrollController _scrollCtrl = ScrollController();
+  int? _dragAnchorIndex;
+  Set<String>? _dragBaseSelection;
+  bool _dragSelecting = false;
+  Timer? _autoScrollTimer;
+  double _autoScrollVel = 0;
+  Offset? _lastDragGlobal;
+
   @override
   void initState() {
     super.initState();
@@ -323,6 +410,8 @@ class _FilesBinTabState extends State<_FilesBinTab> {
   @override
   void dispose() {
     DatabaseService().removeListener(_reload);
+    _autoScrollTimer?.cancel();
+    _scrollCtrl.dispose();
     super.dispose();
   }
 
@@ -358,9 +447,13 @@ class _FilesBinTabState extends State<_FilesBinTab> {
             label: 'Restoring 0/${ids.length}…',
             total: ids.length)
         : null;
+    final byId = {for (final f in _files) f.id: f};
     final ok = await honestCount<String>(
       ids,
-      (id) => DatabaseService().restoreFile(id),
+      (id) async {
+        final f = byId[id];
+        if (f != null) await restoreFileToSafePlace(f);
+      },
       onEach: (d) => task?.update(d, label: 'Restoring $d/${ids.length}…'),
     );
     final failed = ids.length - ok;
@@ -441,11 +534,23 @@ class _FilesBinTabState extends State<_FilesBinTab> {
     if (_files.isEmpty) {
       return _emptyState(context, 'trash', 'Nothing here');
     }
-    return Column(
-      children: [
-        if (_selectionMode) _buildSelectionBar(),
-        Expanded(child: _buildGrid()),
-      ],
+    return PopScope(
+      // Back button clears the selection first instead of leaving the bin.
+      canPop: !_selectionMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _exitSelection();
+      },
+      child: Column(
+        children: [
+          if (_selectionMode) _buildSelectionBar(),
+          Expanded(
+              child: _isImageTab
+                  ? _buildGrid()
+                  : _isMusicTab
+                      ? _buildTrackList()
+                      : _buildList()),
+        ],
+      ),
     );
   }
 
@@ -493,84 +598,463 @@ class _FilesBinTabState extends State<_FilesBinTab> {
 
   Widget _buildGrid() {
     final t = ThemeController().tokens;
-    return GridView.builder(
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        crossAxisSpacing: 1.5,
-        mainAxisSpacing: 1.5,
+    // Raw Listener drives drag-select; the GridView keeps its own scrolling.
+    return _wrapDragSelect(
+      GridView.builder(
+        key: _gridKey,
+        controller: _scrollCtrl,
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 3,
+          crossAxisSpacing: 1.5,
+          mainAxisSpacing: 1.5,
+        ),
+        itemCount: _files.length,
+        itemBuilder: (context, index) {
+          final file = _files[index];
+          final isSelected = _selectedIds.contains(file.id);
+          final daysLeft = binDaysLeft(_deletedAtById[file.id]);
+          // MetaData tags the tile with its index for the drag hit-test.
+          return MetaData(
+            metaData: index,
+            child: GestureDetector(
+              onTap: () {
+                if (_selectionMode) {
+                  _toggle(file.id);
+                  return;
+                }
+                Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => ImageViewerScreen(
+                        files: _files,
+                        initialIndex: index,
+                        fromRecycleBin: true)));
+              },
+              onLongPress: () => _beginDragSelect(file.id, index),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  GalleryGridItem(key: ValueKey(file.id), file: file),
+                  // TTL sits opposite the tick (top-right); the selection
+                  // tick matches the gallery's top-left corner.
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: t.scrim,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        '${daysLeft}d left',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ),
+                  if (_selectionMode)
+                    Container(
+                      color: isSelected ? t.scrim : Colors.transparent,
+                      child: Align(
+                        alignment: Alignment.topLeft,
+                        child: Padding(
+                          padding: const EdgeInsets.all(4.0),
+                          child: ThemeIcon(
+                            isSelected
+                                ? 'checkCircle'
+                                : 'radio_button_unchecked',
+                            selected: isSelected,
+                            color: Colors.white,
+                            size: 22,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
+    );
+  }
+
+  // ---- Row list (documents / music / other) ----------------------------
+
+  Widget _buildList() {
+    final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
+    return _wrapDragSelect(ListView.separated(
+      key: _gridKey,
+      controller: _scrollCtrl,
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+      itemCount: _files.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        final file = _files[index];
+        final isSelected = _selectedIds.contains(file.id);
+        final daysLeft = binDaysLeft(_deletedAtById[file.id]);
+        final ext = file.filename.contains('.')
+            ? file.filename.split('.').last.toUpperCase()
+            : '';
+        Widget thumb;
+        if (file.thumbnailCloudId != null) {
+          // PDFs and audio with embedded art carry a real encrypted thumb.
+          thumb = DocThumbnail(
+            key: ValueKey(file.id),
+            file: file,
+            borderRadius: BorderRadius.horizontal(left: Radius.circular(t.rInput)),
+            iconSize: 34,
+          );
+        } else {
+          final v = fileVisual(file.filename, t);
+          thumb = Center(
+              child: ThemeIcon(v.icon, color: v.color.withAlpha(204), size: 34));
+        }
+        return MetaData(
+          metaData: index,
+          child: Opacity(
+            opacity: isSelected ? 0.75 : 1,
+            child: Container(
+            height: 84,
+            decoration: BoxDecoration(
+              color: cs.surface,
+              borderRadius: BorderRadius.circular(t.rInput),
+              border: Border.all(
+                  color: isSelected ? cs.primary : cs.outline,
+                  width: isSelected ? 1.5 : 1),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              // No open/playback from the bin — tap only toggles selection.
+              onTap: _selectionMode ? () => _toggle(file.id) : null,
+              onLongPress: () => _beginDragSelect(file.id, index),
+              child: Row(
+                children: [
+                  SizedBox(width: 74, height: double.infinity, child: thumb),
+                  Expanded(
+                    child: Padding(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(file.filename,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  color: cs.onSurface,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 15)),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              if (ext.isNotEmpty) ...[
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: cs.onSurface.withAlpha(25),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(ext,
+                                      style: TextStyle(
+                                          color: cs.onSurface.withAlpha(180),
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold)),
+                                ),
+                                const SizedBox(width: 8),
+                              ],
+                              Text('${formatBytes(file.sizeBytes)} · ${daysLeft}d left',
+                                  style: TextStyle(
+                                      color: cs.onSurface.withAlpha(140),
+                                      fontSize: 12)),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: _selectionMode
+                        ? ThemeIcon(
+                            isSelected
+                                ? 'checkCircle'
+                                : 'radio_button_unchecked',
+                            selected: isSelected,
+                            color: isSelected
+                                ? cs.primary
+                                : cs.onSurface.withAlpha(120),
+                            size: 22)
+                        : PopupMenuButton<String>(
+                            icon: ThemeIcon('dotsThreeVertical',
+                                color: cs.onSurface.withAlpha(120), size: 20),
+                            onSelected: (v) => switch (v) {
+                              'restore' => _restoreOne(file),
+                              'purge' => _purgeOne(file),
+                              _ => null,
+                            },
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(
+                                  value: 'restore', child: Text('Restore')),
+                              PopupMenuItem(
+                                  value: 'purge',
+                                  child: Text('Delete forever')),
+                            ],
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ));
+      },
+    ));
+  }
+
+  // ---- Track list (music) — mirrors the Music view's track rows ---------
+
+  Widget _buildTrackList() {
+    final cs = Theme.of(context).colorScheme;
+    return _wrapDragSelect(ListView.builder(
+      key: _gridKey,
+      controller: _scrollCtrl,
+      padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: _files.length,
       itemBuilder: (context, index) {
         final file = _files[index];
         final isSelected = _selectedIds.contains(file.id);
         final daysLeft = binDaysLeft(_deletedAtById[file.id]);
-        return GestureDetector(
-          onTap: () {
-            if (_selectionMode) {
-              setState(() {
-                if (!_selectedIds.remove(file.id)) {
-                  _selectedIds.add(file.id);
-                }
-                if (_selectedIds.isEmpty) _selectionMode = false;
-              });
-              return;
-            }
-            Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => ImageViewerScreen(
-                    files: _files,
-                    initialIndex: index,
-                    fromRecycleBin: true)));
-          },
-          onLongPress: () => setState(() {
-            _selectionMode = true;
-            _selectedIds.add(file.id);
-          }),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              GalleryGridItem(key: ValueKey(file.id), file: file),
-              Positioned(
-                top: 4,
-                left: 4,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: t.scrim,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    '${daysLeft}d left',
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ),
-              if (_selectionMode)
-                Container(
-                  color: isSelected ? t.scrim : Colors.transparent,
-                  child: Align(
-                    alignment: Alignment.topRight,
-                    child: Padding(
-                      padding: const EdgeInsets.all(4.0),
-                      child: ThemeIcon(
-                        isSelected
-                            ? 'checkCircle'
-                            : 'radio_button_unchecked',
-                        selected: isSelected,
-                        color: Colors.white,
-                        size: 22,
+        return MetaData(
+          metaData: index,
+          child: InkWell(
+            // No playback from the bin — tap only toggles selection.
+            onTap: _selectionMode ? () => _toggle(file.id) : null,
+            onLongPress: () => _beginDragSelect(file.id, index),
+            child: Container(
+            color: isSelected ? cs.primary.withAlpha(30) : null,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                TrackArt(file: file),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        AudioPlayerService.displayTitle(file),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: cs.onSurface,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w500),
                       ),
-                    ),
+                      const SizedBox(height: 2),
+                      Text('${daysLeft}d left',
+                          style: TextStyle(
+                              color: cs.onSurface.withAlpha(120),
+                              fontSize: 12)),
+                    ],
                   ),
                 ),
-            ],
+                _selectionMode
+                    ? Padding(
+                        padding: const EdgeInsets.only(left: 8),
+                        child: ThemeIcon(
+                            isSelected
+                                ? 'checkCircle'
+                                : 'radio_button_unchecked',
+                            selected: isSelected,
+                            color: isSelected
+                                ? cs.primary
+                                : cs.onSurface.withAlpha(120),
+                            size: 22),
+                      )
+                    : PopupMenuButton<String>(
+                        icon: ThemeIcon('dotsThreeVertical',
+                            color: cs.onSurface.withAlpha(120), size: 20),
+                        onSelected: (v) => switch (v) {
+                          'restore' => _restoreOne(file),
+                          'purge' => _purgeOne(file),
+                          _ => null,
+                        },
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(
+                              value: 'restore', child: Text('Restore')),
+                          PopupMenuItem(
+                              value: 'purge', child: Text('Delete forever')),
+                        ],
+                      ),
+              ],
+            ),
           ),
-        );
+        ));
       },
+    ));
+  }
+
+  void _toggle(String id) {
+    setState(() {
+      if (!_selectedIds.remove(id)) _selectedIds.add(id);
+      if (_selectedIds.isEmpty) _selectionMode = false;
+    });
+  }
+
+  Future<void> _restoreOne(CnestFile file) async {
+    await restoreFileToSafePlace(file);
+    if (mounted) Notify.info('Restored');
+  }
+
+  Future<void> _purgeOne(CnestFile file) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete forever?'),
+        content: const Text('This cannot be undone.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Delete forever',
+                style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
+          ),
+        ],
+      ),
     );
+    if (confirm != true) return;
+    await RecycleBinService().purgeFilePermanently(file);
+    if (mounted) Notify.info('Permanently deleted');
+  }
+
+  // ---- drag-to-select (all tabs) ---------------------------------------
+
+  /// Wraps a scrollable (grid or list) so a pointer that started a
+  /// long-press selection sweeps across rows/tiles and auto-scrolls at the
+  /// edges. The scrollable itself must carry [_gridKey] + [_scrollCtrl] and
+  /// tag its children with MetaData(index) so the hit-test can find them.
+  Widget _wrapDragSelect(Widget scrollable) {
+    return Listener(
+      onPointerMove: (e) {
+        if (_dragSelecting) _updateDragSelect(e.position);
+      },
+      onPointerUp: (_) {
+        if (_dragSelecting) _endDragSelect();
+      },
+      onPointerCancel: (_) {
+        if (_dragSelecting) _endDragSelect();
+      },
+      child: scrollable,
+    );
+  }
+
+  void _beginDragSelect(String id, int index) {
+    setState(() {
+      _selectionMode = true;
+      _selectedIds.add(id);
+    });
+    _dragSelecting = true;
+    _dragAnchorIndex = index;
+    _dragBaseSelection = Set.of(_selectedIds);
+  }
+
+  void _updateDragSelect(Offset globalPos) {
+    _lastDragGlobal = globalPos;
+    _maybeAutoScroll(globalPos);
+    _sweepSelect(globalPos);
+  }
+
+  void _sweepSelect(Offset globalPos) {
+    final anchor = _dragAnchorIndex;
+    final base = _dragBaseSelection;
+    if (anchor == null || base == null) return;
+    final hit = _hitTileIndex(globalPos);
+    if (hit == null) return;
+    final lo = math.min(anchor, hit);
+    final hi = math.max(anchor, hit);
+    final next = Set.of(base);
+    for (var i = lo; i <= hi && i < _files.length; i++) {
+      next.add(_files[i].id);
+    }
+    if (next.length != _selectedIds.length ||
+        !next.containsAll(_selectedIds)) {
+      setState(() {
+        _selectedIds
+          ..clear()
+          ..addAll(next);
+      });
+    }
+  }
+
+  void _endDragSelect() {
+    _dragSelecting = false;
+    _dragAnchorIndex = null;
+    _dragBaseSelection = null;
+    _lastDragGlobal = null;
+    _autoScrollTimer?.cancel();
+    _autoScrollTimer = null;
+  }
+
+  int? _hitTileIndex(Offset globalPos) {
+    final obj = _gridKey.currentContext?.findRenderObject();
+    if (obj is! RenderBox) return null;
+    final result = BoxHitTestResult();
+    obj.hitTest(result, position: obj.globalToLocal(globalPos));
+    for (final entry in result.path) {
+      final target = entry.target;
+      if (target is RenderMetaData && target.metaData is int) {
+        return target.metaData as int;
+      }
+    }
+    return null;
+  }
+
+  void _refreshAutoScrollVel(Offset globalPos) {
+    final obj = _gridKey.currentContext?.findRenderObject();
+    if (obj is! RenderBox) {
+      _autoScrollVel = 0;
+      return;
+    }
+    final local = obj.globalToLocal(globalPos);
+    const zone = 96.0;
+    double v = 0;
+    if (local.dy < zone) {
+      v = -(zone - local.dy) / zone;
+    } else if (local.dy > obj.size.height - zone) {
+      v = (local.dy - (obj.size.height - zone)) / zone;
+    }
+    _autoScrollVel = v * 16;
+  }
+
+  void _maybeAutoScroll(Offset globalPos) {
+    _refreshAutoScrollVel(globalPos);
+    if (_autoScrollVel == 0) {
+      _autoScrollTimer?.cancel();
+      _autoScrollTimer = null;
+      return;
+    }
+    _autoScrollTimer ??= Timer.periodic(const Duration(milliseconds: 16), (_) {
+      final at = _lastDragGlobal;
+      if (at != null) _refreshAutoScrollVel(at);
+      if (_autoScrollVel == 0) {
+        _autoScrollTimer?.cancel();
+        _autoScrollTimer = null;
+        return;
+      }
+      if (!_scrollCtrl.hasClients) return;
+      final target = (_scrollCtrl.offset + _autoScrollVel)
+          .clamp(0.0, _scrollCtrl.position.maxScrollExtent);
+      _scrollCtrl.jumpTo(target);
+      final at2 = _lastDragGlobal;
+      if (at2 != null) _sweepSelect(at2);
+    });
   }
 }
 

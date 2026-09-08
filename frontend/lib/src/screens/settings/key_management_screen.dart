@@ -71,7 +71,7 @@ class _KeyManagementScreenState extends State<KeyManagementScreen> {
       _KeyCheckStatus.error => t.danger,
     };
     return Scaffold(
-      appBar: AppBar(title: const Text('Security Center')),
+      appBar: AppBar(title: const Text('Key Management')),
       // Scroll view instead of Padding: a no-op while the content fits, so a
       // long error result no longer overflows on short or landscape screens.
       body: SingleChildScrollView(
@@ -135,7 +135,7 @@ class _KeyManagementScreenState extends State<KeyManagementScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              "• Algorithm: AES-256-GCM\n• Key Storage: Android Keystore / iOS Keychain\n• Protocol: Google Drive AppData Scope",
+              "• Algorithm: AES-256-GCM\n• Key storage: Android Keystore\n• Cloud: your connected drive (private CipherNest folder)",
               style: TextStyle(color: cs.onSurface.withAlpha(140), height: 1.5, fontFamily: t.monoFontFamily),
             ),
           ],

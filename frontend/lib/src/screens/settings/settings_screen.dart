@@ -1,5 +1,9 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../../widgets/ciphernest_logo.dart';
+import '../../config/app_info.dart';
 import '../../utils/byte_format.dart';
 import '../../widgets/activity_sheet.dart';
 import '../../widgets/theme_icon.dart';
@@ -22,7 +26,6 @@ import '../../../services/notify.dart';
 import '../../../services/biometric_unlock_service.dart';
 import '../../../services/gallery_prefs.dart';
 import '../../../services/key_manager_service.dart';
-import '../../../services/metadata_migration_service.dart';
 import '../../../services/vault_reset_service.dart';
 import '../../models/file_model.dart';
 import '../cloud_selection/cloud_selection_screen.dart'
@@ -34,12 +37,21 @@ import '../../../services/system_folders.dart';
 import '../../../services/sync/vault_health_service.dart';
 import '../../widgets/password_confirm_dialog.dart';
 import 'backup_albums_screen.dart';
+import '../../../services/backup_selection_service.dart';
+import 'cache_usage_card.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../config/theme_packs.dart';
 import '../../config/theme_controller.dart';
+import '../../config/theme_reveal.dart';
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  const SettingsScreen({super.key, this.initialSection});
+
+  /// One of the kSettings*Section keys to deep-link straight into a category
+  /// page (from the gallery Menu). Null opens the hub. Passed via the
+  /// constructor rather than route arguments because the '/settings' route
+  /// does not forward RouteSettings.
+  final String? initialSection;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -51,17 +63,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// Bytes in the temp dir that CipherNest did NOT write (OS thumbnail /
   /// engine caches). Null when zero — the subtitle stays clean.
   String? _systemCacheSize;
-  double _cacheLimitGB = 0.5;    // The value the slider shows NOW
-  double _originalLimitGB = 0.5; // The value saved on DISK
-  
+  double _cacheLimitGB = 0.5; // Persisted on release; no Save button.
+
   bool _isLoading = true;
-  bool get _hasChanges => _cacheLimitGB != _originalLimitGB;
 
   // Auto-Sync — persisted mode. The SwitchListTile at the top toggles the
   // whole feature on/off; the segmented picker below chooses between
   // background and foreground-only modes.
   AutoSyncMode _autoSyncMode = AutoSyncMode.off;
   bool get _autoSyncEnabled => _autoSyncMode != AutoSyncMode.off;
+  // Which albums are enrolled: "All albums" or "Selected albums".
+  String _backupScope = 'All albums';
   String _lastSyncDisplay = 'Never';
   int _autoSyncIntervalMinutes = kAutoSyncIntervalDefaultMinutes;
   String _lastBgSyncDisplay = "hasn't run yet";
@@ -77,6 +89,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
   BiometricCapability _bioCapability = BiometricCapability.unavailable;
   bool _bioEnabled = false;
   String? _bioSubtitleOverride; // invalidation notice, shown once detected
+
+  // Deep-link: the gallery Menu's "Settings" tile passes kSettingsGallerySection
+  // so we open the Gallery category page straight away.
+  final ScrollController _scrollCtrl = ScrollController();
+  bool _anchorHandled = false;
+  // Ticked by [_setState]; open category detail pages listen to it so state
+  // that lives on this State object stays live inside the pushed route.
+  final ValueNotifier<int> _rev = ValueNotifier<int>(0);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_anchorHandled) return;
+    _anchorHandled = true;
+    final arg = widget.initialSection;
+    // Deep-link straight into a category page from the gallery Menu.
+    String? title;
+    List<Widget> Function(ColorScheme)? builder;
+    if (arg == kSettingsGallerySection) {
+      title = 'Gallery';
+      builder = _galleryChildren;
+    } else if (arg == kSettingsBackupSection) {
+      title = 'Backup & sync';
+      builder = _backupChildren;
+    }
+    if (title == null || builder == null) return;
+    final openTitle = title;
+    final openBuilder = builder;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _openSection(openTitle, openBuilder);
+    });
+  }
 
   @override
   void initState() {
@@ -95,7 +140,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     CacheManagerService().removeListener(_loadStats);
+    _scrollCtrl.dispose();
+    _rev.dispose();
     super.dispose();
+  }
+
+  /// setState that also ticks [_rev], so any category detail page currently
+  /// open reflects the change immediately.
+  void _setState(VoidCallback fn) {
+    if (!mounted) return;
+    setState(fn);
+    _rev.value++;
   }
 
   // --- NEW: PERSISTENCE LOGIC ---
@@ -104,14 +159,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final mode = await AutoSyncScheduler.readMode();
     final interval = await AutoSyncScheduler.readInterval();
     final batteryExempt = await BatteryOptimization.isExempt();
+    final backupSel = await BackupSelectionService().load();
     if (mounted) {
       final lastRunMs = prefs.getInt('auto_sync_last_run') ?? 0;
       final lastBgMs = prefs.getInt('auto_sync_last_bg_run') ?? 0;
-      setState(() {
-        final val = prefs.getDouble('cache_limit') ?? 0.5;
-        _cacheLimitGB = val;
-        _originalLimitGB = val;
+      _setState(() {
+        _cacheLimitGB = prefs.getDouble('cache_limit') ?? 0.5;
         _autoSyncMode = mode;
+        _backupScope = backupSel.mode == BackupMode.all
+            ? 'All albums'
+            : 'Selected albums';
         _autoSyncIntervalMinutes = interval.inMinutes;
         _showFeatured = prefs.getBool('gallery_show_featured') ?? true;
         _showYearAgo = prefs.getBool('gallery_show_year_ago') ?? true;
@@ -147,7 +204,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     }
     if (!mounted) return;
-    setState(() {
+    _setState(() {
       _bioCapability = capability;
       _bioEnabled = enabled;
       _bioSubtitleOverride = notice;
@@ -222,7 +279,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _runVaultHealthScan() async {
     final account = AccountRegistry().activeAccount;
     if (account == null) return;
-    setState(() => _vaultHealthScanning = true);
+    _setState(() => _vaultHealthScanning = true);
     VaultHealthReport? report;
     try {
       report = await VaultHealthService().scan(accountId: account.id);
@@ -230,7 +287,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       Notify.error('Vault Health scan failed: $e');
     }
     if (!mounted) return;
-    setState(() {
+    _setState(() {
       _vaultHealthScanning = false;
       _vaultHealth = report;
     });
@@ -313,51 +370,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } else {
       task.complete('$ok old file${ok == 1 ? '' : 's'} removed');
     }
-    if (mounted) setState(() => _priorKeyRefresh++);
-  }
-
-  Future<void> _runMetadataMigration() async {
-    final count = await MetadataMigrationService().scanLegacyCount();
-    if (!mounted) return;
-    if (count == 0) {
-      Notify.info('All cloud metadata is already encrypted');
-      return;
-    }
-    final go = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Encrypt cloud metadata?'),
-        content: Text(
-          '$count file${count == 1 ? '' : 's'} in your cloud vault still '
-          'carry a readable filename in their metadata. This rewrites the '
-          'metadata only — no file content is re-uploaded. You can '
-          'interrupt and re-run anytime.',
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Encrypt')),
-        ],
-      ),
-    );
-    if (go != true) return;
-    final result = await MetadataMigrationService().run();
-    if (result.failed == 0) {
-      Notify.info('Cloud metadata encrypted (${result.done} files)');
-    } else {
-      Notify.error(
-          'Encrypted ${result.done}, ${result.failed} failed — re-run to retry');
-    }
+    if (mounted) _setState(() => _priorKeyRefresh++);
   }
 
   Future<void> _toggleBiometric(bool v) async {
     if (!v) {
       await KeyManagerService().disableBiometric();
       if (mounted) {
-        setState(() {
+        _setState(() {
           _bioEnabled = false;
           _bioSubtitleOverride = null;
         });
@@ -373,7 +393,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         Notify.error('Incorrect password');
         return;
       }
-      setState(() {
+      _setState(() {
         _bioEnabled = true;
         _bioSubtitleOverride = null;
       });
@@ -383,23 +403,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _savePreferences() async {
-    setState(() => _isLoading = true); // Show loading feedback
-
+  /// Persist the cache limit and apply it right away. Called when the slider
+  /// is released — there is no Save button, the choice just sticks.
+  Future<void> _persistCacheLimit() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble('cache_limit', _cacheLimitGB);
-
-    // Run the cleaner immediately
     await CacheManagerService().enforceCacheLimit();
-
-    if (mounted) {
-      setState(() {
-        _originalLimitGB = _cacheLimitGB; // Sync them, so button disables
-        _isLoading = false;
-      });
-      Notify.info('Cache limit saved & applied');
-      _loadStats(); // Reload stats to show freed space
-    }
+    if (mounted) _loadStats();
   }
 
   Future<void> _loadStats() async {
@@ -434,7 +444,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     if (mounted) {
-      setState(() {
+      _setState(() {
         _cacheSize = _formatBytes(appBytes);
         _systemCacheSize = systemBytes > 0 ? _formatBytes(systemBytes) : null;
         _isLoading = false;
@@ -443,7 +453,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   static String _autoLockLabel(int minutes) {
-    if (minutes <= 0) return 'Never — vault stays unlocked';
+    if (minutes <= 0) return 'Never (vault stays unlocked)';
     if (minutes == 1) return 'Lock after 1 minute of inactivity';
     return 'Lock after $minutes minutes of inactivity';
   }
@@ -475,7 +485,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     if (picked == null) return;
     await AppLockService().setTimeoutMinutes(picked);
-    if (mounted) setState(() => _autoLockMinutes = picked);
+    if (mounted) _setState(() => _autoLockMinutes = picked);
   }
 
   String _formatBytes(int bytes) => formatBytes(bytes);
@@ -491,8 +501,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             for (final (base, label) in const [
-              (1000, 'Match system — 1,000 bytes per KB'),
-              (1024, 'Binary — 1,024 bytes per KB'),
+              (1000, 'Match system (1,000 bytes per KB)'),
+              (1024, 'Binary (1,024 bytes per KB)'),
             ])
               ListTile(
                 title: Text(label),
@@ -508,7 +518,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (picked == null || picked == ByteFormat.base) return;
     await ByteFormat.setBase(picked);
     if (!mounted) return;
-    setState(() {});
+    _setState(() {});
     // Reformat the cached size string with the new base.
     _loadStats();
   }
@@ -519,6 +529,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await tempDir.delete(recursive: true);
       await tempDir.create();
     }
+    // Bump the service so the CacheUsageCard (which recomputes only on this
+    // notifier) re-scans too — clearing bypasses the service's own delete
+    // paths, so without this the card kept showing the pre-clear breakdown.
+    CacheManagerService().notifyCacheChanged();
     if (mounted) {
       Notify.info('Cache cleared');
       _loadStats();
@@ -586,7 +600,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _handleBackup() async {
-    setState(() => _isLoading = true);
+    _setState(() => _isLoading = true);
     try {
       // backupDatabase never throws — it returns whether the snapshot
       // landed. Failure toasts itself via the quiet task; a manual tap
@@ -594,7 +608,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final ok = await DatabaseBackupService().backupDatabase();
       if (ok) Notify.info('Vault index backed up');
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) _setState(() => _isLoading = false);
     }
   }
 
@@ -629,7 +643,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         DateTime.now().millisecondsSinceEpoch,
       );
     }
-    if (mounted) setState(() => _autoSyncMode = mode);
+    if (mounted) _setState(() => _autoSyncMode = mode);
     // Which albums? All vs a checklist, plus the include-existing shortcut.
     if (enabled && mounted) await showBackupAlbumChoiceSheet(context);
   }
@@ -640,7 +654,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _setAutoSyncMode(AutoSyncMode mode) async {
     if (mode == _autoSyncMode || mode == AutoSyncMode.off) return;
     await AutoSyncScheduler.writeMode(mode);
-    if (mounted) setState(() => _autoSyncMode = mode);
+    if (mounted) _setState(() => _autoSyncMode = mode);
   }
 
   static String _autoSyncIntervalLabel(int minutes) {
@@ -675,7 +689,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     if (picked == null) return;
     await AutoSyncScheduler.writeInterval(Duration(minutes: picked));
-    if (mounted) setState(() => _autoSyncIntervalMinutes = picked);
+    if (mounted) _setState(() => _autoSyncIntervalMinutes = picked);
   }
 
   Future<void> _handleSyncNow() async {
@@ -683,7 +697,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       Notify.info('Backup already running');
       return;
     }
-    setState(() => _isLoading = true);
+    _setState(() => _isLoading = true);
     // Pin foreground priority — a user who taps Sync Now and switches
     // apps expects the batch to finish.
     await UploadForegroundGuard().begin();
@@ -715,7 +729,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // "Securing your file…" notification) leaked for the process
       // lifetime.
       await UploadForegroundGuard().end();
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) _setState(() => _isLoading = false);
     }
   }
 
@@ -723,25 +737,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // Route through GalleryPrefs so the Stories tab hears about the change
     // immediately instead of catching it on the next SyncService fire.
     await GalleryPrefs().setShowFeatured(val);
-    if (mounted) setState(() => _showFeatured = val);
+    if (mounted) _setState(() => _showFeatured = val);
   }
 
   Future<void> _toggleYearAgo(bool val) async {
     await GalleryPrefs().setShowYearAgo(val);
-    if (mounted) setState(() => _showYearAgo = val);
+    if (mounted) _setState(() => _showYearAgo = val);
   }
 
-  String _providerIcon(int providerType) {
-    switch (providerType) {
-      case CloudAccount.providerGoogle:
-        return 'googleLogo';
-      case CloudAccount.providerOneDrive:
-        return 'microsoftOutlookLogo';
-      case CloudAccount.providerDropbox:
-        return 'dropboxLogo';
-      default:
-        return 'cloud';
+  /// The real provider brand mark, rendered on a white chip. Falls back to a
+  /// generic cloud glyph for an unknown provider.
+  Widget _providerLogo(int providerType, {double size = 22}) {
+    final asset = switch (providerType) {
+      CloudAccount.providerGoogle => 'assets/images/brands/google_drive.png',
+      CloudAccount.providerOneDrive => 'assets/images/brands/microsoft.svg',
+      CloudAccount.providerDropbox => 'assets/images/brands/dropbox.png',
+      _ => null,
+    };
+    if (asset == null) {
+      return ThemeIcon('cloud', size: size, color: Colors.blueGrey);
     }
+    if (asset.endsWith('.svg')) {
+      return SvgPicture.asset(asset, width: size, height: size);
+    }
+    return Image.asset(asset, width: size, height: size, fit: BoxFit.contain);
   }
 
   /// Disconnects ONE cloud account: registry row + this provider's OAuth
@@ -889,14 +908,81 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final tokens = ThemeController().tokens;
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
+        controller: _scrollCtrl,
+        padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
-          // --- ACCOUNTS (multi-account) ---
-          _SectionHeader(title: "Accounts"),
-          ListenableBuilder(
+          _CategoryTile(
+            icon: 'googleLogo',
+            title: 'Account',
+            subtitle: 'Connected clouds and activity log',
+            onTap: () => _openSection('Account', _accountChildren),
+          ),
+          _CategoryTile(
+            icon: 'database',
+            title: 'Storage & cache',
+            subtitle: 'Cache usage, size limit, recycle bin',
+            onTap: () => _openSection('Storage & cache', _storageChildren),
+          ),
+          _CategoryTile(
+            icon: 'cloudArrowUp',
+            title: 'Backup & sync',
+            subtitle: 'Auto-sync, import, vault index backup',
+            onTap: () => _openSection('Backup & sync', _backupChildren),
+          ),
+          _CategoryTile(
+            icon: 'images',
+            title: 'Gallery',
+            subtitle: 'Stories and memories',
+            onTap: () => _openSection('Gallery', _galleryChildren),
+          ),
+          _CategoryTile(
+            icon: cs.brightness == Brightness.dark ? 'moon' : 'sun',
+            title: 'Appearance',
+            subtitle: 'Theme mode and color packs',
+            onTap: () => _openSection('Appearance', _appearanceChildren),
+          ),
+          _CategoryTile(
+            icon: 'shieldCheck',
+            title: 'Security',
+            subtitle: 'Lock, keys, devices, shares',
+            onTap: () => _openSection('Security', _securityChildren),
+          ),
+          _CategoryTile(
+            icon: 'info',
+            title: 'About',
+            subtitle: kAppVersionLabel,
+            onTap: () => _openSection('About', _aboutChildren),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Push a category detail page. Its body rebuilds whenever [_rev] ticks (via
+  /// [_setState]) so toggles, the cache slider and pickers reflect state that
+  /// lives on this State object even though they render inside the pushed route.
+  void _openSection(
+      String title, List<Widget> Function(ColorScheme) children) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => Scaffold(
+        appBar: AppBar(title: Text(title)),
+        body: ValueListenableBuilder<int>(
+          valueListenable: _rev,
+          builder: (ctx, _, _) => ListView(
+            padding: const EdgeInsets.only(top: 8, bottom: 32),
+            children: children(Theme.of(ctx).colorScheme),
+          ),
+        ),
+      ),
+    ));
+  }
+
+  List<Widget> _accountChildren(ColorScheme cs) {
+    return <Widget>[
+      ListenableBuilder(
             listenable: AccountRegistry(),
             builder: (context, _) {
               final accounts = AccountRegistry().accounts;
@@ -906,8 +992,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   for (final a in accounts)
                     ListTile(
                       leading: CircleAvatar(
-                        backgroundColor: cs.primary.withAlpha(60),
-                        child: ThemeIcon(_providerIcon(a.providerType), color: cs.primary, size: 20),
+                        backgroundColor: Colors.white,
+                        child: Padding(
+                          padding: const EdgeInsets.all(7),
+                          child: _providerLogo(a.providerType),
+                        ),
                       ),
                       title: Text(a.email, style: TextStyle(color: cs.onSurface)),
                       subtitle: Text(
@@ -915,7 +1004,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         style: TextStyle(color: cs.onSurface.withAlpha(140)),
                       ),
                       trailing: IconButton(
-                        icon: ThemeIcon('signOut', color: cs.error),
+                        icon: ThemeIcon('signOut',
+                            color: cs.onSurface.withAlpha(160)),
                         onPressed: () => _handleRemoveAccount(a.id),
                       ),
                     ),
@@ -931,79 +1021,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
               );
             },
           ),
-          const Divider(),
+    ];
+  }
 
-          // --- ACTIVITY ---
-          _SectionHeader(title: "Activity"),
-          ListTile(
-            leading: ThemeIcon('arrowsClockwise', color: cs.primary),
-            title: Text('Activity log', style: TextStyle(color: cs.onSurface)),
-            subtitle: Text('Running tasks and recent results',
-                style: TextStyle(color: cs.onSurface.withAlpha(140))),
-            onTap: () => showActivitySheet(context),
-          ),
-          const Divider(),
-
-          // --- DATA MANAGEMENT ---
-          _SectionHeader(title: "Data Management"),
-          
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+  List<Widget> _storageChildren(ColorScheme cs) {
+    final tokens = ThemeController().tokens;
+    return <Widget>[
+      const CacheUsageCard(),
+      Container(
+        margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+        padding: EdgeInsets.all(tokens.pad),
+        decoration: BoxDecoration(
+          color: cs.surface,
+          borderRadius: BorderRadius.circular(tokens.rCard),
+          border: Border.all(color: cs.outline),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text("Max Cache Size", style: TextStyle(color: cs.onSurface)),
-                    // Highlight if unsaved
-                    Text(
-                      "${_cacheLimitGB.toStringAsFixed(1)} GB",
-                      style: TextStyle(
-                        color: _hasChanges ? tokens.warning : cs.primary,
-                        fontWeight: FontWeight.bold
-                      )
-                    ),
-                  ],
+                ThemeIcon('hardDrive', color: cs.primary, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text('Max cache size',
+                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                          fontWeight: FontWeight.w600, fontSize: 15)),
                 ),
-                Slider(
-                  value: _cacheLimitGB,
-                  min: 0.1,
-                  max: 2.0,
-                  divisions: 19,
-                  activeColor: _hasChanges ? tokens.warning : cs.primary,
-                  onChanged: (val) {
-                    setState(() => _cacheLimitGB = val);
-                    // Note: We do NOT save here anymore. We just update UI.
-                  },
-                ),
-                // --- SAVE BUTTON ---
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    if (_hasChanges)
-                      Flexible(
-                        child: Text("Unsaved changes",
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(color: tokens.warning, fontSize: 12)),
-                      ),
-                    const SizedBox(width: 12),
-                    ElevatedButton(
-                      onPressed: _hasChanges ? _savePreferences : null,
-                      child: const Text("Save & Apply"),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
                 Text(
-                  "Older files will be removed from device when cache exceeds this limit.",
-                  style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 11),
+                  '${_cacheLimitGB.toStringAsFixed(1)} GB',
+                  style: TextStyle(
+                      color: cs.primary,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15),
                 ),
               ],
             ),
-          ),
-
-          ListTile(
+            Slider(
+              value: _cacheLimitGB,
+              min: 0.1,
+              max: 2.0,
+              divisions: 19,
+              activeColor: cs.primary,
+              // Live label while dragging; persist + evict on release.
+              onChanged: (val) => _setState(() => _cacheLimitGB = val),
+              onChangeEnd: (_) => _persistCacheLimit(),
+            ),
+            Text(
+              'Older files are removed from this device when the cache passes '
+              'this limit.',
+              style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 11),
+            ),
+          ],
+        ),
+      ),
+      ListTile(
             leading: ThemeIcon('broom', color: cs.primary),
             title: Text('Clear Local Cache', style: TextStyle(color: cs.onSurface)),
             subtitle: Text(
@@ -1016,7 +1088,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: _clearCache,
             onLongPress: _showCacheContents,
           ),
-          ListTile(
+      ListTile(
             leading: ThemeIcon('ruler', color: cs.primary),
             title: Text('File size units',
                 style: TextStyle(color: cs.onSurface)),
@@ -1028,64 +1100,63 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             onTap: _pickSizeUnits,
           ),
-          ListTile(
-            leading: ThemeIcon('cloudArrowUp', color: cs.primary),
-            title: Text('Backup Vault Index', style: TextStyle(color: cs.onSurface)),
-            subtitle: Text('Encrypt and upload your vault index to the cloud', style: TextStyle(color: cs.onSurface.withAlpha(140))),
-            onTap: _handleBackup,
-          ),
-          ListTile(
-            leading: ThemeIcon('linkSimple', color: cs.primary),
-            title: Text('Active Shares', style: TextStyle(color: cs.onSurface)),
-            subtitle: Text('Manage and revoke share links', style: TextStyle(color: cs.onSurface.withAlpha(140))),
-            trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
-            onTap: () => Navigator.pushNamed(context, AppRoutes.activeShares),
-          ),
-          ListTile(
-            leading: ThemeIcon('images', color: cs.primary),
-            title: Text('Import from Gallery', style: TextStyle(color: cs.onSurface)),
-            subtitle: Text('Encrypt photos already on this device', style: TextStyle(color: cs.onSurface.withAlpha(140))),
-            trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
-            onTap: () => Navigator.pushNamed(context, AppRoutes.migration),
-          ),
-          ListTile(
-            leading: ThemeIcon('trash', color: cs.error),
+      ListTile(
+            leading: ThemeIcon('trash', color: cs.primary),
             title: Text('Recycle Bin', style: TextStyle(color: cs.onSurface)),
             subtitle: Text('Restore or permanently delete recent items', style: TextStyle(color: cs.onSurface.withAlpha(140))),
             trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: () => Navigator.pushNamed(context, AppRoutes.recycleBin),
           ),
-          const Divider(),
+      ListTile(
+        leading: ThemeIcon('browseActivity', color: cs.primary),
+        title: Text('Activity log', style: TextStyle(color: cs.onSurface)),
+        subtitle: Text('Running tasks and recent results',
+            style: TextStyle(color: cs.onSurface.withAlpha(140))),
+        trailing: ThemeIcon('caretRight',
+            size: 16, color: cs.onSurface.withAlpha(140)),
+        onTap: () => showActivitySheet(context),
+      ),
+    ];
+  }
 
-          // --- AUTO-SYNC ---
-          _SectionHeader(title: "Auto-Sync"),
-          SwitchListTile(
-            secondary: ThemeIcon('arrowsClockwise', color: cs.primary),
-            title: Text('Auto-Sync Gallery', style: TextStyle(color: cs.onSurface)),
+  List<Widget> _backupChildren(ColorScheme cs) {
+    return <Widget>[
+      // All backup lives here now: the old separate "Add to CipherNest" page
+      // folded into this one section. The switch runs the full setup
+      // (permissions, "from now" watermark, album choice) when turned on.
+      SwitchListTile(
+            secondary: ThemeIcon('autoRenew', color: cs.primary),
+            title: Text('Auto-back up new photos',
+                style: TextStyle(color: cs.onSurface)),
             subtitle: Text(
-              _autoSyncEnabled ? 'Last sync: $_lastSyncDisplay' : 'Automatically encrypt new photos',
+              _autoSyncEnabled
+                  ? '$_backupScope · last sync: $_lastSyncDisplay'
+                  : 'Encrypt new photos automatically as you take them',
               style: TextStyle(color: cs.onSurface.withAlpha(140)),
             ),
             value: _autoSyncEnabled,
             onChanged: _toggleAutoSync,
           ),
-          if (_autoSyncEnabled) ...[
+      if (_autoSyncEnabled) ...[
             ListTile(
-              leading: const SizedBox(width: 24),
-              title: Text('Backed-up albums',
+              leading: ThemeIcon('checklist', color: cs.primary),
+              title: Text('Change which albums',
                   style: TextStyle(color: cs.onSurface)),
               subtitle: Text(
-                'Choose which device albums are protected',
+                'Currently backing up: $_backupScope',
                 style:
                     TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 12),
               ),
               trailing:
                   ThemeIcon('caretRight', size: 16, color: cs.onSurface),
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const BackupAlbumsScreen()),
-              ),
+              onTap: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const BackupAlbumsScreen()),
+                );
+                if (mounted) _loadPreferences();
+              },
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 4, 16, 4),
@@ -1106,7 +1177,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             if (_autoSyncMode == AutoSyncMode.background) ...[
               ListTile(
-                leading: const SizedBox(width: 24),
+                leading: ThemeIcon('calendarClock', color: cs.primary),
                 title: Text('How often',
                     style: TextStyle(color: cs.onSurface)),
                 subtitle: Text(
@@ -1119,7 +1190,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onTap: _pickAutoSyncInterval,
               ),
               ListTile(
-                leading: const SizedBox(width: 24),
+                leading: ThemeIcon('event', color: cs.primary),
                 title: Text('Last background sync',
                     style: TextStyle(color: cs.onSurface)),
                 subtitle: Text(
@@ -1130,9 +1201,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               if (_batteryExempt == false)
                 ListTile(
-                  leading: const SizedBox(width: 24),
+                  leading: ThemeIcon('syncProblem', color: cs.primary),
                   title: Text('Background sync being killed?',
-                      style: TextStyle(color: ThemeController().tokens.warning)),
+                      style: TextStyle(color: cs.onSurface)),
                   subtitle: Text(
                     'Battery optimization can stop scheduled syncs. Tap to '
                     'exempt CipherNest.',
@@ -1149,71 +1220,64 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
             ],
             ListTile(
-              leading: const SizedBox(width: 24),
-              title: Text('Sync Now', style: TextStyle(color: cs.primary)),
+              leading: ThemeIcon('sync', color: cs.primary),
+              title: Text('Sync now', style: TextStyle(color: cs.onSurface)),
               subtitle: Text('Manually check for new photos right now', style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 12)),
-              trailing: ThemeIcon('play', selected: true, color: cs.primary),
               onTap: _handleSyncNow,
             ),
           ],
+      ListTile(
+            leading: ThemeIcon('cloudArrowUp', color: cs.primary),
+            title: Text('Vault index backup',
+                style: TextStyle(color: cs.onSurface)),
+            subtitle: Text(
+                'Upload an encrypted copy of your vault index so a new device '
+                'can restore it',
+                style: TextStyle(color: cs.onSurface.withAlpha(140))),
+            trailing: ThemeIcon('caretRight',
+                size: 16, color: cs.onSurface.withAlpha(140)),
+            onTap: _handleBackup,
+          ),
+    ];
+  }
 
-          const Divider(),
-
-          // --- GALLERY ---
-          _SectionHeader(title: "Gallery"),
-          SwitchListTile(
+  List<Widget> _galleryChildren(ColorScheme cs) {
+    return <Widget>[
+      SwitchListTile(
             secondary: ThemeIcon('sparkle', color: cs.primary),
             title: Text('Show Featured Content', style: TextStyle(color: cs.onSurface)),
             subtitle: Text('Display stories and highlights', style: TextStyle(color: cs.onSurface.withAlpha(140))),
             value: _showFeatured,
             onChanged: _toggleFeatured,
           ),
-          SwitchListTile(
+      SwitchListTile(
             secondary: ThemeIcon('clockCounterClockwise', color: cs.primary),
             title: Text('A Year Ago Memories', style: TextStyle(color: cs.onSurface)),
             subtitle: Text('Show photos from this day last year', style: TextStyle(color: cs.onSurface.withAlpha(140))),
             value: _showYearAgo,
             onChanged: _toggleYearAgo,
           ),
+    ];
+  }
 
-          const Divider(),
-
-          // --- APPEARANCE ---
-          _SectionHeader(title: "Appearance"),
-          ListenableBuilder(
+  List<Widget> _appearanceChildren(ColorScheme cs) {
+    return <Widget>[
+      ListenableBuilder(
             listenable: ThemeController(),
             builder: (context, _) {
               final tc = ThemeController();
               return Column(
                 children: [
                   ListTile(
-                    leading: ThemeIcon(
-                      tc.brightness == Brightness.dark ? 'moon' : 'sun',
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
                     title: Text('Appearance mode',
                         style: TextStyle(
                             color: Theme.of(context).colorScheme.onSurface)),
-                    subtitle: Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      // scaleDown is a no-op until the three segments outgrow
-                      // the tile (narrow phones at large font scale).
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
-                        alignment: Alignment.centerLeft,
-                        child: SegmentedButton<AppThemeMode>(
-                          segments: const [
-                            ButtonSegment(
-                                value: AppThemeMode.system,
-                                label: Text('System')),
-                            ButtonSegment(
-                                value: AppThemeMode.light, label: Text('Light')),
-                            ButtonSegment(
-                                value: AppThemeMode.dark, label: Text('Dark')),
-                          ],
-                          selected: {tc.mode},
-                          onSelectionChanged: (s) => tc.setMode(s.first),
-                        ),
+                    trailing: _ThemeModeButton(
+                      mode: tc.mode,
+                      onCycle: (pos) => ThemeReveal.run(
+                        context: context,
+                        center: pos,
+                        apply: () => tc.setMode(_nextThemeMode(tc.mode)),
                       ),
                     ),
                   ),
@@ -1229,26 +1293,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                    child: Column(
-                      children: [
-                        for (final pack in ThemePack.values)
-                          _ThemePackTile(
-                            pack: pack,
-                            selected: tc.pack == pack,
-                            onTap: () => tc.setPack(pack),
-                          ),
-                      ],
+                    child: _ThemePackList(
+                      current: tc.pack,
+                      onPick: tc.setPack,
                     ),
                   ),
                 ],
               );
             },
           ),
+    ];
+  }
 
-          const Divider(),
-          // ... Security Section ...
-          _SectionHeader(title: "Security"),
-          ListTile(
+  List<Widget> _securityChildren(ColorScheme cs) {
+    return <Widget>[
+      ListTile(
             leading: ThemeIcon('lock', color: cs.primary),
             title: Text('Auto-lock', style: TextStyle(color: cs.onSurface)),
             subtitle: Text(
@@ -1258,7 +1317,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: _pickAutoLock,
           ),
-          // Hidden outright when the device can never support it (no sensor /
+      // Hidden outright when the device can never support it (no sensor /
           // no lock screen) — an impossible toggle is worse than none.
           if (_bioCapability != BiometricCapability.noHardware &&
               _bioCapability != BiometricCapability.noLockScreen)
@@ -1269,7 +1328,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               subtitle: Text(
                 _bioSubtitleOverride ??
                     (_bioCapability == BiometricCapability.noneEnrolled
-                        ? 'No fingerprints enrolled — add one in Android Settings'
+                        ? 'No fingerprints enrolled. Add one in Android Settings'
                         : 'Hardware-backed. Your master password always works.'),
                 style: TextStyle(color: cs.onSurface.withAlpha(140)),
               ),
@@ -1278,14 +1337,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ? _toggleBiometric
                   : null,
             ),
-          ListTile(
+      // Only vaults created/restored after view-phrase shipped keep a
+          // password-wrapped mnemonic blob; older ones can't reveal it, so
+          // hide the tile rather than offer a button that always fails.
+          FutureBuilder<bool>(
+            future: KeyManagerService().canRevealMnemonic(),
+            builder: (context, snap) {
+              if (snap.data != true) return const SizedBox.shrink();
+              return ListTile(
+                leading: ThemeIcon('shieldCheck', color: cs.primary),
+                title: Text('View recovery phrase',
+                    style: TextStyle(color: cs.onSurface)),
+                subtitle: Text(
+                    'Show your 12 words after a password check',
+                    style: TextStyle(color: cs.onSurface.withAlpha(140))),
+                trailing: ThemeIcon('caretRight',
+                    size: 16, color: cs.onSurface.withAlpha(140)),
+                onTap: () =>
+                    Navigator.pushNamed(context, AppRoutes.viewPhrase),
+              );
+            },
+          ),
+      ListTile(
+            leading: ThemeIcon('password', color: cs.primary),
+            title:
+                Text('Change password', style: TextStyle(color: cs.onSurface)),
+            subtitle: Text(
+                'Set a new master password (your recovery phrase stays the same)',
+                style: TextStyle(color: cs.onSurface.withAlpha(140))),
+            trailing: ThemeIcon('caretRight',
+                size: 16, color: cs.onSurface.withAlpha(140)),
+            onTap: () =>
+                Navigator.pushNamed(context, AppRoutes.changePassword),
+          ),
+      ListTile(
             leading: ThemeIcon('key', color: cs.primary),
             title: Text('Key Management', style: TextStyle(color: cs.onSurface)),
             subtitle: Text('Check encryption integrity', style: TextStyle(color: cs.onSurface.withAlpha(140))),
             trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: () => Navigator.pushNamed(context, AppRoutes.keyManagement),
           ),
-          ListTile(
+      ListTile(
             leading: ThemeIcon('heart', color: cs.primary),
             title: Text('Vault Health', style: TextStyle(color: cs.onSurface)),
             subtitle: Text(_vaultHealthSubtitle(cs),
@@ -1299,7 +1391,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: _vaultHealthScanning ? null : _runVaultHealthScan,
           ),
-          ListTile(
+      ListTile(
             leading: ThemeIcon('smartphone', color: cs.primary),
             title: Text('Devices', style: TextStyle(color: cs.onSurface)),
             subtitle: Text('Name this device, see others on your vault',
@@ -1308,7 +1400,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: _openDevices,
           ),
-          // Storage cleanup for blobs sealed under a PREVIOUS vault key
+      // Storage cleanup for blobs sealed under a PREVIOUS vault key
           // (kept during a "start over"). Hidden while there are none.
           FutureBuilder<List<CnestFile>>(
             key: ValueKey('prior_key_$_priorKeyRefresh'),
@@ -1331,53 +1423,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
               );
             },
           ),
-          ListTile(
-            leading: ThemeIcon('signOut', color: cs.error),
+      ListTile(
+            leading: ThemeIcon('linkSimple', color: cs.primary),
+            title: Text('Active Shares', style: TextStyle(color: cs.onSurface)),
+            subtitle: Text('Manage and revoke share links', style: TextStyle(color: cs.onSurface.withAlpha(140))),
+            trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
+            onTap: () => Navigator.pushNamed(context, AppRoutes.activeShares),
+          ),
+      ListTile(
+            leading: ThemeIcon('signOut', color: cs.primary),
             title: Text('Forget this vault on this device',
-                style: TextStyle(color: cs.error)),
+                style: TextStyle(color: cs.onSurface)),
             subtitle: Text(
                 'Remove keys, index, and caches here. Cloud files stay; '
                 'your recovery phrase gets you back in.',
                 style: TextStyle(color: cs.onSurface.withAlpha(140))),
+            trailing: ThemeIcon('caretRight',
+                size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: _forgetVaultOnDevice,
           ),
-          ValueListenableBuilder<MetadataMigrationState>(
-            valueListenable: MetadataMigrationService().state,
-            builder: (context, mig, _) {
-              final subtitle = switch (mig.phase) {
-                MetadataMigrationPhase.running =>
-                  'Encrypting ${mig.done}/${mig.total}…',
-                MetadataMigrationPhase.done => mig.failed == 0
-                    ? 'All cloud metadata is encrypted'
-                    : '${mig.failed} of ${mig.total} failed — tap to retry',
-                MetadataMigrationPhase.error =>
-                  'Failed — tap to retry',
-                MetadataMigrationPhase.idle =>
-                  'Seal filenames in cloud metadata',
-              };
-              return ListTile(
-                leading: ThemeIcon('shieldCheck', color: cs.primary),
-                title: Text('Encrypt cloud metadata',
-                    style: TextStyle(color: cs.onSurface)),
-                subtitle: Text(subtitle,
-                    style: TextStyle(color: cs.onSurface.withAlpha(140))),
-                trailing: mig.phase == MetadataMigrationPhase.running
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2))
-                    : ThemeIcon('caretRight',
-                        size: 16, color: cs.onSurface.withAlpha(140)),
-                onTap: MetadataMigrationService().isRunning
-                    ? null
-                    : _runMetadataMigration,
-              );
-            },
-          ),
-          AnimatedBuilder(
+      AnimatedBuilder(
             animation: AudioPlayerService(),
             builder: (context, _) => SwitchListTile(
-              secondary: ThemeIcon('musicNote', color: cs.primary),
+              secondary: ThemeIcon('musicNotes', color: cs.primary),
               title: Text('Track titles on lock screen',
                   style: TextStyle(color: cs.onSurface)),
               subtitle: Text(
@@ -1391,46 +1459,171 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   AudioPlayerService().setShowTitlesOnLockScreen(v),
             ),
           ),
+    ];
+  }
 
-          const SizedBox(height: 24),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              'Your encrypted vault lives in your cloud under a folder named '
-              '"CipherNest". The files there are unreadable by design — don\'t '
-              'delete or move them from your cloud\'s website; use the Recycle '
-              'Bin in this app instead.',
-              style: TextStyle(color: cs.onSurface.withAlpha(110), fontSize: 12),
+  List<Widget> _aboutChildren(ColorScheme cs) {
+    final muted = cs.onSurface.withAlpha(150);
+    return <Widget>[
+      Padding(
+        padding: const EdgeInsets.fromLTRB(28, 20, 28, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            const CiphernestLogo(fontSize: 30),
+            const SizedBox(height: 8),
+            Text(kAppVersionLabel,
+                style: TextStyle(color: cs.onSurface.withAlpha(90))),
+            const SizedBox(height: 22),
+            Text(
+              'CipherNest turns your cloud into a zero-knowledge vault. Photos, '
+              'videos and files are encrypted on your device with AES-256 '
+              'before they ever reach your cloud, so the provider only ever '
+              'stores ciphertext and the keys never leave your phone.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: muted, fontSize: 13, height: 1.55),
             ),
-          ),
-          const SizedBox(height: 24),
-          Center(
-            child: Text(
-              'CipherNest v1.0.0 Beta',
-              style: TextStyle(color: cs.onSurface.withAlpha(60)),
+            const SizedBox(height: 14),
+            Text(
+              'A year of a student coding, learning, and a lot of '
+              'hard work. Thanks for using it, and sorry in advance for any '
+              'bugs.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  color: muted,
+                  fontSize: 13,
+                  height: 1.55,
+                  fontStyle: FontStyle.italic),
             ),
-          ),
-        ],
+            const SizedBox(height: 22),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _aboutLink(ThemeIcon('globe', size: 16, color: cs.primary),
+                    'Website', 'https://ciphernest.io'),
+                _aboutLink(_brandSvg('linkedin', cs), 'LinkedIn',
+                    'https://www.linkedin.com/in/usmanshafs'),
+                _aboutLink(_brandSvg('github', cs), 'GitHub',
+                    'https://github.com/UsmanShafs/CipherNest'),
+              ],
+            ),
+          ],
+        ),
       ),
+    ];
+  }
+
+  /// A monochrome brand mark (Simple Icons SVG) tinted to the theme.
+  Widget _brandSvg(String name, ColorScheme cs) {
+    return SvgPicture.asset(
+      'assets/images/brands/$name.svg',
+      width: 15,
+      height: 15,
+      colorFilter: ColorFilter.mode(cs.primary, BlendMode.srcIn),
+    );
+  }
+
+  Widget _aboutLink(Widget icon, String label, String url) {
+    final cs = Theme.of(context).colorScheme;
+    return OutlinedButton.icon(
+      onPressed: () => _openExternal(url),
+      icon: icon,
+      label: Text(label, style: TextStyle(color: cs.onSurface)),
+      style: OutlinedButton.styleFrom(
+        side: BorderSide(color: cs.outline),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+      ),
+    );
+  }
+
+  Future<void> _openExternal(String url) async {
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      Notify.error('Could not open $url');
+    }
+  }
+}
+
+class _CategoryTile extends StatelessWidget {
+  const _CategoryTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final String icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return ListTile(
+      leading: CircleAvatar(
+        backgroundColor: cs.primary.withAlpha(30),
+        child: ThemeIcon(icon, color: cs.primary, size: 22),
+      ),
+      title: Text(title,
+          style: TextStyle(
+              color: cs.onSurface,
+              fontWeight: FontWeight.w600,
+              fontSize: 16)),
+      subtitle: Text(subtitle,
+          style: TextStyle(color: cs.onSurface.withAlpha(140))),
+      trailing: ThemeIcon('caretRight',
+          size: 16, color: cs.onSurface.withAlpha(140)),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+      onTap: onTap,
     );
   }
 }
 
-class _SectionHeader extends StatelessWidget {
-  final String title;
-  const _SectionHeader({required this.title});
+/// The next mode in the cycle: light -> dark -> system -> light.
+AppThemeMode _nextThemeMode(AppThemeMode m) => switch (m) {
+      AppThemeMode.light => AppThemeMode.dark,
+      AppThemeMode.dark => AppThemeMode.system,
+      AppThemeMode.system => AppThemeMode.light,
+    };
+
+/// The current-mode icon as a tappable chip. Tapping reports the tap point so
+/// the theme-change circle reveal springs from the icon itself. Icons: sun,
+/// moon, and settings_system_daydream (the OS "system default" mark).
+class _ThemeModeButton extends StatelessWidget {
+  const _ThemeModeButton({required this.mode, required this.onCycle});
+
+  final AppThemeMode mode;
+  final void Function(Offset globalPosition) onCycle;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
-      child: Text(
-        title.toUpperCase(),
-        style: TextStyle(
-          color: Theme.of(context).colorScheme.primary,
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.2,
+    final cs = Theme.of(context).colorScheme;
+    final icon = switch (mode) {
+      AppThemeMode.light => 'sun',
+      AppThemeMode.dark => 'moon',
+      AppThemeMode.system => 'systemTheme',
+    };
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapUp: (d) => onCycle(d.globalPosition),
+      child: Padding(
+        // No background plate; the icon fill follows the active theme pack
+        // rather than being forced on.
+        padding: const EdgeInsets.all(8),
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 250),
+          transitionBuilder: (child, anim) => ScaleTransition(
+            scale: anim,
+            child: FadeTransition(opacity: anim, child: child),
+          ),
+          child: ThemeIcon(icon,
+              key: ValueKey(icon), size: 26, color: cs.primary),
         ),
       ),
     );
@@ -1536,6 +1729,56 @@ class _ModePill extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The theme-pack picker: shows the first few packs, with a button to expand
+/// the rest and collapse again. The selected pack is always kept visible.
+class _ThemePackList extends StatefulWidget {
+  const _ThemePackList({required this.current, required this.onPick});
+
+  final ThemePack current;
+  final ValueChanged<ThemePack> onPick;
+
+  @override
+  State<_ThemePackList> createState() => _ThemePackListState();
+}
+
+class _ThemePackListState extends State<_ThemePackList> {
+  bool _expanded = false;
+  static const int _collapsedCount = 4;
+
+  List<ThemePack> get _visible {
+    const all = ThemePack.values;
+    if (_expanded || all.length <= _collapsedCount) return all;
+    final first = all.take(_collapsedCount).toList();
+    if (first.contains(widget.current)) return first;
+    // Keep the selected pack on screen by swapping it into the last slot.
+    return [...first.take(_collapsedCount - 1), widget.current];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final canExpand = ThemePack.values.length > _collapsedCount;
+    return Column(
+      children: [
+        for (final pack in _visible)
+          _ThemePackTile(
+            pack: pack,
+            selected: widget.current == pack,
+            onTap: () => widget.onPick(pack),
+          ),
+        if (canExpand)
+          TextButton.icon(
+            onPressed: () => setState(() => _expanded = !_expanded),
+            icon: ThemeIcon(_expanded ? 'caretUp' : 'caretDown',
+                size: 18, color: cs.primary),
+            label: Text(_expanded ? 'Show less' : 'More themes',
+                style: TextStyle(color: cs.primary)),
+          ),
+      ],
     );
   }
 }

@@ -17,6 +17,11 @@ class CacheManagerService extends ChangeNotifier {
   factory CacheManagerService() => _instance;
   CacheManagerService._internal();
 
+  /// Announce that the cache pool changed out-of-band (e.g. a bulk wipe done
+  /// by deleting the temp dir directly, which bypasses this service's own
+  /// delete paths). Lets the Settings cache-usage card and size tile re-scan.
+  void notifyCacheChanged() => notifyListeners();
+
   /// Eviction priority for a cache file path:
   /// - 1 = large plaintext that's cheap to regenerate:
   ///       `*_decrypted.jpg`, `*_decrypted.mp4`, `*_audio.bin`,
