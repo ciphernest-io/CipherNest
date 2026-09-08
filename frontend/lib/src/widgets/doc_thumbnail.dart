@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:pdfx/pdfx.dart';
 
 import '../../services/cloud/cloud_service.dart';
 import '../../services/encryption_service.dart';
@@ -59,11 +60,11 @@ class _DocThumbnailState extends State<DocThumbnail> {
   }
 
   Future<void> _loadThumb() async {
-    if (widget.file.thumbnailCloudId == null) return;
+    final f = widget.file;
+    if (f.cloudId == null) return;
     try {
       final cacheDir = await getTemporaryDirectory();
-      final cacheFile =
-          File('${cacheDir.path}/thumb_${widget.file.cloudId}.jpg');
+      final cacheFile = File('${cacheDir.path}/thumb_${f.cloudId}.jpg');
 
       if (await cacheFile.exists()) {
         final bytes = await cacheFile.readAsBytes();
@@ -71,13 +72,54 @@ class _DocThumbnailState extends State<DocThumbnail> {
         return;
       }
 
-      final encBytes =
-          await CloudService().downloadFile(widget.file.thumbnailCloudId!);
-      final decBytes = await EncryptionService.decryptFile(encBytes);
-      await cacheFile.writeAsBytes(decBytes);
-      if (mounted) setState(() => _thumbBytes = decBytes);
+      // Preferred: the encrypted thumbnail generated at upload (PDF covers,
+      // album art…).
+      if (f.thumbnailCloudId != null) {
+        final encBytes = await CloudService().downloadFile(f.thumbnailCloudId!);
+        final decBytes = await EncryptionService.decryptFile(encBytes);
+        await cacheFile.writeAsBytes(decBytes);
+        if (mounted) setState(() => _thumbBytes = decBytes);
+        return;
+      }
+
+      // Best-effort fallback for PDFs that never got a stored thumb: render
+      // page 1 on the fly (decrypt in memory, cache the JPEG under the same
+      // key so it's a one-time cost per file).
+      if (_isPdf(f.filename)) {
+        final cover = await _renderPdfCover(f.cloudId!);
+        if (cover != null) {
+          await cacheFile.writeAsBytes(cover);
+          if (mounted) setState(() => _thumbBytes = cover);
+        }
+      }
     } catch (_) {
       // Fail silently — the icon fallback is fine.
+    }
+  }
+
+  bool _isPdf(String name) => name.toLowerCase().endsWith('.pdf');
+
+  Future<Uint8List?> _renderPdfCover(String cloudId) async {
+    final enc = await CloudService().downloadFile(cloudId);
+    final dec = await EncryptionService.decryptFile(enc);
+    final doc = await PdfDocument.openData(dec);
+    try {
+      final page = await doc.getPage(1);
+      try {
+        const target = 320.0;
+        final scale = page.width == 0 ? 1.0 : target / page.width;
+        final img = await page.render(
+          width: page.width * scale,
+          height: page.height * scale,
+          format: PdfPageImageFormat.jpeg,
+          backgroundColor: '#FFFFFF',
+        );
+        return img?.bytes;
+      } finally {
+        await page.close();
+      }
+    } finally {
+      await doc.close();
     }
   }
 
