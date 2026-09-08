@@ -90,7 +90,7 @@ class _ActivityOverlayState extends State<ActivityOverlay> {
 
   // Ball placement: which edge, its top offset (null = pill row), and the
   // finger position while a drag is in flight.
-  bool _onLeft = true;
+  bool _onLeft = false;
   double? _ballTop;
   Offset? _dragPos;
 

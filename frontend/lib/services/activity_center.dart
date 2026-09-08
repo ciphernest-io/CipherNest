@@ -342,7 +342,7 @@ class ActivityCenter extends ChangeNotifier {
     final plugin = FlutterLocalNotificationsPlugin();
     try {
       await plugin.initialize(const InitializationSettings(
-          android: AndroidInitializationSettings('@mipmap/ic_launcher')));
+          android: AndroidInitializationSettings('@drawable/ic_stat_ciphernest')));
       _notifications = plugin;
     } catch (e) {
       debugPrint('ActivityCenter: notification init failed: $e');

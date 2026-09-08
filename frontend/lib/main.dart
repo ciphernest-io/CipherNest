@@ -63,6 +63,10 @@ Future<void> main() async {
       androidNotificationChannelId: 'com.ciphernest.vault.audio',
       androidNotificationChannelName: 'Music playback',
       androidNotificationOngoing: true,
+      // Monochrome silhouette of the nest wordmark. The default
+      // 'mipmap/ic_launcher' is a full-color icon, which Android renders as a
+      // solid white box in the status bar / media notification.
+      androidNotificationIcon: 'drawable/ic_stat_ciphernest',
     ),
     ByteFormat.init(),
   ]);
