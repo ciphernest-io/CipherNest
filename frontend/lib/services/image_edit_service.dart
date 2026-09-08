@@ -29,11 +29,16 @@ class ImageEditService {
   /// vault-only artifacts).
   ///
   /// Returns the resulting [CnestFile] the viewer should now display.
+  /// [folderId] places a NEW copy inside that vault folder at creation time
+  /// (ignored for [replaceOriginal], which keeps the source's placement). It
+  /// is stamped on the row AND carried on the createFile op, so peers agree
+  /// on the folder with no root-flash and no follow-up moveFile.
   Future<CnestFile> saveEdit({
     required CnestFile source,
     required Uint8List editedBytes,
     required bool replaceOriginal,
     String copyLabel = 'edited',
+    String? folderId,
   }) async {
     // 1. Thumbnail. Same parameters auto_sync_service.dart uses.
     final thumbBytes = await FlutterImageCompress.compressWithList(
@@ -76,6 +81,7 @@ class ImageEditService {
         // Vault-only artifact: no local path, no MediaStore link.
         localPath: null,
         assetId: null,
+        folderId: folderId,
         isUploaded: false,
         isFavorite: false,
       );
@@ -133,7 +139,8 @@ class ImageEditService {
           filename: editedFilename,
           contentHash: editedHash,
           sizeBytes: editedBytes.length,
-          capturedAt: capturedMs > 0 ? capturedMs : null);
+          capturedAt: capturedMs > 0 ? capturedMs : null,
+          folderId: replaceOriginal ? null : folderId);
 
       // 6. Replace-mode cleanup: delete old cloud blobs and stale cache, and
       // CLEAR the stale local_path/asset_id — they still point at the original,
@@ -178,6 +185,7 @@ class ImageEditService {
       accountId: source.accountId,
       localPath: null,
       assetId: null,
+      folderId: replaceOriginal ? source.folderId : folderId,
       cloudId: mainCloudId,
       thumbnailCloudId: thumbCloudId,
       isUploaded: true,

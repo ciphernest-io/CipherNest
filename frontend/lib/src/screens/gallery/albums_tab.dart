@@ -51,6 +51,23 @@ class AlbumsTabState extends State<AlbumsTab>
   double? _pinchBaseline;
   double _pinchStartProgress = 1.0;
 
+  // Header-reveal gate. A pinch must NOT pull the hidden "Albums" title down.
+  // The title reveals purely from scroll offset, so the fix is to stop the
+  // scroll from ever revealing it while a pinch could be forming: the physics
+  // stays LOCKED (parked at the collapsed offset) whenever a second finger is
+  // down, or while a lone finger hasn't yet committed to a deliberate pull.
+  // A single finger only unlocks the reveal after dragging past a small
+  // threshold — long enough that the first finger of a pinch never leaks.
+  Offset? _singleDragStart;
+  bool _revealConfirmed = false;
+
+  bool _isHeaderLocked() {
+    if (_startedBelowFold) return true; // classic: a drag that began below fold
+    if (_pinchActive || _pinchPointers.length >= 2) return true; // pinching
+    if (_pinchPointers.length == 1 && !_revealConfirmed) return true; // ambiguous
+    return false;
+  }
+
   double _pinchSpan() {
     final pts = _pinchPointers.values.toList();
     return (pts[0] - pts[1]).distance;
@@ -58,12 +75,19 @@ class AlbumsTabState extends State<AlbumsTab>
 
   void _onPointerDown(PointerDownEvent e) {
     _pinchPointers[e.pointer] = e.position;
+    if (_pinchPointers.length == 1) {
+      // A lone finger starts ambiguous (reveal vs. first pinch finger): keep
+      // the header locked until this finger commits to a deliberate pull.
+      _singleDragStart = e.position;
+      _revealConfirmed = false;
+    }
     if (_pinchPointers.length == 2) {
       _settleCtrl.stop();
       setState(() {
         _pinchActive = true;
         _pinchBaseline = _pinchSpan();
         _pinchStartProgress = _viewProgress;
+        _slackHeld = true; // hold tail slack across the whole gesture
       });
     }
   }
@@ -71,6 +95,17 @@ class AlbumsTabState extends State<AlbumsTab>
   void _onPointerMove(PointerMoveEvent e) {
     if (!_pinchPointers.containsKey(e.pointer)) return;
     _pinchPointers[e.pointer] = e.position;
+    if (!_pinchActive) {
+      // Lone finger: only a deliberate downward pull (past a small threshold)
+      // commits to a reveal and unlocks the header. A pinch's fingers land
+      // together before this fires, so the header stays locked and can't leak.
+      if (_pinchPointers.length == 1 && !_revealConfirmed) {
+        final start = _singleDragStart;
+        if (start != null && e.position.dy - start.dy > 16) {
+          _revealConfirmed = true;
+        }
+      }
+    }
     if (!_pinchActive || _pinchPointers.length < 2) return;
     final span = _pinchSpan();
     final baseline = _pinchBaseline;
@@ -97,6 +132,10 @@ class AlbumsTabState extends State<AlbumsTab>
       // so the layout doesn't leap.
       _pinchBaseline = _pinchSpan();
       _pinchStartProgress = _viewProgress;
+    }
+    if (_pinchPointers.isEmpty) {
+      _singleDragStart = null;
+      _revealConfirmed = false;
     }
     if (_pinchPointers.isEmpty && _pinchActive) {
       setState(() => _pinchActive = false);
@@ -138,8 +177,17 @@ class AlbumsTabState extends State<AlbumsTab>
   ScrollController? _scrollCtrl;
   double _headerH = 0;
   Timer? _motionTimer;
-  bool _headerLocked = true;
+  bool _startedBelowFold = true;
   double _bottomFiller = 0;
+
+  // A full viewport of tail slack, held from the pinch start through the
+  // settle AND the frame the real filler lands, so the morph can shrink the
+  // content (the 3-across middle rung is the shortest) without the scroll
+  // clamping down and dragging the title into view. Dropped only once
+  // _ensureHeaderReachable has set the correct _bottomFiller for the settled
+  // layout, so removing the slack can't cause a clamp.
+  bool _slackHeld = false;
+  double _slackPx = 0;
 
   @override
   void didChangeDependencies() {
@@ -166,6 +214,15 @@ class AlbumsTabState extends State<AlbumsTab>
   /// Re-publish scroll-derived chrome state (used after tab switches).
   void reportChrome() => _onScrollTick();
 
+  /// Tail slack for this frame (a full viewport while a gesture is live or
+  /// the settled filler hasn't landed), recording the amount so
+  /// _ensureHeaderReachable can subtract it from the measured scroll extent.
+  double _slackFor(BuildContext context) {
+    final held = _pinchActive || _settleCtrl.isAnimating || _slackHeld;
+    _slackPx = held ? MediaQuery.sizeOf(context).height : 0.0;
+    return _slackPx;
+  }
+
   /// Keeps offset == _headerH reachable when the morph (or a settled
   /// short layout) shrinks the content — otherwise the clamp pulls the
   /// scroll down and the title box gets dragged into view mid-pinch.
@@ -173,13 +230,24 @@ class AlbumsTabState extends State<AlbumsTab>
     if (!mounted) return;
     final ctrl = _scrollCtrl;
     if (ctrl == null || !ctrl.hasClients) return;
+    // The content's own contribution to the scroll extent, with BOTH the
+    // tail filler and the (possibly present) slack removed — otherwise the
+    // slack makes the content look tall and we under-fill, so dropping the
+    // slack later clamps the offset and reveals the title.
     final maxExtent = ctrl.position.maxScrollExtent;
-    final withoutFiller = maxExtent - _bottomFiller;
-    final needed = (_headerH - withoutFiller)
+    final contentExtent = maxExtent - _bottomFiller - _slackPx;
+    final needed = (_headerH - contentExtent + 4)
         .clamp(0.0, _headerH + ctrl.position.viewportDimension)
         .toDouble();
     if ((needed - _bottomFiller).abs() > 1) {
       setState(() => _bottomFiller = needed);
+      return;
+    }
+    // Filler is correct for the settled layout now. If the gesture is fully
+    // over, drop the slack — with _bottomFiller already right, offset ==
+    // _headerH stays reachable, so nothing clamps and the title stays put.
+    if (_slackHeld && !_pinchActive && !_settleCtrl.isAnimating) {
+      setState(() => _slackHeld = false);
     }
   }
 
@@ -187,7 +255,7 @@ class AlbumsTabState extends State<AlbumsTab>
     final chrome = widget.chrome;
     if (chrome == null || n.metrics.axis != Axis.vertical) return false;
     if (n is ScrollStartNotification && n.dragDetails != null) {
-      _headerLocked = n.metrics.pixels > _headerH + 0.5;
+      _startedBelowFold = n.metrics.pixels > _headerH + 0.5;
     }
     if (n is ScrollUpdateNotification) {
       final delta = n.scrollDelta ?? 0;
@@ -218,6 +286,8 @@ class AlbumsTabState extends State<AlbumsTab>
         builder: (context, _) {
           final cs = Theme.of(context).colorScheme;
           final off = ctrl.hasClients ? ctrl.offset : _headerH;
+          // While a pinch is active or settling, ignore the live offset (the
+          // inline morph is shifting it) and hold the pre-pinch fraction.
           final frac = (1 - off / _headerH).clamp(0.0, 1.0);
           return Opacity(
             opacity: Curves.easeIn.transform(frac),
@@ -392,7 +462,7 @@ class AlbumsTabState extends State<AlbumsTab>
           ? const NeverScrollableScrollPhysics()
           : HeaderSnapPhysics(
               collapsedOffset: _headerH,
-              headerLocked: () => _headerLocked,
+              headerLocked: _isHeaderLocked,
               parent: const AlwaysScrollableScrollPhysics(),
             ),
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 120),
@@ -455,14 +525,12 @@ class AlbumsTabState extends State<AlbumsTab>
               for (final album in _unbacked) _unbackedCard(album, cs),
             ]),
         ],
-        // Header-reachability filler; during the pinch a full viewport of
-        // slack is added so the live height changes can never clamp the
-        // scroll into the title box.
-        SizedBox(
-            height: _bottomFiller +
-                ((_pinchActive || _settleCtrl.isAnimating)
-                    ? MediaQuery.sizeOf(context).height
-                    : 0)),
+        // Header-reachability filler; while the gesture is live (and until
+        // the settled filler lands) a full viewport of slack is added so the
+        // morph's height changes can never clamp the scroll into the title
+        // box. _slackPx records how much, so _ensureHeaderReachable can back
+        // it out of its filler math.
+        SizedBox(height: _bottomFiller + _slackFor(context)),
       ],
       ),
       ),
@@ -599,13 +667,23 @@ class AlbumsTabState extends State<AlbumsTab>
                       children: [
                         ThemeIcon('plus',
                             color: cs.onSurface.withAlpha(140), size: 40),
-                        const SizedBox(height: 8),
-                        Opacity(
-                          opacity: g,
-                          child: Text('Create Album',
-                              style: TextStyle(
-                                  color: cs.onSurface.withAlpha(140),
-                                  fontSize: 13)),
+                        // The label only claims vertical space as the card
+                        // morphs toward the grid state; at g=0 (list view) it
+                        // collapses to zero height so the plus sits at the
+                        // card's true vertical centre rather than being
+                        // shoved up by an invisible (opacity 0) label.
+                        Align(
+                          heightFactor: g,
+                          child: Opacity(
+                            opacity: g,
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: Text('Create Album',
+                                  style: TextStyle(
+                                      color: cs.onSurface.withAlpha(140),
+                                      fontSize: 13)),
+                            ),
+                          ),
                         ),
                       ],
                     ),

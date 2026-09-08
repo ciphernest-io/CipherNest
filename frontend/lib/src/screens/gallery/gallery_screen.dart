@@ -6,6 +6,7 @@ import '../../widgets/theme_icon.dart';
 import 'albums_tab.dart';
 import 'gallery_chrome.dart';
 import 'gallery_search_screen.dart';
+import 'menu_tab.dart';
 import 'pictures_tab.dart';
 import 'stories_tab.dart';
 
@@ -27,6 +28,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
   int _bottomNavIndex = 0;
   final _picturesKey = GlobalKey<PicturesTabState>();
   final _albumsKey = GlobalKey<AlbumsTabState>();
+  final _storiesKey = GlobalKey<StoriesTabState>();
   final _chrome = GalleryChrome();
 
   @override
@@ -52,6 +54,8 @@ class _GalleryScreenState extends State<GalleryScreen> {
           _picturesKey.currentState?.reportChrome();
         case 1:
           _albumsKey.currentState?.reportChrome();
+        case 2:
+          _storiesKey.currentState?.reportChrome();
       }
     });
   }
@@ -80,8 +84,11 @@ class _GalleryScreenState extends State<GalleryScreen> {
               children: [
                 PicturesTab(key: _picturesKey, chrome: _chrome),
                 AlbumsTab(key: _albumsKey, chrome: _chrome),
-                SafeArea(bottom: false, child: const StoriesTab()),
-                SafeArea(bottom: false, child: _buildMenuTab()),
+                // No SafeArea wrapper: Stories manages its own top inset in
+                // its header (like Pictures/Albums) so its title lands at the
+                // same level rather than a SafeArea-shifted one.
+                StoriesTab(key: _storiesKey, chrome: _chrome),
+                const SafeArea(bottom: false, child: MenuTab()),
               ],
             ),
           ),
@@ -97,6 +104,13 @@ class _GalleryScreenState extends State<GalleryScreen> {
   // ---- top-left: search + overflow, translucent pill when scrolled ----
 
   Widget _topButtons(double safeTop) {
+    // The Menu tab has no search or overflow actions — no top chrome there.
+    // MUST stay a Positioned (not a bare SizedBox): a non-positioned zero-size
+    // child collapses the body Stack to 0x0 under loose constraints, which
+    // clipped the ENTIRE Menu tab (grid, pill, everything) to nothing.
+    if (_bottomNavIndex == 3) {
+      return const Positioned(top: 0, left: 0, child: SizedBox.shrink());
+    }
     return ValueListenableBuilder<bool>(
       valueListenable: _chrome.selectionActive,
       builder: (context, selection, _) => ValueListenableBuilder<double>(
@@ -107,7 +121,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
           // their upper limit when scrolling back up.
           final top = safeTop +
               6 +
-              ((_bottomNavIndex == 0 || _bottomNavIndex == 1) ? reveal : 0);
+              (_bottomNavIndex <= 2 ? reveal : 0);
           // Selection swaps the CONTENT of this same line — the count and
           // the selection actions fill it edge to edge. Same top rule, so
           // it never rides into the title box, and being an overlay it
@@ -192,11 +206,10 @@ class _GalleryScreenState extends State<GalleryScreen> {
         valueListenable: _chrome.scrolledUnder,
         builder: (context, under, _) {
           final visible = !hidden;
-          // Pictures and Albums have the reveal header; the other
-          // tabs' content is always "under" the buttons.
-          final pillBg = (_bottomNavIndex == 0 || _bottomNavIndex == 1)
-              ? under
-              : true;
+          // Pictures, Albums and Stories all have the reveal header, so the
+          // pill only solidifies once their content scrolls under it. The
+          // Menu tab (3) has no reveal, so it stays solid.
+          final pillBg = _bottomNavIndex <= 2 ? under : true;
           return IgnorePointer(
             ignoring: !visible,
             child: AnimatedOpacity(
@@ -234,7 +247,10 @@ class _GalleryScreenState extends State<GalleryScreen> {
                             builder: (_) => const GallerySearchScreen()),
                       ),
                     ),
-                    _overflowMenu(cs),
+                    // Stories has no overflow actions (its only item was
+                    // Settings, reachable from the Menu tab) — drop the
+                    // three-dot there entirely.
+                    if (_bottomNavIndex != 2) _overflowMenu(cs),
                   ],
                 ),
               ),
@@ -431,57 +447,4 @@ class _GalleryScreenState extends State<GalleryScreen> {
     );
   }
 
-  // ---- menu tab (unchanged content; bottom clearance for the pill) ----
-
-  Widget _buildMenuTab() {
-    final cs = Theme.of(context).colorScheme;
-    return ListView(
-      children: [
-        const SizedBox(height: 32),
-        CircleAvatar(
-          radius: 36,
-          backgroundColor: cs.primary,
-          // onPrimary, not onSurface — the glyph sits on the accent disc.
-          child: ThemeIcon('lock', color: cs.onPrimary, size: 32),
-        ),
-        const SizedBox(height: 16),
-        Center(
-          child: Text('CipherNest',
-              style: TextStyle(
-                  color: cs.onSurface,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold)),
-        ),
-        const SizedBox(height: 32),
-        ListTile(
-          leading: ThemeIcon('gear', color: cs.onSurface.withAlpha(120)),
-          title: Text('Settings', style: TextStyle(color: cs.onSurface)),
-          trailing: ThemeIcon('caretRight',
-              size: 16, color: cs.onSurface.withAlpha(120)),
-          onTap: () => Navigator.pushNamed(context, AppRoutes.settings),
-        ),
-        ListTile(
-          leading: ThemeIcon('key', color: cs.onSurface.withAlpha(120)),
-          title:
-              Text('Key Management', style: TextStyle(color: cs.onSurface)),
-          trailing: ThemeIcon('caretRight',
-              size: 16, color: cs.onSurface.withAlpha(120)),
-          onTap: () => Navigator.pushNamed(context, AppRoutes.keyManagement),
-        ),
-        ListTile(
-          leading: ThemeIcon('images', color: cs.onSurface.withAlpha(120)),
-          title:
-              Text('Migrate Gallery', style: TextStyle(color: cs.onSurface)),
-          trailing: ThemeIcon('caretRight',
-              size: 16, color: cs.onSurface.withAlpha(120)),
-          onTap: () => Navigator.pushNamed(context, AppRoutes.migration),
-        ),
-        const SizedBox(height: 40),
-        Center(
-            child: Text('CipherNest v0.5.0 Beta',
-                style: TextStyle(color: cs.onSurface.withAlpha(60)))),
-        const SizedBox(height: 120),
-      ],
-    );
-  }
 }

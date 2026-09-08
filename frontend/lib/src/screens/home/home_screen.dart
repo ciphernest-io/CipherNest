@@ -505,8 +505,13 @@ class _DashboardCard extends StatelessWidget {
                   // readable.
                   Positioned.fill(
                     child: Opacity(
-                      // Tuned on-device (Aug 31): 0.33.
-                      opacity: 0.33,
+                      // Tuned on-device (Aug 31): 0.33; raised ~30% (Sep 5)
+                      // so the pack art reads more clearly, and a further
+                      // +20% in LIGHT mode only (art washes out on the light
+                      // surface where it holds up on the dark one).
+                      opacity: Theme.of(context).brightness == Brightness.light
+                          ? 0.52
+                          : 0.43,
                       child: Image.asset(
                         tokens.cardArtAsset,
                         fit: BoxFit.cover,

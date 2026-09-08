@@ -16,8 +16,9 @@ import '../screens/documents/documents_screen.dart';
 import '../screens/settings/settings_screen.dart';
 import '../screens/settings/key_management_screen.dart';
 import '../screens/settings/recycle_bin_screen.dart';
+import '../screens/settings/change_password_screen.dart';
+import '../screens/settings/view_phrase_screen.dart';
 import '../screens/folders/folder_browser_screen.dart';
-import '../screens/migration/migration_screen.dart';
 import '../screens/gallery/album_detail_screen.dart';
 import '../screens/music/music_home_screen.dart';
 import '../screens/settings/active_shares_screen.dart';
@@ -40,7 +41,8 @@ class AppRoutes {
   static const String documents = '/documents';
   static const String settings = '/settings'; 
   static const String keyManagement = '/key-management';
-  static const String migration = '/migration';
+  static const String changePassword = '/change-password';
+  static const String viewPhrase = '/view-phrase';
   static const String albumDetail = '/album-detail';
   static const String audio = '/audio';
   static const String activeShares = '/active-shares';
@@ -130,14 +132,19 @@ class AppRoutes {
       case documents:
         return MaterialPageRoute(builder: (_) => const DocumentsScreen());
 
-      case settings: // Now this correctly refers to the static String
-        return MaterialPageRoute(builder: (_) => const SettingsScreen());
+      case settings:
+        final section = routeSettings.arguments as String?;
+        return MaterialPageRoute(
+            builder: (_) => SettingsScreen(initialSection: section));
 
       case keyManagement:
         return MaterialPageRoute(builder: (_) => const KeyManagementScreen());
 
-      case migration:
-        return MaterialPageRoute(builder: (_) => const MigrationScreen());
+      case changePassword:
+        return MaterialPageRoute(builder: (_) => const ChangePasswordScreen());
+
+      case viewPhrase:
+        return MaterialPageRoute(builder: (_) => const ViewPhraseScreen());
 
       case albumDetail:
         final album = routeSettings.arguments as CnestAlbum;

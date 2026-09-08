@@ -91,7 +91,7 @@ class DatabaseService extends ChangeNotifier {
 
     final db = await openDatabase(
       path,
-      version: 21,
+      version: 22,
       onCreate: (db, version) async {
         await _createSchema(db);
         await _createSyncSchema(db);
@@ -309,6 +309,16 @@ class DatabaseService extends ChangeNotifier {
         if (oldVersion < 21) {
           await db.execute(_createGuardVerdictsTableSql);
         }
+        // v22: user-editable audio tags (Edit details). Device-local
+        // overrides that take precedence over what the parser reads from the
+        // file; NULL means "fall back to the embedded tag".
+        if (oldVersion < 22) {
+          await db.execute('ALTER TABLE files ADD COLUMN tag_artist TEXT');
+          await db.execute('ALTER TABLE files ADD COLUMN tag_album TEXT');
+          await db
+              .execute('ALTER TABLE files ADD COLUMN tag_album_artist TEXT');
+          await db.execute('ALTER TABLE files ADD COLUMN tag_genre TEXT');
+        }
   }
 
   /// The virtual folder tree (v15). Fully op-derived — every row is
@@ -452,7 +462,11 @@ class DatabaseService extends ChangeNotifier {
         folder_id TEXT,
         deleted_by_folder_id TEXT,
         is_hidden INTEGER NOT NULL DEFAULT 0,
-        prior_key INTEGER NOT NULL DEFAULT 0
+        prior_key INTEGER NOT NULL DEFAULT 0,
+        tag_artist TEXT,
+        tag_album TEXT,
+        tag_album_artist TEXT,
+        tag_genre TEXT
       )
     ''');
     await db.execute(_createFoldersTableSql);
@@ -507,16 +521,16 @@ class DatabaseService extends ChangeNotifier {
 
   static Future<void> _seedSmartPlaylists(Database db) async {
     final now = DateTime.now().millisecondsSinceEpoch;
+    // Retired: Favourites has its own top-level tab, so a duplicate smart
+    // playlist in the Playlists grid was pure noise. Drop any previously
+    // seeded row (idempotent — runs every open).
+    await db.delete('albums',
+        where: "id = 'smart_audio_favourites'");
     for (final playlist in [
       {
         'id': 'smart_audio_recent',
         'name': 'Recently added',
         'query': 'audio_recent',
-      },
-      {
-        'id': 'smart_audio_favourites',
-        'name': 'Favourites',
-        'query': 'audio_favourites',
       },
     ]) {
       await db.insert('albums', {
@@ -642,6 +656,48 @@ class DatabaseService extends ChangeNotifier {
         folderId: folderId,
       );
     }
+    notifyListeners();
+  }
+
+  /// Points a file's row at a new (or absent) encrypted thumbnail blob.
+  /// Device-local ONLY — no sync op: `thumbnail_cloud_id` is a device-local
+  /// column that peers re-derive by reconciling the `<fileId>_thumb.cnest`
+  /// blob by stem (see SyncEngine.applyMergedState). So a re-covered track
+  /// converges across devices the moment the caller has swapped that blob
+  /// under its canonical name — this write just makes the change visible on
+  /// THIS device immediately.
+  Future<void> setThumbnailCloudId(String id, String? thumbCloudId) async {
+    final db = await database;
+    await db.update(
+      'files',
+      {'thumbnail_cloud_id': thumbCloudId},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    notifyListeners();
+  }
+
+  /// Saves user-edited audio tags (the Edit-details form). Device-local
+  /// overrides; a null value clears the override back to the embedded tag.
+  Future<void> updateAudioTags(
+    String id, {
+    String? artist,
+    String? album,
+    String? albumArtist,
+    String? genre,
+  }) async {
+    final db = await database;
+    await db.update(
+      'files',
+      {
+        'tag_artist': artist,
+        'tag_album': album,
+        'tag_album_artist': albumArtist,
+        'tag_genre': genre,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
     notifyListeners();
   }
 
@@ -1505,6 +1561,30 @@ class DatabaseService extends ChangeNotifier {
   /// [includeHidden] is for MACHINERY callers only (migration dedup, the
   /// "is the vault empty?" check) — anything user-facing must keep the
   /// default so hidden folders stay hidden.
+  /// Heals rows misfiled as `other` whose extension is actually a document
+  /// type — e.g. `.md`/`.markdown`, added to the document set after those
+  /// files were already uploaded and classified `other`. Local-only and
+  /// SILENT: `type` is a derived column (never synced, never on the wire),
+  /// and the caller re-queries right after, so no notifyListeners. Idempotent.
+  Future<void> reclassifyMisfiledDocuments() async {
+    final db = await database;
+    if (_currentAccountId == null) return;
+    final rows = await db.query('files',
+        columns: ['id', 'filename'],
+        where: 'account_id = ? AND type = ?',
+        whereArgs: [_currentAccountId, CnestFileType.other.index]);
+    final ids = <String>[
+      for (final r in rows)
+        if (CnestFileTypeWire.fromFilename((r['filename'] as String?) ?? '') ==
+            CnestFileType.document)
+          r['id'] as String,
+    ];
+    if (ids.isEmpty) return;
+    final placeholders = List.filled(ids.length, '?').join(',');
+    await db.update('files', {'type': CnestFileType.document.index},
+        where: 'id IN ($placeholders)', whereArgs: ids);
+  }
+
   Future<List<CnestFile>> getFilesByType(CnestFileType type,
           {bool includeHidden = false}) =>
       trace('getFilesByType',
@@ -1922,6 +2002,7 @@ class DatabaseService extends ChangeNotifier {
         END as file_count
       FROM albums a
       WHERE a.kind = ? AND (a.is_smart = 1 OR a.account_id = ?)
+        AND a.id != 'smart_audio_favourites'
       ORDER BY a.is_smart DESC, a.created_at ASC
     ''', [kind, _currentAccountId]);
     final albums = rows.map((r) => CnestAlbum.fromMap(r)).toList();
@@ -2277,6 +2358,126 @@ class DatabaseService extends ChangeNotifier {
           'AND created_at BETWEEN ? AND ?${hiddenExclusion()}',
       whereArgs: [_currentAccountId, minMs, maxMs],
       orderBy: 'created_at DESC',
+    );
+    return maps.map((m) => CnestFile.fromMap(m)).toList();
+  }
+
+  /// Maps every file's cloud id AND local id to its owning account, across
+  /// ALL accounts (deliberately NOT scoped to the current account). Used to
+  /// attribute the flat, account-less cache files (keyed by cloudId or
+  /// fileId) back to an account for the Settings cache-usage breakdown.
+  Future<Map<String, String>> getCacheOwnerMap() async {
+    final db = await database;
+    final rows = await db.query('files',
+        columns: ['id', 'cloud_id', 'account_id']);
+    final map = <String, String>{};
+    for (final r in rows) {
+      final acc = r['account_id'] as String?;
+      if (acc == null) continue;
+      final id = r['id'] as String?;
+      final cloud = r['cloud_id'] as String?;
+      if (id != null) map[id] = acc;
+      if (cloud != null) map[cloud] = acc;
+    }
+    return map;
+  }
+
+  // --- STORIES / MEMORIES QUERIES ---
+
+  /// "N years ago" as a whole-year BAND, not an exact-day match: type-0
+  /// (photo/video) files at least [years] years old but less than [years]+1.
+  /// Ordered closest to the N-year mark first (most recent in the band), so
+  /// "A year ago" surfaces whatever is nearest to a year old even when nothing
+  /// was captured on the exact anniversary. Soft-deleted and hidden excluded.
+  Future<List<CnestFile>> getFilesFromYearsAgo(int years,
+      {int limit = 80}) async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final now = DateTime.now();
+    // upper = the "N years ago" instant (files must be at least this old);
+    // lower = the "N+1 years ago" instant (files must be newer than this).
+    final upperMs =
+        DateTime(now.year - years, now.month, now.day).millisecondsSinceEpoch;
+    final lowerMs = DateTime(now.year - years - 1, now.month, now.day)
+        .millisecondsSinceEpoch;
+    final maps = await db.query(
+      'files',
+      where: 'type = 0 AND account_id = ? AND is_deleted = 0 '
+          'AND created_at > ? AND created_at <= ?${hiddenExclusion()}',
+      whereArgs: [_currentAccountId, lowerMs, upperMs],
+      orderBy: 'created_at DESC',
+      limit: limit,
+    );
+    return maps.map((m) => CnestFile.fromMap(m)).toList();
+  }
+
+  /// "Last month": type-0 files captured during the previous calendar month.
+  Future<List<CnestFile>> getLastMonth({int limit = 80}) async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final now = DateTime.now();
+    final startMs = DateTime(now.year, now.month - 1, 1).millisecondsSinceEpoch;
+    final endMs = DateTime(now.year, now.month, 1).millisecondsSinceEpoch;
+    final maps = await db.query(
+      'files',
+      where: 'type = 0 AND account_id = ? AND is_deleted = 0 '
+          'AND created_at >= ? AND created_at < ?${hiddenExclusion()}',
+      whereArgs: [_currentAccountId, startMs, endMs],
+      orderBy: 'created_at DESC',
+      limit: limit,
+    );
+    return maps.map((m) => CnestFile.fromMap(m)).toList();
+  }
+
+  /// "On this day": type-0 files whose calendar month+day matches today, in
+  /// any PRIOR year. Newest first.
+  Future<List<CnestFile>> getMemoriesOnThisDay({int limit = 80}) async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final now = DateTime.now();
+    final md = '${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}';
+    final maps = await db.rawQuery(
+      "SELECT * FROM files WHERE type = 0 AND account_id = ? "
+      "AND is_deleted = 0${hiddenExclusion()} "
+      "AND strftime('%m-%d', created_at/1000, 'unixepoch', 'localtime') = ? "
+      "AND strftime('%Y', created_at/1000, 'unixepoch', 'localtime') < ? "
+      "ORDER BY created_at DESC LIMIT ?",
+      [_currentAccountId, md, now.year.toString(), limit],
+    );
+    return maps.map((m) => CnestFile.fromMap(m)).toList();
+  }
+
+  /// "Best of this month": favorited type-0 files captured in the current
+  /// calendar month, any year. Empty when nothing is favorited.
+  Future<List<CnestFile>> getBestOfThisMonth({int limit = 80}) async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final mm = DateTime.now().month.toString().padLeft(2, '0');
+    final maps = await db.rawQuery(
+      "SELECT * FROM files WHERE type = 0 AND account_id = ? "
+      "AND is_deleted = 0 AND is_favorite = 1${hiddenExclusion()} "
+      "AND strftime('%m', created_at/1000, 'unixepoch', 'localtime') = ? "
+      "ORDER BY created_at DESC LIMIT ?",
+      [_currentAccountId, mm, limit],
+    );
+    return maps.map((m) => CnestFile.fromMap(m)).toList();
+  }
+
+  /// "Today's recap": type-0 files captured since local midnight today.
+  Future<List<CnestFile>> getTodaysRecap({int limit = 80}) async {
+    final db = await database;
+    if (_currentAccountId == null) return [];
+    final now = DateTime.now();
+    final startMs =
+        DateTime(now.year, now.month, now.day).millisecondsSinceEpoch;
+    final maps = await db.query(
+      'files',
+      where: 'type = 0 AND account_id = ? AND is_deleted = 0 '
+          'AND created_at >= ?${hiddenExclusion()}',
+      whereArgs: [_currentAccountId, startMs],
+      orderBy: 'created_at DESC',
+      limit: limit,
     );
     return maps.map((m) => CnestFile.fromMap(m)).toList();
   }
