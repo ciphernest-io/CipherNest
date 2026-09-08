@@ -84,6 +84,15 @@ dependencies:
   # fails. Keep this below 4.4 until pro_image_editor catches up.
   emoji_picker_flutter: ">=4.3.0 <4.4.0"
   flutter_svg: ^2.3.0
+  url_launcher: ^6.3.2
+  pdfx: ^2.11.0
+
+# CipherNest vendors just_audio_background with a one-line patch that removes
+# the hardcoded stop/close button from the media notification. See
+# third_party/just_audio_background/lib/just_audio_background.dart.
+dependency_overrides:
+  just_audio_background:
+    path: third_party/just_audio_background
 
 dev_dependencies:
   flutter_test:
@@ -132,6 +141,10 @@ flutter:
     - family: IM Fell English
       fonts:
         - asset: assets/fonts/IMFellEnglish-Regular.ttf
+          weight: 400
+    - family: Cormorant Upright
+      fonts:
+        - asset: assets/fonts/CormorantUpright-Regular.ttf
           weight: 400
     - family: DM Sans
       fonts:
