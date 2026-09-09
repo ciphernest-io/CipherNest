@@ -56,7 +56,7 @@
             </intent-filter>
             <!-- CipherNest share App Link.
                  autoVerify="true" tells Android to look up
-                 https://ciphernest.ciphernest20.workers.dev/.well-known/assetlinks.json
+                 https://share.ciphernest.io/.well-known/assetlinks.json
                  so the app opens directly. Without that file the user just
                  sees a one-time "Open with" chooser. Host must exactly match
                  AppConstants.shareHost in lib/src/config/constants.dart. -->
@@ -65,7 +65,7 @@
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="https"
-                      android:host="ciphernest.ciphernest20.workers.dev"
+                      android:host="share.ciphernest.io"
                       android:pathPrefix="/s/"/>
             </intent-filter>
             <!-- OAuth return relay: the worker callback page's button fires

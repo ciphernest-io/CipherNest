@@ -2,12 +2,12 @@
 /// swapped in one place without touching call sites.
 class AppConstants {
   /// The Cloudflare host serving the share web viewer. Recipients open magic
-  /// links pointing here. Deployed as a Workers-with-static-assets project
-  /// (Cloudflare killed the standalone Pages create flow in 2026, so new
-  /// projects live under `<name>.<subdomain>.workers.dev`). If you migrate
-  /// to a custom domain later, set up a 302 redirect from the old host so
-  /// previously-issued links keep working.
-  static const String shareHost = 'ciphernest.ciphernest20.workers.dev';
+  /// links pointing here. Served by the `ciphernest` Worker (worker.js +
+  /// web-viewer/) on its custom domain. This base URL is baked into every share
+  /// link at creation, so keep it stable. The old workers.dev host
+  /// (ciphernest.ciphernest20.workers.dev) stays enabled on the same Worker, so
+  /// links minted before this cutover still resolve.
+  static const String shareHost = 'share.ciphernest.io';
 
   /// Custom URL scheme used for app deep linking (OAuth callback + share open-in-app).
   static const String urlScheme = 'ciphernest';
