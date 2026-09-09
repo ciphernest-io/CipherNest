@@ -11,3 +11,7 @@ CLAUDE.md
 CLAUDE_CODE_PROMPT.md
 .claude/
 .wrangler/
+
+# Signed build artifacts: publish via GitHub Releases, not in git.
+*.apk
+*.aab
