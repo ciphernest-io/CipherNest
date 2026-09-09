@@ -14,7 +14,12 @@
   "assets": {
     "directory": "./web-viewer",
     "binding": "ASSETS",
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    // Without this, the static-assets layer serves index.html (the SPA
+    // fallback) for /proxy before worker.js runs, so the CORS proxy is dead and
+    // in-browser share decryption fails. Run the Worker FIRST for /proxy only;
+    // every other path still serves static assets directly (with SPA fallback).
+    "run_worker_first": ["/proxy"]
   },
   "observability": {
     "enabled": true
