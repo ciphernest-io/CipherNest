@@ -4,6 +4,13 @@
   "main": "./worker.js",
   "compatibility_date": "2026-07-05",
   "compatibility_flags": ["nodejs_compat"],
+  // Attach the share viewer to share.ciphernest.io as a Custom Domain. Applied
+  // on deploy: `wrangler deploy` (or the GitHub-triggered Workers build) creates
+  // the `share` DNS record + TLS cert automatically. The zone ciphernest.io is
+  // on the same (ciphernest20) Cloudflare account, which is required for this.
+  "routes": [
+    { "pattern": "share.ciphernest.io", "custom_domain": true }
+  ],
   "assets": {
     "directory": "./web-viewer",
     "binding": "ASSETS",
