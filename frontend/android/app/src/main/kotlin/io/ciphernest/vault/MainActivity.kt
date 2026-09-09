@@ -1,4 +1,4 @@
-package com.example.frontend
+package io.ciphernest.vault
 
 import android.content.Intent
 import android.net.Uri

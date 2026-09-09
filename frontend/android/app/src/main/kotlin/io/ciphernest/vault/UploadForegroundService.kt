@@ -1,4 +1,4 @@
-package com.example.frontend
+package io.ciphernest.vault
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -23,9 +23,9 @@ import androidx.core.app.ServiceCompat
 class UploadForegroundService : Service() {
 
     companion object {
-        const val ACTION_START = "com.example.frontend.upload_fg.START"
-        const val ACTION_STOP = "com.example.frontend.upload_fg.STOP"
-        const val ACTION_UPDATE = "com.example.frontend.upload_fg.UPDATE"
+        const val ACTION_START = "io.ciphernest.vault.upload_fg.START"
+        const val ACTION_STOP = "io.ciphernest.vault.upload_fg.STOP"
+        const val ACTION_UPDATE = "io.ciphernest.vault.upload_fg.UPDATE"
         const val EXTRA_TITLE = "title"
         const val EXTRA_TEXT = "text"
         const val EXTRA_PROGRESS = "progress"

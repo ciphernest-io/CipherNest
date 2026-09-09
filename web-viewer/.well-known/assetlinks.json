@@ -3,7 +3,7 @@
     "relation": ["delegate_permission/common.handle_all_urls"],
     "target": {
       "namespace": "android_app",
-      "package_name": "com.example.frontend",
+      "package_name": "io.ciphernest.vault",
       "sha256_cert_fingerprints": [
         "FF:CD:23:AE:34:6C:51:F1:F2:E6:56:DA:4E:FA:A3:32:E3:29:45:97:D4:88:F9:1E:A4:A0:40:AA:66:BD:CB:68"
       ]

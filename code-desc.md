@@ -701,15 +701,17 @@ showing an "Open with…" chooser.
 ]
 ```
 
-- **`package_name: com.example.frontend`** — your app's unique Android ID.
-  This is what the code *currently* ships. Heads-up for launch: `com.example.*`
-  is Android's *placeholder* package name and the Play Store rejects it. The
-  final launch name has been decided as **`io.ciphernest.vault`** (reverse of
-  the `ciphernest.io` domain you own). The rename touches this file, the Gradle
-  `applicationId`/`namespace`, the Kotlin package folders, the OAuth/MSAL
-  redirects, and `oauth-callback.html`; it's mapped as scheduled work in the
-  resolution plan (item B1) and done as its own release-build-tested change, not
-  bundled with small fixes.
+- **`package_name: io.ciphernest.vault`** — your app's unique Android ID.
+  This was renamed from the old `com.example.frontend` placeholder (which the
+  Play Store rejects) to the final `io.ciphernest.vault` (reverse of the
+  `ciphernest.io` domain you own). The rename touched this file, the Gradle
+  `applicationId`/`namespace`, the Kotlin package folders (`io/ciphernest/vault/`),
+  and `oauth-callback.html`'s `package=` target. Note the OneDrive and Google
+  redirects are *not* package-based (OneDrive uses the https `/oauth-callback`
+  page + the `ciphernest` scheme; Google Sign-In matches on package + signing
+  SHA-1 in Google Cloud), so the one external follow-up is registering the new
+  package + SHA-1 in the Google Cloud Android OAuth client, and redeploying this
+  file to Cloudflare so its `package_name` matches the installed app.
 - **`sha256_cert_fingerprints`** — the fingerprint of the certificate your APK
   is signed with. Android checks that the app trying to open the link is signed
   by this exact key. **This is currently your debug key's fingerprint** — when

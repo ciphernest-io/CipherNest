@@ -1,4 +1,4 @@
-package com.example.frontend
+package io.ciphernest.vault
 
 import android.app.KeyguardManager
 import android.content.Context
