@@ -22,9 +22,9 @@ const ALLOWED_HOSTS = new Set([
 ]);
 
 const ALLOWED_HOST_SUFFIXES = [
+  // OneDrive for Business / SharePoint download hosts. No Dropbox provider
+  // exists, so its suffixes were removed (SA-WEB-01, allowlist trim).
   '.sharepoint.com',
-  '.dropbox.com',
-  '.dl.dropboxusercontent.com',
 ];
 
 function isAllowed(host) {
