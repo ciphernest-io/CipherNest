@@ -367,12 +367,24 @@ async function render(bytes) {
   actions.classList.remove('hidden');
   preview.innerHTML = '';
 
-  let mediaEl = null; // image/video get a fullscreen affordance below
+  let mediaEl = null;   // element the Fullscreen button targets
+  let fsKind = null;
   if (kind === 'image') {
+    // Wrap the image in a stage we can fullscreen AND zoom — a bare <img> in
+    // fullscreen can't be zoomed or panned. While fullscreen, clicking the
+    // image toggles zoom (fit <-> actual pixels; the stage scrolls to pan).
+    const stage = document.createElement('div');
+    stage.className = 'img-stage';
     const img = document.createElement('img');
     img.src = url;
-    preview.appendChild(img);
-    mediaEl = img;
+    img.className = 'shot';
+    img.addEventListener('click', () => {
+      if (document.fullscreenElement === stage) stage.classList.toggle('zoomed');
+    });
+    stage.appendChild(img);
+    preview.appendChild(stage);
+    mediaEl = stage;
+    fsKind = 'image';
   } else if (kind === 'video') {
     const v = document.createElement('video');
     v.src = url;
@@ -381,6 +393,7 @@ async function render(bytes) {
     v.playsInline = true;
     preview.appendChild(v);
     mediaEl = v;
+    fsKind = 'video';
   } else if (kind === 'audio') {
     const a = document.createElement('audio');
     a.src = url;
@@ -417,12 +430,19 @@ async function render(bytes) {
     fsBtn.className = 'fs-btn outline';
     fsBtn.textContent = '⛶ Fullscreen';
     fsBtn.onclick = () => {
+      if (fsKind === 'image') mediaEl.classList.remove('zoomed'); // enter fit
       const req = mediaEl.requestFullscreen ||
         mediaEl.webkitRequestFullscreen ||
         mediaEl.webkitEnterFullscreen;
       if (req) req.call(mediaEl);
     };
     preview.appendChild(fsBtn);
+    if (fsKind === 'image') {
+      // Leaving fullscreen resets to fit, so the next open starts un-zoomed.
+      document.addEventListener('fullscreenchange', () => {
+        if (!document.fullscreenElement) mediaEl.classList.remove('zoomed');
+      });
+    }
   }
 
   downloadBtn.onclick = () => {
