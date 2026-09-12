@@ -367,16 +367,20 @@ async function render(bytes) {
   actions.classList.remove('hidden');
   preview.innerHTML = '';
 
+  let mediaEl = null; // image/video get a fullscreen affordance below
   if (kind === 'image') {
     const img = document.createElement('img');
     img.src = url;
     preview.appendChild(img);
+    mediaEl = img;
   } else if (kind === 'video') {
     const v = document.createElement('video');
     v.src = url;
     v.controls = true;
     v.preload = 'metadata';
+    v.playsInline = true;
     preview.appendChild(v);
+    mediaEl = v;
   } else if (kind === 'audio') {
     const a = document.createElement('audio');
     a.src = url;
@@ -401,6 +405,24 @@ async function render(bytes) {
     caption.className = 'preview-caption';
     caption.textContent = lastFilename + ' · ' + humanSize(bytes.byteLength);
     preview.appendChild(caption);
+  }
+
+  // Fullscreen affordance for images and videos. Videos also carry the
+  // browser's native control; this adds an explicit button and covers images,
+  // which have none. No-ops silently where the Fullscreen API is unavailable
+  // (e.g. images on iOS Safari).
+  if (mediaEl) {
+    const fsBtn = document.createElement('button');
+    fsBtn.type = 'button';
+    fsBtn.className = 'fs-btn outline';
+    fsBtn.textContent = '⛶ Fullscreen';
+    fsBtn.onclick = () => {
+      const req = mediaEl.requestFullscreen ||
+        mediaEl.webkitRequestFullscreen ||
+        mediaEl.webkitEnterFullscreen;
+      if (req) req.call(mediaEl);
+    };
+    preview.appendChild(fsBtn);
   }
 
   downloadBtn.onclick = () => {

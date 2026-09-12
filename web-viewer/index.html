@@ -30,6 +30,7 @@
       --accent-press: #333336;
       --on-accent: #FFFFFF;
       --danger: #1A1A1C;
+      --logo: url('/img/ciphernest_logo_black.png');
       color-scheme: light dark;
     }
     @media (prefers-color-scheme: dark) {
@@ -45,6 +46,7 @@
         --accent-press: #CFCFD2;
         --on-accent: #161617;
         --danger: #E6E6E8;
+        --logo: url('/img/ciphernest_logo_white.png');
       }
     }
 
@@ -54,22 +56,28 @@
       min-height: 100vh; }
     a { color: var(--fg); text-decoration: none; }
     a:hover { text-decoration: underline; }
-    .wrap { max-width: 640px; margin: 0 auto; padding: 40px 20px; }
+    .wrap { max-width: 620px; margin: 0 auto; padding: 40px 20px; }
 
-    header { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
+    /* Centered brand lockup: logo mark over the wordmark over a small badge. */
+    header { display: flex; flex-direction: column; align-items: center;
+      gap: 10px; margin-bottom: 26px; text-align: center; }
+    .logo-mark { height: 60px; aspect-ratio: 765 / 1024;
+      background: center / contain no-repeat var(--logo); }
     header .logo { font-family: 'BungeeHairline', -apple-system, system-ui, sans-serif;
-      font-weight: 400; font-size: 26px; letter-spacing: 0.5px; color: var(--fg); }
+      font-weight: 400; font-size: 26px; letter-spacing: 0.5px; color: var(--fg);
+      line-height: 1; }
     header .badge { font-size: 11px; padding: 3px 9px; background: var(--surface);
-      border: 1px solid var(--hairline); border-radius: 12px; color: var(--muted);
+      border: 1px solid var(--hairline); border-radius: 999px; color: var(--muted);
       letter-spacing: 0.02em; }
 
     .panel { background: var(--surface); border: 1px solid var(--hairline);
-      border-radius: 14px; padding: 24px; }
+      border-radius: 14px; padding: 26px 24px; text-align: center; }
     h1 { margin: 0 0 6px; font-size: 19px; font-weight: 600; letter-spacing: -0.02em; }
-    .sub { color: var(--muted); font-size: 13px; line-height: 1.5; margin-bottom: 20px; }
+    .sub { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0 auto 20px;
+      max-width: 42ch; }
 
-    .status { display: flex; align-items: center; gap: 12px; padding: 16px;
-      background: var(--surface2); border-radius: 10px; }
+    .status { display: flex; align-items: center; justify-content: center; gap: 12px;
+      padding: 16px; background: var(--surface2); border-radius: 10px; }
     .spinner { width: 18px; height: 18px; border: 2px solid var(--hairline);
       border-top-color: var(--accent); border-radius: 50%;
       animation: spin 0.8s linear infinite; flex: none; }
@@ -86,19 +94,27 @@
     button.outline:hover { background: var(--surface2); }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
 
+    #passwordForm { text-align: center; }
+    #passwordForm p { font-size: 13px; }
+
     .preview { margin-top: 20px; }
     .preview img, .preview video { max-width: 100%; border-radius: 10px;
       display: block; margin: 0 auto; }
     .preview audio { width: 100%; margin-top: 12px; }
     .preview-caption { margin-top: 10px; text-align: center;
       font-size: 12px; color: var(--muted); }
-    .actions { display: flex; gap: 8px; margin-top: 16px; }
+    /* Fullscreen button, centered under the media preview. */
+    .fs-btn { display: block; margin: 14px auto 0; padding: 8px 16px; font-size: 13px; }
+    img:fullscreen, video:fullscreen { object-fit: contain; background: #000; }
+    .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: center; }
 
     .file-row { display: flex; align-items: center; gap: 14px; padding: 14px;
-      background: var(--surface2); border-radius: 10px; margin-top: 16px; }
+      background: var(--surface2); border-radius: 10px; margin-top: 16px;
+      text-align: left; }
     .file-icon { width: 42px; height: 42px; border-radius: 10px; background: var(--surface);
       border: 1px solid var(--hairline);
-      display: flex; align-items: center; justify-content: center; font-size: 20px; }
+      display: flex; align-items: center; justify-content: center; font-size: 20px;
+      flex: none; }
     .file-meta { flex: 1; }
     .file-meta .name { font-weight: 500; }
     .file-meta .size { font-size: 12px; color: var(--muted); }
@@ -120,12 +136,13 @@
 <body>
   <div class="wrap">
     <header>
+      <div class="logo-mark"></div>
       <span class="logo">CipherNest</span>
       <span class="badge">Encrypted share</span>
     </header>
 
     <div class="panel">
-      <h1>Decrypting in your browser</h1>
+      <h1>A file was shared with you</h1>
       <p class="sub">
         Decrypted in your browser. CipherNest never sees the key.
       </p>
@@ -140,7 +157,7 @@
         <input id="passwordInput" type="password" placeholder="Password"
           style="width: 100%; padding: 11px; background: var(--surface2);
             border: 1px solid var(--hairline); border-radius: 10px; color: var(--fg);
-            font-size: 14px; margin-bottom: 12px;" />
+            font-size: 14px; margin-bottom: 12px; text-align: center;" />
         <button id="passwordSubmit">Unlock</button>
         <p style="margin-top: 14px; color: var(--muted); font-size: 12px;">
           Tip: opening this link on Android with the CipherNest app installed
@@ -162,6 +179,7 @@
     <footer>
       <span class="pill">Zero-knowledge</span>
       <span class="pill">AES-256-GCM</span>
+      <span class="pill">No tracking</span>
       <div style="margin-top: 8px;">The server cannot read this file.</div>
     </footer>
   </div>
@@ -177,10 +195,9 @@
     inlined; loaded once per session.
   -->
   <script src="/hash-wasm.min.js" defer></script>
-  <!-- Version query busts stale browser caches on redeploy. Bump on every
-       change to share.js so recipients never run an old decryptor against a
-       newer blob format (that mismatch reads as a generic "Decryption
-       failed"). Current: format v1. -->
-  <script src="/share.js?v=fmt1" defer></script>
+  <!-- Version query busts stale browser caches on redeploy. Blob format is
+       still v1; the -r3 suffix is a UI/script revision bump so recipients pull
+       the current share.js (fullscreen button, themed render). -->
+  <script src="/share.js?v=fmt1-r3" defer></script>
 </body>
 </html>
