@@ -911,3 +911,530 @@ lives, and where "AES-256-GCM, client-side" stops being a slogan and becomes
 code you can read. Say the word and I'll append it.
 
 <!-- END OF ENTRY 1 -->
+
+---
+
+# Entry 2 — The crypto foundation
+
+This is the heart of CipherNest, and the reason the whole "zero-knowledge" claim
+is true. By the end of this entry you'll be able to trace a photo from the moment
+it's picked to the encrypted blob that lands in Drive, and back, and explain every
+key involved to a skeptical reviewer. We build it up slowly.
+
+Six files, in the order they depend on each other:
+
+| File | Role (one line) |
+|---|---|
+| `lib/crypto/aes_gcm.dart` | The symmetric workhorse: encrypt/decrypt a blob or a chunk with a key. |
+| `lib/crypto/hpke.dart` | Public-key encryption (RFC 9180) used to lock a file's key to the vault. |
+| `lib/services/key_manager_service.dart` | The key hierarchy: one seed to all keys; lock/unlock; biometrics. |
+| `lib/services/encryption_service.dart` | The CipherNest file *format*, tying AES + HPKE together. |
+| `lib/services/share_service.dart` | Turns a vault file into a shareable magic link (the Dart half of Entry 1's `share.js`). |
+| `lib/services/device_identity_service.dart` | A stable per-install ID for multi-device coordination. |
+
+## 2.0 The one idea, in plain words
+
+Every design choice below serves a single sentence:
+
+> **Files are encrypted *to* a public key that can sit in memory even when the
+> vault is locked; they can only be *decrypted* with a private key that appears
+> only when you unlock with your password (or fingerprint).**
+
+That asymmetry is what lets CipherNest keep auto-backing-up new photos in the
+background without your password being present — it can *lock* new files but not
+*read* old ones. It's the same trick HTTPS uses (anyone can encrypt to a server's
+public key; only the server decrypts), applied to your gallery.
+
+The layered picture (memorize this shape — everything else is a detail of it):
+
+```
+   your 12 words  --(BIP-39)-->  64-byte SEED   <- the single root secret
+                                     |
+                 +-------------------+--------------------+
+            (HKDF, label             (HKDF, label
+             "ciphernest/x25519/v1")  "ciphernest/local/v1")
+                 |                        |
+        X25519 KEYPAIR              k_local (a 32-byte key
+        pub  (can encrypt)          for small on-device secrets)
+        priv (can decrypt)
+                 |
+     each file gets its OWN random AES-256 key
+                 |
+   file KEY is sealed to the vault pub key via HPKE  -> stored in the 81-byte header
+   file BODY bytes are AES-256-GCM, chunked
+```
+
+And the seed itself is stored on disk only in **wrapped** (encrypted) form:
+locked with a key derived from your password via **Argon2id**. No password means
+the seed stays gibberish, so the private key can't be rebuilt, so old files can't
+be read. That's the lock.
+
+## 2.1 A five-minute vocabulary (skip if you know it)
+
+- **Plaintext / ciphertext:** the readable bytes vs. the scrambled bytes.
+- **Symmetric key:** one secret used to both encrypt and decrypt (like a house
+  key). CipherNest uses **AES-256-GCM** for the actual file bytes.
+- **Nonce** ("number used once"): a per-encryption value mixed in so encrypting
+  the same data twice gives different ciphertext. Must never repeat under the
+  same key. 12 bytes here.
+- **MAC / tag:** a 16-byte checksum GCM computes that proves the ciphertext
+  wasn't altered. If a single byte is flipped, decryption *fails* rather than
+  returning garbage. This is the "authenticated" in AES-GCM.
+- **AAD** (additional authenticated data): extra bytes that are *not* encrypted
+  but *are* covered by the tag. Used to bind a chunk to its position so it can't
+  be shuffled. You saw the receiving end of this in Entry 1's `share.js`.
+- **Public-key / asymmetric crypto:** a **keypair** — a public half that locks,
+  a private half that unlocks. CipherNest's is **X25519** (a modern elliptic
+  curve). **HPKE** is the standard recipe for using it to encrypt data.
+- **KDF** (key derivation function): turns one secret into others.
+  **HKDF** stretches a strong random seed into several subkeys cheaply;
+  **Argon2id** turns a *weak* human password into a key *slowly and expensively*
+  (to resist guessing).
+- **BIP-39:** the standard that turns 12 memorable words (a "mnemonic") into a
+  64-byte seed. It's the same scheme crypto wallets use for recovery phrases.
+
+### Dart notes you'll keep seeing
+- `Future<T>` = "a T that isn't ready yet"; `async`/`await` = wait for it without
+  freezing the app. Nearly every crypto call is a `Future` because it may run on
+  a background thread.
+- `Uint8List` = a fixed, efficient array of bytes (0–255). This is *the* type for
+  raw crypto data. `.sublist(a, b)` slices out bytes `a`…`b-1`.
+- `static` = belongs to the class itself, not an instance (you call it as
+  `EncryptionService.encryptFile(...)`).
+- The **singleton** pattern — `factory KeyManagerService() => _instance;` — means
+  "every `KeyManagerService()` you write returns the *same* object," so there's
+  exactly one keychain in the whole app.
+
+## 2.2 `lib/crypto/aes_gcm.dart` — the symmetric workhorse (117 lines)
+
+The lowest layer: given some bytes and a key, produce `nonce + ciphertext + tag`,
+and the reverse. Nothing here knows about files or the vault; it just does one
+AES-GCM operation cleanly.
+
+```dart
+class AesGcmCipher {
+  final AesGcm _aesGcm = AesGcm.with256bits();
+
+  /// Returns: Nonce (12 bytes) + Ciphertext + MAC (16 bytes)
+  Future<Uint8List> encrypt(Uint8List plaintext, SecretKey key) async {
+    final nonce = _randomBytes(12); // Standard 96-bit nonce
+    final secretBox = await _aesGcm.encrypt(plaintext, secretKey: key, nonce: nonce);
+    return _assemble(nonce, secretBox.cipherText, secretBox.mac.bytes);
+  }
+```
+
+- `AesGcm.with256bits()` comes from the `cryptography` package — the audited
+  library that does the real math. This file is a thin, opinionated wrapper.
+- A **`SecretBox`** (the library's term) bundles ciphertext + nonce + MAC.
+  CipherNest flattens it to one byte array on the wire: `nonce + ct + tag`, so a
+  blob is self-describing (decrypt reads the first 12 bytes as the nonce, the
+  last 16 as the tag). `decrypt` just reverses that:
+
+```dart
+final nonce = encryptedData.sublist(0, 12);
+final macBytes = encryptedData.sublist(encryptedData.length - 16);
+final cipherText = encryptedData.sublist(12, encryptedData.length - 16);
+```
+
+The other pair, `encryptChunk` / `decryptChunk`, is the same but (a) takes a
+*caller-supplied* nonce and AAD, and (b) on decrypt refuses a chunk whose inline
+nonce isn't the one expected:
+
+```dart
+final nonce = data.sublist(0, 12);
+if (!_bytesEqual(nonce, expectedNonce)) {
+  throw Exception('Chunk nonce mismatch');
+}
+```
+
+That check is a cheap first line of defense against someone swapping two chunks
+of a file — it fails *before* the expensive GCM step even runs (the tag+AAD would
+catch it anyway; this just fails faster and clearer). `_assemble` builds the
+output into one pre-sized `Uint8List` instead of concatenating lists — a small
+speed detail the comment calls out (fewer buffer copies per 512 KB chunk).
+
+`_randomBytes` uses `Random.secure()` — the OS cryptographic RNG, *not* the
+ordinary `Random()` (which is predictable and would be a real vulnerability for
+nonces/keys). Worth noticing: getting this wrong is a classic crypto bug, and the
+code gets it right.
+
+## 2.3 `lib/services/key_manager_service.dart` — the keychain (735 lines)
+
+This is the most important security file in the app. Its long doc-comment is
+worth reading in the source; here's the structure and the *why*.
+
+### One root, many keys (HKDF)
+Account creation:
+
+```dart
+Future<String> createAccount(String password) async {
+  final mnemonic = bip39.generateMnemonic();        // 12 random words
+  final seed = bip39.mnemonicToSeed(mnemonic);       // 64 bytes
+  await _installSeed(seed, password);
+  ...
+  return mnemonic;                                   // shown once, to write down
+}
+```
+
+`_installSeed` calls `_deriveKeys`, which is the heart:
+
+```dart
+static Future<_DerivedKeys> _deriveKeys(Uint8List seed) async {
+  final x25519Seed = await _hkdf(seed, infoX25519, 32);   // "ciphernest/x25519/v1"
+  final kLocalBytes = await _hkdf(seed, infoLocal, 32);   // "ciphernest/local/v1"
+  final keyPair = await X25519().newKeyPairFromSeed(x25519Seed);
+  final publicKey = await keyPair.extractPublicKey();
+  return _DerivedKeys(keyPair: keyPair, publicKey: publicKey,
+                      kLocal: SecretKey(kLocalBytes));
+}
+```
+
+- **HKDF** stretches the one seed into two independent 32-byte subkeys. The
+  **`info` strings** (`ciphernest/x25519/v1`, `ciphernest/local/v1`) are *domain
+  separators*: same seed, different label gives a completely different key, and no
+  key can be mistaken for another. The comment flags these as **frozen forever** —
+  a typo would permanently orphan a real vault, so a test pins them. That's a
+  mature detail: they treat these constants as a wire format.
+- From the X25519 subkey it builds the **vault keypair**. `k_local` is a separate
+  symmetric key for small on-device secrets (the crash-recovery mnemonic blob).
+
+### The split: public key resident, private key gated
+Two fields, two capabilities:
+
+```dart
+SimpleKeyPair? _vaultKeyPair;     // decrypt capability — only while unlocked
+SimplePublicKey? _vaultPublicKey; // encrypt capability — available even locked
+
+bool get isUnlocked => _vaultKeyPair != null;
+bool get canEncrypt => _vaultPublicKey != null;
+```
+
+`lock()` throws away the private key but keeps the public one:
+
+```dart
+void lock() {
+  _vaultKeyPair = null;
+  _kLocal = null;
+  _signupPassword = null;
+}
+```
+
+So a locked app is **encrypt-only**. The public key also lives in
+Keystore-wrapped secure storage (`vault_pub_v1`) and can be loaded into a
+background isolate with `loadPublicKeyForEncrypt()` — "structurally cannot load
+the private key," as the comment says. This is the mechanism behind
+encrypt-while-locked background sync.
+
+### Wrapping the seed under your password (Argon2id)
+The seed is never stored in the clear. `_encryptAndSaveSeedBlob`:
+
+```dart
+final salt = _randomBytes(16);
+final kek = await _deriveKeyFromPassword(password, salt);   // Argon2id
+final nonce = _randomBytes(12);
+final box = await AesGcm.with256bits().encrypt(seed, secretKey: kek, nonce: nonce);
+// -> stores base64(cipherText), nonce, mac, salt in SharedPreferences
+```
+
+- `kek` = "key-encryption key," derived from your password by **Argon2id** with
+  `memory: 65536` (64 MB), `iterations: 2`. Deliberately slow and memory-hungry
+  so an attacker who copies the blob can't brute-force passwords cheaply. (This
+  is the *same* Argon2id the browser runs in Entry 1's password shares — the
+  parameters must match, and they do.)
+- `unlock` reverses it and then does something clever:
+
+```dart
+Future<bool> unlock(String password) async {
+  final seed = await _decryptSeedBlob(password);
+  if (seed == null) return false;                 // wrong password
+  final keys = await _deriveKeys(seed);
+  await _verifyStoredPublicKey(keys.publicKey);    // <- anti-tamper
+  _vaultKeyPair = keys.keyPair; ...
+  return true;
+}
+```
+
+`_verifyStoredPublicKey` re-derives the public key from the seed and
+**constant-time compares** it to the stored one; a mismatch throws
+`PublicKeyMismatchException` and halts. Why? If malware swapped the stored public
+key, your background sync would start encrypting new files to *the attacker's*
+key. This check refuses to proceed. (`_constantTimeEquals` avoids leaking, via
+timing, how many leading bytes matched — a subtle but correct touch.)
+
+### Biometric unlock is a *second wrap*, not a second secret
+`enableBiometric(password)` re-wraps the *same seed* under an AndroidKeyStore key
+that's hardware-gated behind a fingerprint prompt (the native side is
+`BiometricSeedVault.kt`, covered in Entry 7). Key properties, all enforced here:
+- Enabling **requires the password** (the seed only exists in memory during a
+  password entry — there's no other honest moment to re-wrap it).
+- `unlockWithBiometric()` runs the *identical* derive-and-verify sequence as the
+  password path, including the anti-tamper check — biometrics are not a shortcut
+  around the integrity guarantee.
+- If Android destroys the key (you add/remove a fingerprint, change your PIN), it
+  throws `BiometricInvalidatedException` and silently falls back to password.
+  "Zero data loss," because the password wrap is always the real root.
+
+### Staged recovery — the fix for a nasty old bug
+When restoring from a phrase, the naive approach persists the new seed
+immediately. The comment records why that was dangerous (MTR#1 F9): a *valid but
+wrong* phrase would overwrite your real vault, and only a reinstall could undo
+it. The fix — `stageRecovery` then `commitStagedRecovery` — derives the candidate
+keys **in memory only**, lets a "canary" check prove the phrase actually owns the
+cloud vault, and *only then* persists:
+
+```dart
+Future<void> stageRecovery(String mnemonic, String newPassword) async {
+  ...
+  final seed = bip39.mnemonicToSeed(mnemonic);
+  final keys = await _deriveKeys(seed);
+  _vaultKeyPair = keys.keyPair; ...       // in memory
+  _stagedSeed = seed;                      // nothing written to disk yet
+}
+```
+
+Notice the repeated `seed.fillRange(0, seed.length, 0)` — the seed bytes are
+zeroed after use. Dart can't *guarantee* memory is scrubbed (the comment is
+honest about this), but overwriting the known copy is the right habit.
+
+`changePassword` is a neat consequence of this architecture: it decrypts the seed
+with the old password and re-wraps it under the new one — **the seed, the vault
+keys, and the recovery phrase are all unchanged**; only the local wrapping key
+changes. So changing your password can't lose access to files, and the recovery
+phrase still works.
+
+## 2.4 `lib/crypto/hpke.dart` — sealing the file key (441 lines)
+
+This is the fanciest file, but the *idea* is simple: **encrypt a file's 32-byte
+key to the vault's public key**, so only the vault's private key can recover it.
+HPKE (RFC 9180, "Hybrid Public Key Encryption") is the modern standard recipe for
+exactly that.
+
+The public entry points are tiny:
+
+```dart
+static Future<HpkeSealed> sealFileKey(SimplePublicKey recipientPublicKey, Uint8List fileKey);
+static Future<Uint8List>  openFileKey(SimpleKeyPair recipientKeyPair, Uint8List enc, Uint8List ct);
+```
+
+- `sealFileKey` returns two pieces: **`enc`** (32 bytes — a one-time "ephemeral"
+  public key generated for this seal) and **`ct`** (48 bytes — the 32-byte file
+  key encrypted, plus its 16-byte tag). Together they're the header's payload.
+- Sealing needs **only the recipient's public key**, which is what gives
+  encrypt-while-locked. Opening needs the private key, i.e. an unlocked vault.
+
+Why "hybrid"? Public-key math is slow and size-limited, so HPKE uses it once to
+agree on a shared symmetric key (via a Diffie-Hellman exchange with that ephemeral
+keypair — "DHKEM"), then uses fast AES-GCM to encrypt the payload. You get
+public-key convenience at symmetric-key speed.
+
+Two things about this file signal real rigor, worth saying in an interview:
+
+1. **It's a from-scratch implementation of the RFC**, built over the
+   `cryptography` package's HMAC/X25519/AES primitives — the labeled KDF
+   (`_labeledExtract`/`_labeledExpand`), DHKEM (`_encap`/`_decap`), and the key
+   schedule (`_keySchedule`) are each the literal RFC 9180 procedures. Every
+   intermediate is checked against the RFC's **published test vectors**
+   (Appendix A.1) in `test/crypto/hpke_test.dart`. That's how you earn the right
+   to hand-roll crypto: byte-for-byte conformance to the spec's own numbers.
+2. **The suite is chosen deliberately:** `DHKEM(X25519, HKDF-SHA256),
+   HKDF-SHA256, AES-128-GCM`. The comment explains the one surprise — AES-*128*
+   for the key wrap (not 256): X25519 already caps this path at ~128-bit
+   security, so AES-256 here would buy nothing, while AES-128 is the suite that
+   has official RFC test vectors. File *bodies* are still AES-256-GCM. That's an
+   informed trade-off, not a weakness.
+
+There's also `deriveKeyPair` / `_deriveSk`, the RFC's deterministic
+"seed to keypair" procedure — but note the vault keypair is actually built in
+`key_manager` via `X25519().newKeyPairFromSeed(hkdf(...))`, and HPKE's own
+`deriveKeyPair` exists mainly to satisfy the RFC conformance tests. The
+`fileKeyInfo = 'ciphernest/filekey/v1'` string is another frozen domain separator
+(same discipline as the HKDF labels).
+
+You don't need to follow the KDF byte-plumbing to trust it — that's what the test
+vectors are for. You *do* need to be able to say: "each file key is sealed to the
+vault's X25519 public key with standard HPKE; sealing needs no secret, opening
+needs the vault private key."
+
+## 2.5 `lib/services/encryption_service.dart` — the file format (488 lines)
+
+This file defines **what a `.cnest` blob actually looks like** and orchestrates
+AES + HPKE into it. The class doc-comment is the spec; here it is, annotated:
+
+```
+Header (81 bytes):
+  [1]  version = 0x01
+  [32] enc         — HPKE ephemeral public key
+  [48] sealed key  — HPKE seal of the 32-byte AES-256 file key
+Body:
+  [16] content_id      — random, plaintext
+  [4]  total_chunks (big-endian)
+  chunk i (stride 524316, last shorter):
+     [12] nonce = BE96(i)   [ciphertext up to 524288]   [16 tag]
+     AAD = content_id + BE32(i) + BE32(total_chunks)
+```
+
+Encrypting a file (`_encryptFileWith`) is now readable end to end:
+
+```dart
+final fileKey = await AesGcm.with256bits().newSecretKey();   // fresh per file
+final contentId = _randomBytes(16);
+final totalChunks = fileBytes.isEmpty ? 0 : (fileBytes.length / _chunkSize).ceil();
+
+out.add(await _buildHeader(recipient, fileKeyBytes));        // HPKE-seal the key
+out.add(_buildPreamble(contentId, totalChunks));
+for (var i = 0; i < totalChunks; i++) {
+  ...
+  out.add(await _cipher.encryptChunk(chunk, fileKey,
+      _chunkNonce(i), _chunkAad(contentId, i, totalChunks)));
+}
+```
+
+Key takeaways:
+- **Every file gets its own random AES-256 key.** That key is then sealed into
+  the header via HPKE. So the vault key never directly touches file bytes — it
+  only ever unwraps per-file keys. (This is "key wrapping," the same two-layer
+  design you met from the reader's side in Entry 1.)
+- **`content_id` + `AAD` = integrity, not just secrecy.** Each chunk's AAD binds
+  it to *this file* (`content_id`), *its position* (`i`), and *the total count*.
+  The class comment states the payoff plainly: "reorder, truncation, duplication,
+  and cross-blob splicing all fail authentication." `decryptBody` even re-checks
+  the count at the end:
+
+```dart
+if (index != totalChunks) {
+  throw Exception('Chunk count mismatch: header says $totalChunks, found $index');
+}
+```
+
+- **The nonce is a counter**, `BE96(i)` — a 96-bit big-endian encoding of the
+  chunk index. That's safe here *because each file key is brand-new and used by
+  exactly one encryptor*, so counter nonces can never collide under a key (the
+  cardinal AES-GCM rule). The comment in `aes_gcm.dart` calls this out.
+
+### Two things that are about *performance*, not crypto
+- **`decryptBody` is shared by vault files and shares.** A share only swaps the
+  header; the body ciphertext is byte-identical. That's why `ShareService` can
+  re-wrap a file without re-encrypting it, and why Entry 1's `share.js` decrypts
+  the body with the exact same chunk logic.
+- **Isolate offloading.** Pure-Dart AES/SHA runs synchronously and would freeze
+  the UI mid-encrypt, so `encryptFileInBackground` etc. use `Isolate.run(...)` to
+  do it on a background thread. Crucially, only the **public key bytes** are
+  captured and sent across (rebuilt inside the isolate) — "nothing secret crosses
+  the port," because sealing needs only the public key. `encryptStream` (an
+  `async*` generator that `yield`s encrypted chunks) handles large videos without
+  loading them fully into memory.
+
+### The plaintext content hash ("filename is not identity")
+`encryptFileWithHash` / `encryptStreamWithHash` compute a **SHA-256 of the
+plaintext** in the *same read pass* as encryption. This hash is the file's true
+identity — used for real deduplication and for safely matching a local gallery
+photo to a vault file across reinstalls/devices, instead of trusting a filename.
+It's computed cheaply alongside the AES that's already running.
+
+## 2.6 `share_service.dart` and `device_identity_service.dart`
+
+### `share_service.dart` (219 lines) — the Dart half of the magic link
+This is the exact counterpart to Entry 1's `share.js`; reading them side by side
+is the best way to understand the share format. `createShare` (annotated):
+
+```dart
+// 1. download the existing encrypted blob
+final originalBytes = await CloudService().downloadFile(file.cloudId!);
+// 2. recover THIS file's key from its header (needs an UNLOCKED vault — HPKE open)
+final fileKey = await EncryptionService.decryptFileKeyFromHeader(originalBytes);
+// 3. make a share key: random, OR Argon2id-derived from a password + salt
+SecretKey shareKey; Uint8List? salt;
+if (password != null && password.isNotEmpty) {
+  salt = EncryptionService.generatePasswordSalt();
+  shareKey = await EncryptionService.derivePasswordKey(password, salt);
+} else {
+  shareKey = await EncryptionService.generateShareKey();
+}
+// 4. RE-WRAP the file key under the share key (symmetric), frame a share header
+final wrapped = await EncryptionService.wrapFileKeyForShare(fileKey, shareKey);
+```
+
+So a share swaps the **header only**: instead of the file key sealed to the vault
+(HPKE), it's wrapped under a symmetric **share key** (`wrapFileKeyForShare` =
+AES-GCM `encrypt`, producing the 60-byte `nonce+ct+tag` that `share.js` expects at
+offset 5 of the blob). The share header framing —
+`[1 version][4 region-len][region]`, region = `wrapped` or `salt+wrapped` — is
+built here and parsed by `share.js` in Entry 1. The **body is copied verbatim**.
+
+The magic link is assembled in `_buildShareUrl`, and it's the mirror image of
+what `share.js` parses:
+
+```dart
+if (salt != null) fragment.write('p=${base64Url.encode(salt)}');    // password mode
+else              fragment.write('k=${base64Url.encode(keyBytes)}'); // plain mode
+if (expiresAt != null) fragment.write('&exp=${expiresAt.millisecondsSinceEpoch}');
+fragment.write('&n=${base64Url.encode(utf8.encode(filename))}');
+return 'https://${AppConstants.shareHost}/s/$encodedDl#${fragment.toString()}';
+```
+
+Everything after `#` is the fragment — the key (or salt), expiry, and filename —
+which, as Entry 1 explained, browsers never send to the server. `AppConstants.
+shareHost` is the constant we just repointed to `share.ciphernest.io`. There's
+also a **Plus gate** (free tier: no passwords, 7-day max expiry) enforced here as
+a backstop so no code path can mint gated shares, and `sweepExpired`/`revokeShare`
+for cleanup (deleting the public blob is the *real* expiry, since the fragment
+expiry is only advisory — the point the security ledger's SA-WEB-02 makes).
+
+### `device_identity_service.dart` (38 lines) — a stable install ID
+Small but with a sharp rationale. It mints a random UUID on first use and keeps it
+in Keystore-wrapped secure storage:
+
+```dart
+var id = await _storage.read(key: _kDeviceId);
+if (id == null || id.isEmpty) {
+  id = const Uuid().v4();
+  await _storage.write(key: _kDeviceId, value: id);
+}
+```
+
+The important design note is what it *doesn't* do: this ID is **deliberately kept
+out of the database backup**. If it rode along in a restored snapshot, two devices
+could end up writing under the same identity and clobber each other's multi-device
+sync records. A reinstall minting a fresh ID is "a feature, not a loss" — it keeps
+per-device names collision-proof. (You'll see why in the sync/backup entry.)
+
+## 2.7 Putting it together — the life of one photo
+
+1. You pick a photo. The app reads its bytes once, and in that pass computes the
+   **plaintext SHA-256** (identity) and encrypts it (`encryptFileWithHash`, often
+   in a background isolate).
+2. Encryption makes a **fresh random AES-256 file key**, splits the photo into
+   512 KB chunks, and AES-GCM-encrypts each chunk with a counter nonce and
+   position-binding AAD.
+3. That file key is **HPKE-sealed to the vault's public key** and written into the
+   81-byte header. No private key was needed — this can happen while the vault is
+   locked.
+4. The blob (header + body) uploads to your Drive/OneDrive. Google sees only
+   ciphertext + a random `content_id`.
+5. To view it, you **unlock** (password to Argon2id to seed to derived keys, then
+   verify the public key). The private key opens the header (HPKE), recovering the
+   file key; `decryptBody` verifies and decrypts the chunks.
+6. To **share** it, the file key is re-wrapped under a one-off share key, the body
+   is reused unchanged, and the key rides in the URL fragment to a recipient's
+   browser — never touching a server.
+
+### What an attacker sees (the honest threat summary)
+- **Has your cloud blob only:** ciphertext and a random id. No key material
+  reaches the cloud, ever. Useless.
+- **Has your locked phone:** the wrapped seed blob (Argon2id-protected), the vault
+  *public* key, and — if enabled — a hardware-gated biometric wrap. No private key
+  in memory. They can, at most, brute-force your password against a deliberately
+  slow KDF.
+- **Has your unlocked phone:** everything, of course — which is why auto-lock and
+  the real `lock()` matter. This is the boundary the whole design defends.
+
+That's the crypto core. Everything above it — sync, the gallery, the streaming
+video server, the database — is plumbing that calls into these six files and never
+re-implements crypto.
+
+**Next (Entry 3): Auth & the cloud APIs** — how the app signs into Google and
+Microsoft and talks to Drive/OneDrive (`lib/services/cloud/`), which is where the
+`onedrive_provider.dart` and `google_drive_provider.dart` we touched during the
+domain cutover actually live.
+
+<!-- END OF ENTRY 2 -->
