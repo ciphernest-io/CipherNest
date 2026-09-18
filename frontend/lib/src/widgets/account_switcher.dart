@@ -22,7 +22,7 @@ class AccountSwitcher extends StatelessWidget {
       case CloudAccount.providerGoogle:
         return 'assets/images/brands/google_drive.png';
       case CloudAccount.providerOneDrive:
-        return 'assets/images/brands/microsoft.svg';
+        return 'assets/images/brands/onedrive.svg';
       case CloudAccount.providerDropbox:
         return 'assets/images/brands/dropbox.png';
       default:

@@ -750,7 +750,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _providerLogo(int providerType, {double size = 22}) {
     final asset = switch (providerType) {
       CloudAccount.providerGoogle => 'assets/images/brands/google_drive.png',
-      CloudAccount.providerOneDrive => 'assets/images/brands/microsoft.svg',
+      CloudAccount.providerOneDrive => 'assets/images/brands/onedrive.svg',
       CloudAccount.providerDropbox => 'assets/images/brands/dropbox.png',
       _ => null,
     };

@@ -750,7 +750,7 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
               _CloudOption(
                 title: 'OneDrive',
                 subtitle: 'Sign in with Microsoft',
-                logoAsset: 'assets/images/brands/microsoft.svg',
+                logoAsset: 'assets/images/brands/onedrive.svg',
                 enabled: !_isLoading,
                 onTap: () => _connectProvider(CloudAccount.providerOneDrive),
               ),
