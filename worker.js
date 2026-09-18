@@ -2,12 +2,21 @@
 //
 // Under the Workers-with-static-assets model, the old Pages `functions/`
 // convention doesn't auto-register endpoints. This Worker manually routes:
+//   - auth.ciphernest.io: GET /oauth-callback only (the OneDrive OAuth
+//                         return page); every other path is 404.
 //   - GET /proxy   -> the CORS-proxying logic (was functions/proxy.js).
 //   - OPTIONS /proxy -> the pre-flight response.
 //   - everything else -> env.ASSETS.fetch(request), which serves the
 //                        static files in web-viewer/ (or index.html for
 //                        unmatched paths, because assets.not_found_handling
 //                        is set to single-page-application in wrangler.jsonc).
+
+// The OneDrive redirect_uri host. Must equal `_redirectHost` in
+// frontend/lib/services/cloud/onedrive_provider.dart and the URI registered
+// in Entra. Only the callback page is reachable here, so this host can never
+// serve a share link and the share viewer can never shadow the callback.
+const AUTH_HOST = 'auth.ciphernest.io';
+const AUTH_PATH = '/oauth-callback';
 
 const ALLOWED_HOSTS = new Set([
   'drive.google.com',
@@ -38,6 +47,16 @@ function isAllowed(host) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    if (url.hostname === AUTH_HOST) {
+      if (url.pathname !== AUTH_PATH) {
+        return new Response('Not found', { status: 404 });
+      }
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return new Response('Method not allowed', { status: 405 });
+      }
+      return env.ASSETS.fetch(request);
+    }
 
     if (url.pathname === '/proxy') {
       if (request.method === 'OPTIONS') return corsPreflight();

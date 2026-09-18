@@ -4,22 +4,30 @@
   "main": "./worker.js",
   "compatibility_date": "2026-07-05",
   "compatibility_flags": ["nodejs_compat"],
-  // Attach the share viewer to share.ciphernest.io as a Custom Domain. Applied
-  // on deploy: `wrangler deploy` (or the GitHub-triggered Workers build) creates
-  // the `share` DNS record + TLS cert automatically. The zone ciphernest.io is
-  // on the same (ciphernest20) Cloudflare account, which is required for this.
+  // Two Custom Domains on one Worker. Applied on deploy: `wrangler deploy` (or
+  // the GitHub-triggered Workers build) creates each DNS record + TLS cert
+  // automatically. The zone ciphernest.io is on the same (ciphernest20)
+  // Cloudflare account, which is required for this.
+  //   share.ciphernest.io  the share viewer (every path)
+  //   auth.ciphernest.io   ONLY /oauth-callback, the OneDrive OAuth return page
+  //                        (worker.js 404s everything else on this host). Kept
+  //                        on its own host so share-viewer changes can never
+  //                        break sign-in again (the workers.dev outage did).
   "routes": [
-    { "pattern": "share.ciphernest.io", "custom_domain": true }
+    { "pattern": "share.ciphernest.io", "custom_domain": true },
+    { "pattern": "auth.ciphernest.io", "custom_domain": true }
   ],
   "assets": {
     "directory": "./web-viewer",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    // Without this, the static-assets layer serves index.html (the SPA
-    // fallback) for /proxy before worker.js runs, so the CORS proxy is dead and
-    // in-browser share decryption fails. Run the Worker FIRST for /proxy only;
-    // every other path still serves static assets directly (with SPA fallback).
-    "run_worker_first": ["/proxy"]
+    // The Worker runs before the static-assets layer on EVERY request. It has
+    // to: /proxy must reach worker.js (otherwise the SPA fallback serves
+    // index.html for it and in-browser share decryption dies), and the
+    // auth host's path restriction is a per-host rule that only code can
+    // apply. worker.js hands everything else to env.ASSETS.fetch(), which
+    // still applies the SPA fallback above.
+    "run_worker_first": true
   },
   "observability": {
     "enabled": true
