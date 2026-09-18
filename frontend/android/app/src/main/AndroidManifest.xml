@@ -50,6 +50,18 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!-- Flutter's built-in deep linking is OFF. It is on by default
+                 since Flutter 3.27 and pushes every incoming VIEW intent's
+                 path onto the Navigator as a named route: the OAuth return
+                 (ciphernest-open://oauth-callback) became a pushed
+                 "/oauth-callback" route, which our route table answers with
+                 "Route not found" (MTR#2 D2, 19 Sep 2026). Share links are
+                 handled by app_links in lib/src/app.dart, the OAuth return by
+                 MainActivity.relayOAuthReturn; neither wants Flutter's copy. -->
+            <meta-data
+              android:name="flutter_deeplinking_enabled"
+              android:value="false"
+              />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>

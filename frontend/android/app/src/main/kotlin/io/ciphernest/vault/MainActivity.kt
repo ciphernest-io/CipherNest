@@ -34,34 +34,36 @@ class MainActivity : AudioServiceFragmentActivity() {
     }
 
     override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
+        // Relay BEFORE super: super.onNewIntent hands the intent to the
+        // Flutter engine and, through it, to the app's lifecycle. The sign-in
+        // plugin cancels any pending authenticate() the moment Dart sees
+        // `resumed`, so the pending call must already be completed here.
         relayOAuthReturn(intent)
+        super.onNewIntent(intent)
     }
 
-    // The worker page's "Open CipherNest" button targets THIS activity so
-    // the app task comes forward; the URI (scheme rewritten back to
-    // ciphernest) is then handed to the plugin's CallbackActivity, whose
-    // completer finishes the sign-in. FLAG_ACTIVITY_NEW_TASK is
-    // LOAD-BEARING: without it CallbackActivity joins OUR task and its
-    // finishAndRemoveTask() destroys the whole app. With it (and the
-    // affinity mismatch: ours is "", its is the package default) it gets a
-    // disposable task that removes itself, revealing us in the foreground.
+    // The auth.ciphernest.io callback page's "Open CipherNest" button
+    // targets THIS activity (scheme ciphernest-open) so the app task comes
+    // forward. The code is delivered to the sign-in plugin IN-PROCESS: the
+    // plugin keeps its pending authenticate() result keyed by callback
+    // scheme in a companion map (the same map its own CallbackActivity
+    // resolves), so completing it here is exactly what CallbackActivity
+    // would do, minus a second task. The earlier design started
+    // CallbackActivity in a disposable task; that worked but raced the
+    // plugin's cancel-on-resume observer and pushed a stray route
+    // (19 Sep 2026, MTR#2 D2). Pinned to flutter_web_auth_2 4.1.0; if the
+    // plugin renames `callbacks`, this fails to compile, not at runtime.
     private fun relayOAuthReturn(intent: Intent?) {
         val data = intent?.data ?: return
         if (data.scheme != "ciphernest-open") return
         val rewritten = data.buildUpon().scheme("ciphernest").build()
+        val pending = com.linusu.flutter_web_auth_2.FlutterWebAuth2Plugin
+            .callbacks.remove("ciphernest") ?: return
         try {
-            startActivity(
-                Intent(
-                    this,
-                    com.linusu.flutter_web_auth_2.CallbackActivity::class.java,
-                )
-                    .setData(rewritten)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
+            pending.success(rewritten.toString())
         } catch (_: Exception) {
-            // Best effort: worst case matches the old behavior (the user
-            // returns to the app manually and sign-in completes there).
+            // Result already completed or the engine is gone; nothing to
+            // recover. The user simply taps the provider again.
         }
     }
 
