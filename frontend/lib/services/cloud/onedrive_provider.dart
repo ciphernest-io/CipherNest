@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:http/http.dart' as http;
@@ -20,13 +22,20 @@ class OneDriveProvider implements CloudProvider {
   // Register at https://portal.azure.com -> Microsoft Entra ID -> App registrations.
   // See plan file for exact registration steps.
   static const String _clientId = '6bd09a94-1c3b-4d09-9d35-4a684f285638';
-  // HTTPS App Link, NOT a custom scheme. Must stay in sync with three
-  // places: the Azure app registration ("Mobile and desktop applications"
-  // platform), the CallbackActivity intent-filter in AndroidManifest.xml,
-  // and the worker's /oauth-callback fallback page + assetlinks.json.
+  // HTTPS redirect, NOT a custom scheme. Must stay in sync with two
+  // places: the Entra app registration ("Mobile and desktop applications"
+  // platform, redirect URI exactly this string) and the `ciphernest`
+  // Worker's /oauth-callback page (web-viewer/oauth-callback.html), whose
+  // button hands the code back to the app as a ciphernest-open:// intent.
   // Custom-scheme redirects trigger login.live.com's anti-phishing
   // interstitial, which hangs in Custom Tabs (see authenticate() below).
-  static const String _redirectHost = 'ciphernest.ciphernest20.workers.dev';
+  //
+  // Host is a dedicated custom domain on the `ciphernest` Worker that serves
+  // ONLY the callback page (worker.js AUTH_HOST), so share-viewer changes can
+  // never break sign-in. The old ciphernest.ciphernest20.workers.dev host went
+  // dark when custom domains were attached (404 on every path, verified
+  // 18 Sep 2026), so it must never come back here.
+  static const String _redirectHost = 'auth.ciphernest.io';
   static const String _redirectPath = '/oauth-callback';
   static const String _redirectUri = 'https://$_redirectHost$_redirectPath';
   // /common/ routes any user (personal or work/school) to the right tenant
@@ -45,6 +54,22 @@ class OneDriveProvider implements CloudProvider {
   static String _itemPath(String folder, String encodedName) =>
       '$_graphBase/me/drive/root:/${DriveLayout.rootFolder}/$folder/$encodedName';
 
+  /// 32 random bytes, base64url without padding: a 43-char PKCE verifier
+  /// (RFC 7636 section 4.1 allows 43..128 chars of the unreserved set).
+  static String _newCodeVerifier() {
+    final rng = Random.secure();
+    final bytes = Uint8List.fromList(
+      List<int>.generate(32, (_) => rng.nextInt(256)),
+    );
+    return base64UrlEncode(bytes).replaceAll('=', '');
+  }
+
+  /// S256 challenge: base64url(SHA-256(ascii(verifier))), no padding.
+  static Future<String> _codeChallengeFor(String verifier) async {
+    final hash = await Sha256().hash(ascii.encode(verifier));
+    return base64UrlEncode(hash.bytes).replaceAll('=', '');
+  }
+
   @override
   CloudAccount account;
 
@@ -59,6 +84,13 @@ class OneDriveProvider implements CloudProvider {
   /// account email. Returns a CloudAccount ready to be registered, or null
   /// if the user cancels.
   static Future<CloudAccount?> signInNewAccount() async {
+    // PKCE (RFC 7636). The app is a public client with no secret; the code
+    // verifier is what stops anyone who observes the authorization code
+    // (the callback tab, a rogue app on the ciphernest-open scheme) from
+    // exchanging it. Verifier lives only in this frame and is never logged.
+    final codeVerifier = _newCodeVerifier();
+    final codeChallenge = await _codeChallengeFor(codeVerifier);
+
     final authUrl = Uri.parse(
       '$_authority/authorize'
       '?client_id=$_clientId'
@@ -66,6 +98,8 @@ class OneDriveProvider implements CloudProvider {
       '&redirect_uri=${Uri.encodeComponent(_redirectUri)}'
       '&response_mode=query'
       '&scope=${Uri.encodeComponent(_scopes)}'
+      '&code_challenge=$codeChallenge'
+      '&code_challenge_method=S256'
       '&prompt=select_account',
     );
 
@@ -128,6 +162,7 @@ class OneDriveProvider implements CloudProvider {
         'grant_type': 'authorization_code',
         'code': code,
         'redirect_uri': _redirectUri,
+        'code_verifier': codeVerifier,
         'scope': _scopes,
       },
     );
