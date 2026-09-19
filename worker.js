@@ -17,6 +17,12 @@
 // serve a share link and the share viewer can never shadow the callback.
 const AUTH_HOST = 'auth.ciphernest.io';
 const AUTH_PATH = '/oauth-callback';
+// The callback page's own dependencies (theme logo marks). Nothing else from
+// web-viewer/ is reachable on the auth host.
+const AUTH_ASSETS = new Set([
+  '/img/ciphernest_logo_black.png',
+  '/img/ciphernest_logo_white.png',
+]);
 
 const ALLOWED_HOSTS = new Set([
   'drive.google.com',
@@ -49,7 +55,7 @@ export default {
     const url = new URL(request.url);
 
     if (url.hostname === AUTH_HOST) {
-      if (url.pathname !== AUTH_PATH) {
+      if (url.pathname !== AUTH_PATH && !AUTH_ASSETS.has(url.pathname)) {
         return new Response('Not found', { status: 404 });
       }
       if (request.method !== 'GET' && request.method !== 'HEAD') {

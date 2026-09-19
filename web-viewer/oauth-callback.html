@@ -3,22 +3,60 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
   <meta name="robots" content="noindex">
   <title>Returning to CipherNest</title>
   <style>
-    body { margin: 0; min-height: 100vh; display: flex; align-items: center;
-           justify-content: center; background: #0e1013; color: #e8eaed;
-           font-family: system-ui, sans-serif; }
-    .card { text-align: center; padding: 32px; }
-    a.btn { display: inline-block; margin-top: 20px; padding: 14px 28px;
-            background: #4c8dff; color: #fff; border-radius: 12px;
-            text-decoration: none; font-weight: 600; }
-    p { color: #9aa0a6; font-size: 14px; }
+    /* CipherNest "Binary" theme tokens, same values as index.html. Light is
+       the bare :root default; dark follows the OS preference. No web fonts:
+       there is no wordmark on this page, only the mark. */
+    :root {
+      --bg: #F4F4F3;
+      --surface: #FFFFFF;
+      --hairline: #E2E2E0;
+      --fg: #1A1A1C;
+      --muted: #76767A;
+      --accent: #1A1A1C;
+      --accent-press: #333336;
+      --on-accent: #FFFFFF;
+      --logo: url('/img/ciphernest_logo_black.png');
+      color-scheme: light dark;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0E0E0F;
+        --surface: #1D1D1F;
+        --hairline: #2E2E31;
+        --fg: #F4F4F5;
+        --muted: #8C8C91;
+        --accent: #E6E6E8;
+        --accent-press: #CFCFD2;
+        --on-accent: #161617;
+        --logo: url('/img/ciphernest_logo_white.png');
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; min-height: 100vh; background: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+    body { display: flex; align-items: center; justify-content: center; padding: 20px; }
+    .card { width: 100%; max-width: 380px; background: var(--surface);
+      border: 1px solid var(--hairline); border-radius: 14px; padding: 30px 24px 26px;
+      text-align: center; display: flex; flex-direction: column; align-items: center; }
+    .logo-mark { height: 88px; aspect-ratio: 765 / 1024; margin-bottom: 18px;
+      background: center / contain no-repeat var(--logo); }
+    h1 { margin: 0 0 6px; font-size: 19px; font-weight: 600; letter-spacing: -0.02em; }
+    p { margin: 0 0 22px; color: var(--muted); font-size: 13px; line-height: 1.5;
+      max-width: 34ch; }
+    a.btn { display: inline-block; width: 100%; padding: 12px 20px;
+      background: var(--accent); color: var(--on-accent); border-radius: 10px;
+      text-decoration: none; font-weight: 600; font-size: 14px; }
+    a.btn:hover, a.btn:active { background: var(--accent-press); }
   </style>
 </head>
 <body>
   <!-- This page is the ALWAYS-rendered final step of sign-in (the app does
-       not claim this URL, on purpose - see CallbackActivity in the app
+       not claim this URL, on purpose - see MainActivity in the app
        manifest). The button converts the https redirect into a custom-
        scheme app intent: Chrome dispatches those on a user gesture, and
        never dispatches http/https ones. No scripted auto-navigation:
@@ -26,16 +64,15 @@
 
        Scheme is ciphernest-open (MainActivity's relay filter), NOT the
        plugin's ciphernest: targeting MainActivity brings the APP task to
-       the foreground, and it relays the URI to the plugin's
-       CallbackActivity internally. Targeting CallbackActivity directly
-       left the user stranded in this tab (separate task +
-       finishAndRemoveTask). The code in the URL is single-use and
-       short-lived; this page is ours and sends nothing anywhere. -->
-  <div class="card">
-    <h2>Sign-in complete</h2>
+       the foreground, and it completes the sign-in plugin's pending call
+       in-process. The code in the URL is single-use and short-lived; this
+       page is ours and sends nothing anywhere. -->
+  <main class="card">
+    <div class="logo-mark" role="img" aria-label="CipherNest"></div>
+    <h1>Sign-in complete</h1>
     <p>Tap the button to return to CipherNest.</p>
     <a class="btn" id="open" href="#">Open CipherNest</a>
-  </div>
+  </main>
   <script>
     var target = 'intent://oauth-callback' + location.search +
       '#Intent;scheme=ciphernest-open;package=io.ciphernest.vault;end';
