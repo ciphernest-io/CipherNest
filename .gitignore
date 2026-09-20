@@ -1,7 +1,12 @@
 # Build artefacts produced when packaging the static web viewer for upload.
 # The source lives in web-viewer/ — the zip is generated on demand.
 web-viewer.zip
-docs/
+# docs/* not docs/ : git cannot re-include a file whose parent directory is
+# excluded, so the directory contents are excluded instead and the published
+# MASVS self-assessment is negated back in. It goes on the security page and
+# into funding applications; the rest of docs/ stays local.
+docs/*
+!docs/MASVS_REPORT.md
 
 # Local design references / scratch files.
 temp/
