@@ -386,8 +386,11 @@ class OneDriveProvider implements CloudProvider {
       cloudName = sealed == null ? '$stem.cnest' : _encodeFilename(stem, sealed);
     }
 
-    // Graph auto-creates missing parent folders on upload; drop the README
-    // once the tree exists.
+    // Materialise the vault tree before dispatching. A small `:/content`
+    // PUT auto-creates missing parents, but a large-file createUploadSession
+    // does NOT — on a brand-new OneDrive account it 404s itemNotFound and
+    // the first video upload fails. Then drop the plaintext README.
+    await _ensureTree();
     await _ensureReadme();
 
     if (fileBytes != null) {
@@ -799,6 +802,48 @@ class OneDriveProvider implements CloudProvider {
     } catch (e) {
       debugPrint('OneDrive canary crypto fail (wrong key): $e');
       return false;
+    }
+  }
+
+  /// Creates `CipherNest/{vault,backup,shares}` when missing, once per
+  /// session. The path-addressed `:/content` PUT that small uploads use
+  /// auto-creates parents, but `createUploadSession` (large uploads) does
+  /// not, so a first-ever large upload on an empty account 404s without
+  /// this. Mirrors the Google provider's _ensureTree. Idempotent: a folder
+  /// that already exists returns 409, which is success here.
+  bool _treeEnsured = false;
+  Future<void> _ensureTree() async {
+    if (_treeEnsured) return;
+    final headers = await _authHeaders();
+    // Root first — a children POST needs its parent to exist.
+    await _ensureFolder(headers, '$_graphBase/me/drive/root/children',
+        DriveLayout.rootFolder);
+    final childrenUrl =
+        '$_graphBase/me/drive/root:/${DriveLayout.rootFolder}:/children';
+    await _ensureFolder(headers, childrenUrl, DriveLayout.vaultFolder);
+    await _ensureFolder(headers, childrenUrl, DriveLayout.backupFolder);
+    await _ensureFolder(headers, childrenUrl, DriveLayout.sharesFolder);
+    _treeEnsured = true;
+  }
+
+  Future<void> _ensureFolder(
+      Map<String, String> headers, String childrenUrl, String name) async {
+    final resp = await http.post(
+      Uri.parse(childrenUrl),
+      headers: {...headers, 'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'name': name,
+        'folder': <String, dynamic>{},
+        '@microsoft.graph.conflictBehavior': 'fail',
+      }),
+    );
+    // 201 created / 200 ok / 409 already-exists are all fine; anything else
+    // is a real failure worth surfacing.
+    if (resp.statusCode != 201 &&
+        resp.statusCode != 200 &&
+        resp.statusCode != 409) {
+      throw Exception(
+          'OneDrive ensureFolder "$name" failed (${resp.statusCode}): ${resp.body}');
     }
   }
 

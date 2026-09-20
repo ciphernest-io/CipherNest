@@ -14,20 +14,29 @@ class CloudService {
   factory CloudService() => _instance;
   CloudService._internal();
 
-  CloudProvider? _provider;
-  String? _providerForAccountId;
+  // One provider per account id. An upload started under account A must
+  // finish against A's provider even if the user switches to B mid-flight,
+  // so pinned callers (the upload pipeline) resolve through providerFor;
+  // a single-slot cache would hand them B's provider after a switch.
+  final Map<String, CloudProvider> _providers = {};
 
   CloudProvider _getProvider() {
     final active = AccountRegistry().activeAccount;
     if (active == null) {
       throw Exception('No active cloud account. Sign in first.');
     }
-    if (_providerForAccountId == active.id && _provider != null) {
-      return _provider!;
-    }
-    _provider = _buildProvider(active);
-    _providerForAccountId = active.id;
-    return _provider!;
+    return providerFor(active);
+  }
+
+  /// The provider bound to [account], built once and cached by account id.
+  /// Use this when a job has captured its account and must not follow a
+  /// later active-account switch.
+  CloudProvider providerFor(CloudAccount account) {
+    final existing = _providers[account.id];
+    if (existing != null) return existing;
+    final built = _buildProvider(account);
+    _providers[account.id] = built;
+    return built;
   }
 
   CloudProvider _buildProvider(CloudAccount account) {
@@ -62,8 +71,10 @@ class CloudService {
     Uint8List? bytes,
     Stream<List<int>>? stream,
     int? size,
+    CloudAccount? account,
   }) {
-    return _getProvider().uploadEncryptedFile(
+    final provider = account != null ? providerFor(account) : _getProvider();
+    return provider.uploadEncryptedFile(
       filename: filename,
       type: type,
       originalName: originalName,
@@ -120,7 +131,6 @@ class CloudService {
   /// Resets the cached provider. Call this if the active account changes
   /// outside of AccountRegistry's normal flow (rare).
   void reset() {
-    _provider = null;
-    _providerForAccountId = null;
+    _providers.clear();
   }
 }

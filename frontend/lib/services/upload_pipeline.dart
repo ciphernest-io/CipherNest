@@ -19,6 +19,8 @@ import '../src/utils/media_store_uri.dart';
 import 'activity_center.dart';
 import 'audio_art_parser.dart';
 import 'auto_sync_service.dart';
+import 'cloud/account_registry.dart';
+import 'cloud/cloud_account.dart';
 import 'cloud/cloud_service.dart';
 import 'cnest_errors.dart';
 import 'database_backup_service.dart';
@@ -88,6 +90,18 @@ class UploadPipeline {
   }) async {
     if (picks.isEmpty) return const [];
 
+    // Pin the account for the WHOLE batch. Every job here uploads to and
+    // records against THIS account, never whatever becomes active mid-batch:
+    // a switch between files must not send account A's blob to B, nor
+    // finalise A's row under B's DB/sync partition.
+    final account = AccountRegistry().activeAccount;
+    if (account == null) {
+      return [
+        for (final p in picks)
+          UploadOutcome._(p.name, ok: false, error: const NoActiveCloudError()),
+      ];
+    }
+
     // Free-tier cap: the whole batch must fit (a partial upload of a
     // hand-picked batch confuses more than it helps). Typed failure so
     // callers surface the upsell like any other upload error.
@@ -123,6 +137,7 @@ class UploadPipeline {
         outcomes.add(await _uploadOne(picks[i],
             category: category,
             folderId: folderId,
+            account: account,
             skipDuplicates: skipDuplicates));
         task?.update(i + 1,
             label: 'Encrypting ${i + 1}/${picks.length}…');
@@ -168,6 +183,7 @@ class UploadPipeline {
   static Future<UploadOutcome> _uploadOne(
     PlatformFile pickedFile, {
     required UploadCategory category,
+    required CloudAccount account,
     String? folderId,
     bool skipDuplicates = true,
   }) async {
@@ -255,8 +271,14 @@ class UploadPipeline {
         }
       }
 
-      final currentEmail = CloudService().currentEmail;
-      if (currentEmail == null) throw Exception('No active account.');
+      // Bound account guard: if the user switched accounts since the batch
+      // started, the DB and sync-log singletons now point at the other
+      // account's partition, so inserting here would cross-write. Bail
+      // before any row lands — the catch has nothing to roll back yet.
+      if (AccountRegistry().activeAccount?.id != account.id) {
+        throw const NoActiveCloudError();
+      }
+      final currentEmail = account.email;
 
       // Whole-file uploads: encrypt now — the hash falls out of the same
       // pass — and skip the upload entirely if these exact bytes are
@@ -421,6 +443,7 @@ class UploadPipeline {
           stream: hashed.stream,
           size: encryptedSize,
           bytes: null,
+          account: account,
         );
       } else if (preEncrypted != null) {
         contentHashFuture = Future.value(preEncrypted.hash);
@@ -429,6 +452,7 @@ class UploadPipeline {
           type: type,
           originalName: filename,
           bytes: preEncrypted.encrypted,
+          account: account,
         );
       } else {
         throw Exception('Invalid state');
@@ -442,6 +466,7 @@ class UploadPipeline {
           bytes: encryptedThumbBytes,
           filename: '${fileId}_thumb.cnest',
           type: CnestFileType.image,
+          account: account,
         );
       }
 
@@ -449,6 +474,16 @@ class UploadPipeline {
       final thumbCloudId =
           thumbUploadFuture != null ? await thumbUploadFuture : null;
       if (mainCloudId == null) throw Exception('Main upload failed');
+
+      // The blobs went to the bound account (providerFor). Finalise the row
+      // and its createFile op only if that account is STILL active —
+      // otherwise the DB/sync singletons would stamp it into the now-active
+      // account. On a switch the catch rolls the phantom row back; the
+      // orphan blob in the bound account is caught by Vault Health, which is
+      // never a cross-account leak.
+      if (AccountRegistry().activeAccount?.id != account.id) {
+        throw const NoActiveCloudError();
+      }
 
       final contentHash = await contentHashFuture;
 
