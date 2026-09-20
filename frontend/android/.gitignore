@@ -13,3 +13,6 @@ key.properties
 **/*.keystore
 **/*.jks
 /.kotlin/
+
+# Gradle output (frontend/.gitignore only covers frontend/build).
+/build/
