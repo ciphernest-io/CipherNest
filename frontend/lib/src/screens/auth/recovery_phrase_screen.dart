@@ -546,7 +546,15 @@ class _TypeBackSlot extends StatelessWidget {
       children: [
         TextField(
           controller: controller,
+          // All three matter, and all three must stay. autocorrect stops the
+          // IME rewriting a word; enableSuggestions stops it LEARNING one.
+          // Without the second, the keyboard's personal dictionary can retain
+          // seed words and later offer them as completions in other apps, and
+          // some keyboards sync that dictionary to their vendor's cloud.
+          // restore_phrase_screen.dart already sets both; this screen did not,
+          // and that asymmetry was MASVS finding F-09.
           autocorrect: false,
+          enableSuggestions: false,
           textCapitalization: TextCapitalization.none,
           decoration: InputDecoration(
             labelText: 'Word #$position',

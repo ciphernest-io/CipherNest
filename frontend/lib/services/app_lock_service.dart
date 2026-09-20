@@ -4,8 +4,10 @@ import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../src/config/routes.dart';
+import 'cache_manager_service.dart';
 import 'key_manager_service.dart';
 import 'thumb_store.dart';
+import 'video_streaming_server.dart';
 
 /// Auto-lock: zeroes the vault private key after a period of inactivity and
 /// routes to the login screen. Encryption keeps working after a lock (the
@@ -92,6 +94,7 @@ class AppLockService {
   /// Resets the inactivity countdown. Call on user interaction and on unlock.
   void recordActivity() {
     _lastActivity = DateTime.now();
+    _deferringSince = null;
     _timer?.cancel();
     if (_timeout.inMinutes <= 0) return; // disabled
     if (!KeyManagerService().isUnlocked) return; // nothing to lock
@@ -113,25 +116,54 @@ class AppLockService {
     }
   }
 
+  /// Hard ceiling on how long playback may hold the lock open past its
+  /// timeout. Defence in depth behind the [isPlaybackActive] fix: even if a
+  /// future liveness signal gets stuck true, the vault still closes.
+  static const Duration _maxPlaybackDeferral = Duration(minutes: 30);
+
+  /// When the current run of playback deferrals started. Null when not
+  /// deferring.
+  DateTime? _deferringSince;
+
   void _onTimeout() {
-    // Defer while media plays — re-check shortly instead of locking.
+    // Defer while media plays, re-checking shortly instead of locking, but
+    // never indefinitely. Before the cap, a stuck liveness signal meant the
+    // vault could never lock again for the life of the process (MASVS F-33).
     if (_isPlaybackActive?.call() ?? false) {
-      _timer = Timer(const Duration(seconds: 30), _onTimeout);
-      return;
+      final since = _deferringSince ??= DateTime.now();
+      if (DateTime.now().difference(since) < _maxPlaybackDeferral) {
+        _timer = Timer(const Duration(seconds: 30), _onTimeout);
+        return;
+      }
+      // Cap reached: fall through and lock despite playback.
     }
+    _deferringSince = null;
     if (_onboardingInProgress) return;
     lockNow();
   }
 
   /// Locks now and routes to the login screen.
+  ///
+  /// Reachable from the Settings "Lock vault" action as well as the
+  /// inactivity timer. Until that action existed this method had no callers
+  /// at all, so there was no way for a user to close their own vault
+  /// (MASVS F-32).
   void lockNow() {
     _timer?.cancel();
+    _deferringSince = null;
     if (!KeyManagerService().isUnlocked) return;
     KeyManagerService().lock();
     // Plaintext thumbnails (bytes + decoded bitmaps) leave memory with
     // the keys.
     ThumbStore.instance.clear();
     PaintingBinding.instance.imageCache.clear();
+    // Memory alone was never enough. Locking used to leave whole decrypted
+    // videos, audio tracks and images on disk, and leave the loopback server
+    // that hands them out still listening. Both were confirmed on a device
+    // (MASVS F-01, F-02, F-03). Fire-and-forget: the UI must not wait on
+    // disk IO to show the login screen.
+    unawaited(VideoStreamingServer().stop());
+    unawaited(CacheManagerService().purgeAllLargePlaintext());
     _navKey?.currentState
         ?.pushNamedAndRemoveUntil(AppRoutes.login, (_) => false);
   }

@@ -289,6 +289,44 @@ class CacheManagerService extends ChangeNotifier {
   }
 
   /// The Main Function: Checks limits and deletes old files if necessary.
+  /// Deletes every large decrypted artifact in the cache, regardless of the
+  /// size budget. Thumbnails are kept: they are small, expensive to
+  /// regenerate, and cleared from memory separately on lock.
+  ///
+  /// Called when the vault locks. Until this existed, locking cleared the
+  /// in-memory key and nothing else, so whole decrypted videos, audio tracks
+  /// and images stayed readable on disk behind a login screen. A device test
+  /// pulled them straight out of the cache directory with the app not even
+  /// running (MASVS F-01 and F-02).
+  ///
+  /// Best effort. A failed delete is picked up by the LRU sweep later.
+  Future<int> purgeAllLargePlaintext() async {
+    var deleted = 0;
+    try {
+      final tempDir = await getTemporaryDirectory();
+      if (!await tempDir.exists()) return 0;
+      await for (final entity in tempDir.list(recursive: true)) {
+        if (entity is! File) continue;
+        final name = entity.path.split(Platform.pathSeparator).last;
+        // Thumbnails survive; everything classed as large plaintext goes.
+        if (name.startsWith('thumb_')) continue;
+        if (_evictionPriority(entity.path) != 1) continue;
+        // Never yank a picker copy out from under an in-flight upload.
+        if (_isFreshPickerCopy(entity)) continue;
+        try {
+          await entity.delete();
+          deleted++;
+        } catch (e) {
+          debugPrint('Cache Manager: lock purge could not delete $name: $e');
+        }
+      }
+    } catch (e) {
+      debugPrint('Cache Manager: lock purge error: $e');
+    }
+    if (deleted > 0) notifyListeners();
+    return deleted;
+  }
+
   Future<void> enforceCacheLimit() async {
     try {
       // 1. Get the User's Limit (GB)

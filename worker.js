@@ -50,9 +50,95 @@ function isAllowed(host) {
   return false;
 }
 
+// Security headers for every response this Worker serves.
+//
+// The share viewer had none: no CSP, no HSTS, no nosniff, no frame control.
+// It is the surface that handles ciphertext and, in the browser, the
+// decryption key, so it should not be weaker than the marketing site
+// (SA-WEB / MASVS report W-02).
+//
+// CSP is deliberately tight: this page loads two same-origin scripts, one
+// same-origin font, and its own images, and it must be able to render a
+// decrypted blob: URL for the preview and download. It talks to nothing
+// except its own origin, because /proxy is same-origin.
+// The OAuth callback page carries one inline script: the three lines that
+// build the intent:// URL for the "Open CipherNest" button. `script-src
+// 'self'` alone would block it and silently break OneDrive sign-in, so its
+// exact SHA-256 is allowed and nothing else is. Change that script and this
+// hash must change with it, or sign-in stops working.
+//   Recompute: sha256 of the bytes between <script> and </script>, base64.
+const OAUTH_INLINE_SCRIPT_HASH =
+  "'sha256-cliF2edZN1dFlRXaqfps0st6nHIzEiyxDGMGwgzPjVM='";
+
+const SECURITY_HEADERS = {
+  'Content-Security-Policy': [
+    "default-src 'self'",
+    `script-src 'self' ${OAUTH_INLINE_SCRIPT_HASH}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' blob: data:",
+    "media-src 'self' blob:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+  ].join('; '),
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Permissions-Policy': 'geolocation=(), camera=(), microphone=(), interest-cohort=()',
+  'X-Frame-Options': 'DENY',
+};
+
+function withSecurityHeaders(response) {
+  const headers = new Headers(response.headers);
+  for (const [k, v] of Object.entries(SECURITY_HEADERS)) headers.set(k, v);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+// Some link handlers (WhatsApp Desktop, Messenger, various URL wrappers)
+// percent-encode the '#' that starts a share link's fragment. When they do,
+// the fragment stops being a fragment: the decryption key travels in the
+// REQUEST PATH, where this Worker and Cloudflare's logs can see it. That
+// breaks the one guarantee the product repeats most often, that the key is
+// never sent to a server (MASVS report W-01).
+//
+// share.js already recovers from this client-side, but only after the
+// damage. Redirecting first gets the browser onto a clean URL immediately,
+// so the key is not re-sent on every subsequent asset request and does not
+// end up in the page's own address bar or history.
+//
+// This cannot unsend the request that carried it. Keys that may already have
+// transited a log have to be treated as disclosed and the shares re-minted.
+function normalizeEncodedFragment(url) {
+  const marker = url.pathname.indexOf('%23');
+  if (marker < 0) return null;
+  const path = url.pathname.slice(0, marker);
+  const fragment = decodeURIComponent(url.pathname.slice(marker + 3));
+  const target = new URL(url.toString());
+  target.pathname = path;
+  target.hash = fragment;
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: target.toString(),
+      'Cache-Control': 'no-store',
+      ...SECURITY_HEADERS,
+    },
+  });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    const normalized = normalizeEncodedFragment(url);
+    if (normalized) return normalized;
 
     if (url.hostname === AUTH_HOST) {
       if (url.pathname !== AUTH_PATH && !AUTH_ASSETS.has(url.pathname)) {
@@ -61,7 +147,7 @@ export default {
       if (request.method !== 'GET' && request.method !== 'HEAD') {
         return new Response('Method not allowed', { status: 405 });
       }
-      return env.ASSETS.fetch(request);
+      return withSecurityHeaders(await env.ASSETS.fetch(request));
     }
 
     if (url.pathname === '/proxy') {
@@ -72,7 +158,7 @@ export default {
 
     // Everything else: static assets. SPA fallback handled by
     // wrangler.jsonc's assets.not_found_handling.
-    return env.ASSETS.fetch(request);
+    return withSecurityHeaders(await env.ASSETS.fetch(request));
   },
 };
 

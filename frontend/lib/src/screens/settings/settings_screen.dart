@@ -1307,6 +1307,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   List<Widget> _securityChildren(ColorScheme cs) {
     return <Widget>[
+      // Manual lock. Until this existed, AppLockService.lockNow() had no
+      // callers anywhere and the only way to close the vault was to wait out
+      // the inactivity timer, which playback could defer indefinitely. A
+      // privacy product has to let you shut the door before handing someone
+      // your phone (MASVS F-32).
+      ListTile(
+            leading: ThemeIcon('lock', color: cs.primary),
+            title: Text('Lock vault now', style: TextStyle(color: cs.onSurface)),
+            subtitle: Text(
+              'Close the vault and return to the unlock screen',
+              style: TextStyle(color: cs.onSurface.withAlpha(140)),
+            ),
+            onTap: () => AppLockService().lockNow(),
+          ),
       ListTile(
             leading: ThemeIcon('lock', color: cs.primary),
             title: Text('Auto-lock', style: TextStyle(color: cs.onSurface)),

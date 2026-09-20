@@ -192,7 +192,7 @@ Several of these are named after the user's own filename. `File('${dir.path}/${f
 
 **Fix.** Add a maximum-age sweep independent of the size budget, deleting any `*_decrypted.*`, `*.plain*`, `*_audio.bin`, or filename-named artefact older than a few minutes. Name every temporary plaintext file by opaque id, never by `file.filename`. Purge the cache on lock, not only on vault reset.
 
-**Status: OPEN.**
+**Status: FIXED in code on 2026-09-20, not yet re-verified on device.** purge of all large decrypted artifacts on lock (`cache_manager_service.dart` `purgeAllLargePlaintext`).
 
 ---
 
@@ -216,7 +216,7 @@ Lock is also evaluated only on resume. `frontend/lib/src/app.dart:66-71` handles
 
 **Fix.** On `lockNow()`: stop the streaming server, drop all sessions, and delete the large plaintext artefacts. Handle `AppLifecycleState.paused` so the timeout starts at background time rather than being measured after the app is already visible again. Add an "Immediately" timeout option. Cap the playback deferral.
 
-**Status: OPEN.**
+**Status: FIXED in code on 2026-09-20, not yet re-verified on device.** lock now stops the streaming server and purges decrypted media from disk.
 
 ---
 
@@ -249,7 +249,7 @@ Android does not namespace loopback per application. Any installed app holding `
 
 **Fix.** Mint a random per-process token at start, require it as a path prefix or header, and reject everything else. Maintain an explicit allowlist of live session ids so `_sessionFor` cannot resurrect a closed one. Call `stop()` from `lockNow()` and on sign-out. Remove the id and port from the logs.
 
-**Status: OPEN.**
+**Status: FIXED in code on 2026-09-20, not yet re-verified on device.** per-process 32-byte token required as the first path segment, constant-time compared; token discarded on stop.
 
 ---
 
@@ -301,7 +301,7 @@ Combined with F-06, the recents thumbnail is the sharper problem, because it req
 
 **Fix.** Set `FLAG_SECURE` on the window, or per-route for the thirty-four screens. The two phrase screens and the two share screens should be unconditional, with no user toggle.
 
-**Status: OPEN.**
+**Status: FIXED in code on 2026-09-20, not yet re-verified on device.** `FLAG_SECURE` set on the window in `MainActivity.applySecureWindow()`, release builds only.
 
 ---
 
@@ -327,7 +327,7 @@ The image-cache purge in `lockNow()` happens after resume, which is strictly aft
 
 **Fix.** Add a `paused`/`inactive` handler that covers the UI with an opaque surface and removes it on resume. This is needed in addition to F-05, because `FLAG_SECURE` and a pause cover solve overlapping but not identical problems.
 
-**Status: OPEN.**
+**Status: FIXED in code on 2026-09-20, not yet re-verified on device.** same window flag; Android also refuses to snapshot a secure window for recents.
 
 ---
 
@@ -391,7 +391,7 @@ The Worker enforces a host allowlist for the web viewer (`worker.js:27-51`), so 
 
 **Fix.** Require `https` and restrict the host to the same allowlist the Worker uses. Stream the body with a size ceiling instead of buffering.
 
-**Status: OPEN.**
+**Status: FIXED in code on 2026-09-20, not yet re-verified on device.** host allowlist and `https` requirement on the share download URL, plus a 512 MB body cap.
 
 ---
 
@@ -417,7 +417,7 @@ The restore screen gets this right, setting both (`frontend/lib/src/screens/auth
 
 **Fix.** Add `enableSuggestions: false` at `recovery_phrase_screen.dart:547`. Set `autocorrect: false`, `enableSuggestions: false` and `enableInteractiveSelection: false` on every password and phrase field, so that toggling the reveal control cannot re-enable the IME path.
 
-**Status: OPEN.**
+**Status: FIXED in code on 2026-09-20, not yet re-verified on device.** `enableSuggestions: false` added to the mnemonic verification field.
 
 ---
 
@@ -514,7 +514,7 @@ The port and the file identifier are precisely the two values an attacker needs 
 
 **Fix.** Route every site through one helper that early-returns unless `kDebugMode`. Throw typed errors carrying status codes rather than embedding response bodies. Delete `autosync_debug.log` or gate it on `kDebugMode`.
 
-**Status: OPEN.**
+**Status: FIXED in code on 2026-09-20, not yet re-verified on device.** all logging in the streaming server gated behind `kDebugMode`; the port is no longer logged.
 
 ---
 
@@ -842,7 +842,7 @@ One concrete item: `google_fonts` is declared in `pubspec.yaml:70` but never use
 
 **Fix.** Add `res/xml/data_extraction_rules.xml` excluding the root domain from both `<cloud-backup>` and `<device-transfer>`, and reference it from the application element.
 
-**Status: OPEN.**
+**Status: FIXED in code on 2026-09-20, not yet re-verified on device.** `data_extraction_rules.xml` added, excluding every domain from both cloud backup and device transfer.
 
 ---
 
@@ -938,7 +938,7 @@ The only paths that reach it are `_onTimeout`, the inactivity timer, and `onResu
 
 **Fix.** Add a lock action to the settings screen and the gallery overflow menu, wired to `lockNow()`. Correct the stale comment.
 
-**Status: OPEN.**
+**Status: FIXED in code on 2026-09-20, not yet re-verified on device.** "Lock vault now" action added to Settings, wired to `lockNow()`.
 
 ---
 
@@ -972,7 +972,7 @@ This also made one planned test unanswerable. Whether the loopback server contin
 
 **Fix.** End the streaming session when playback is paused or the player is dismissed, not only when the queue is replaced or a file is deleted. Separately, cap the deferral so it cannot extend indefinitely regardless of session state.
 
-**Status: OPEN.**
+**Status: FIXED in code on 2026-09-20, not yet re-verified on device.** auto-lock deferral now keys on recent streaming traffic rather than session existence, with a 30 minute hard cap.
 
 ---
 
@@ -1010,6 +1010,8 @@ MASVS does not cover web. This section assesses `worker.js` and `web-viewer/` ag
 
 **W-01. A mangled share link puts the decryption key in the request path, where the server sees and logs it. High. ASVS V7 and V8.**
 
+**Status: PARTIALLY FIXED in code on 2026-09-20.** The Worker now detects `%23` in the path and answers with a 302 to the normalized `#` form before serving anything, so the key stops being re-sent on every subsequent asset request and never reaches the page's own address bar or history. That does not unsend the first request. Deciding what to do about request logging, and whether to re-mint existing shares, is still open and is the reason this stays the top item in section 10.
+
 This is the most severe finding in the assessment, and it falsifies the claim CipherNest repeats most often.
 
 The viewer handles the case where a link handler percent-encodes the fragment marker:
@@ -1041,6 +1043,8 @@ Exploitation by an outside attacker is not the concern. The concern is that a ze
 **Status: OPEN.**
 
 **W-02. No security headers on the share host. Medium. ASVS V14.4.**
+
+**Status: FIXED in code on 2026-09-20.** The Worker now sets a Content Security Policy, HSTS, `nosniff`, `no-referrer`, a Permissions Policy and `frame-ancestors 'none'` on every response it serves. The policy allows exactly one inline script, the OAuth callback page's intent builder, pinned by SHA-256 hash rather than by `'unsafe-inline'`.
 `curl -I https://share.ciphernest.io/` returns no `Content-Security-Policy`, no `Strict-Transport-Security`, no `X-Content-Type-Options`, no `Referrer-Policy` and no frame-ancestors control. `worker.js` sets none, and there is no `_headers` file in `web-viewer/`. The marketing site at `ciphernest.io` is configured to an A grade; the share viewer, which is the surface that actually handles ciphertext and keys, has nothing. The page can be framed, its responses can be MIME-sniffed, and there is no CSP to contain a future injection. The page does set `<meta name="referrer" content="no-referrer">`, which is good but is not a substitute.
 Fix: add a `_headers` file or set headers in the Worker, with a CSP restricting `script-src` to `'self'`, `frame-ancestors 'none'`, `X-Content-Type-Options: nosniff`, a long HSTS max-age, and `Referrer-Policy: no-referrer`.
 

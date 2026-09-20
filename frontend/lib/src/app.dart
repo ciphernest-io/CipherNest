@@ -45,13 +45,19 @@ class _AppState extends State<App> with WidgetsBindingObserver {
     // Activity center: notification mirror + bg-sync bridge + lifecycle.
     unawaited(ActivityCenter().init());
     _bootstrapDeepLinks();
-    // Auto-lock: defers while music plays or a video streams so playback
-    // never cuts mid-session.
+    // Auto-lock: defers while media is GENUINELY playing so playback never
+    // cuts mid-session.
+    //
+    // This used to ask VideoStreamingServer.hasActiveSessions, which is only
+    // "a session object exists" and is never cleared on pause. One played
+    // track therefore disabled auto-lock permanently (MASVS F-33). It now
+    // asks whether bytes were served recently, which goes false shortly
+    // after playback stops.
     AppLockService().init(
       navigatorKey: App.navigatorKey,
       isPlaybackActive: () =>
           AudioPlayerService().playing ||
-          VideoStreamingServer().hasActiveSessions,
+          VideoStreamingServer().isStreamingActive,
     );
   }
 

@@ -1,9 +1,11 @@
 package io.ciphernest.vault
 
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
+import android.view.WindowManager
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import com.ryanheise.audioservice.AudioServiceFragmentActivity
@@ -30,7 +32,41 @@ class MainActivity : AudioServiceFragmentActivity() {
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
+        applySecureWindow()
         relayOAuthReturn(intent)
+    }
+
+    // FLAG_SECURE for the whole window, not per screen.
+    //
+    // Set once here because 34 of the app's 49 screens render decrypted
+    // content or secrets, and a per-route approach fails open: any screen
+    // someone forgets is a screen that leaks. One flag cannot be forgotten.
+    //
+    // This closes two MASVS findings at once. F-05: every screen was
+    // screenshot-able, and on a real device the system screenshot key wrote
+    // the twelve-word recovery phrase into DCIM/Screenshots as an ordinary
+    // photo, where photo backup would sync it off the device. F-06: Android
+    // also refuses to snapshot a secure window for the task switcher, so the
+    // recents card stops showing the decrypted gallery grid and whatever
+    // photo was last open.
+    //
+    // Exempted for debuggable builds only, so store screenshots and UI review
+    // are still possible without weakening anything users install.
+    //
+    // Read from ApplicationInfo at runtime rather than BuildConfig. AGP 8 no
+    // longer generates BuildConfig unless the feature is opted into, and the
+    // runtime flag is the better signal regardless: it reflects what this
+    // installed APK actually is. A debuggable build already offers an
+    // attacker far more than a screenshot, so exempting it costs nothing,
+    // and a release APK can never carry the flag.
+    private fun applySecureWindow() {
+        val debuggable =
+            (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (debuggable) return
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_SECURE,
+            WindowManager.LayoutParams.FLAG_SECURE,
+        )
     }
 
     override fun onNewIntent(intent: Intent) {

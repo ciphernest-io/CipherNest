@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  android:allowBackup="false" only governs CLOUD backup. From Android 12
+  (API 31) device-to-device transfer is a separate path with its own
+  transport (com.google.android.gms/.backup.migrate.service.D2dTransport),
+  and it is NOT covered by allowBackup. Without this file the app's private
+  data can ride a D2D transfer to a new phone.
+
+  What that data is: the password-wrapped vault seed (seed_blob_v1), the
+  wrapped recovery mnemonic, the Keystore-backed biometric blob, and the
+  shares table, which holds magic links including their raw key fragments.
+  That is the exact set the manifest comment says allowBackup="false" exists
+  to protect, so the protection was half-implemented on every modern Android.
+
+  MASVS finding F-27. Both blocks are required: cloud-backup for Auto Backup,
+  device-transfer for D2D. Recovery is the mnemonic, never a device copy.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

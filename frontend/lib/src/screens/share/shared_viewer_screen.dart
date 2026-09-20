@@ -196,10 +196,60 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
     }
   }
 
+  /// Cloud hosts a CipherNest share blob can legitimately live on.
+  ///
+  /// Kept in step with ALLOWED_HOSTS in worker.js, which enforces the same
+  /// list for the browser viewer. The app had no equivalent check, so the
+  /// base64 segment of an incoming link was decoded straight into an
+  /// http.get: anyone who sent a link could make the app fetch any URL they
+  /// chose. Confirmed on a device during MASVS testing, where a crafted link
+  /// produced two fetches to a host the tester controlled, identified in the
+  /// server log by the app's own Dart user agent (finding F-08).
+  ///
+  /// Host pinning on the OUTER link is not a substitute. The attacker mints
+  /// the outer link, so only the inner URL matters.
+  static const Set<String> _allowedDownloadHosts = {
+    'drive.google.com',
+    'drive.usercontent.google.com',
+    'www.googleapis.com',
+    'docs.google.com',
+    'lh3.googleusercontent.com',
+    'onedrive.live.com',
+    '1drv.ms',
+    'api.onedrive.com',
+    'graph.microsoft.com',
+  };
+
+  static const List<String> _allowedDownloadSuffixes = ['.sharepoint.com'];
+
+  /// Ceiling on a share body. Without it, `bodyBytes` buffers whatever the
+  /// far end sends, so a hostile link was also an out-of-memory kill.
+  static const int _maxShareBytes = 512 * 1024 * 1024;
+
+  static bool _isAllowedDownloadHost(Uri uri) {
+    if (uri.scheme != 'https') return false;
+    final host = uri.host.toLowerCase();
+    if (_allowedDownloadHosts.contains(host)) return true;
+    return _allowedDownloadSuffixes.any(host.endsWith);
+  }
+
   Future<Uint8List> _downloadBlob(String url) async {
-    final resp = await http.get(Uri.parse(url));
+    final uri = Uri.parse(url);
+    if (!_isAllowedDownloadHost(uri)) {
+      throw HttpException(
+        'This link points somewhere CipherNest does not recognise '
+        '(${uri.host.isEmpty ? uri.scheme : uri.host}). Shares are only ever '
+        'hosted on Google Drive or OneDrive, so this link was not made by '
+        'CipherNest.',
+      );
+    }
+
+    final resp = await http.get(uri);
     if (resp.statusCode != 200) {
       throw HttpException('Download failed (${resp.statusCode})');
+    }
+    if (resp.bodyBytes.length > _maxShareBytes) {
+      throw const HttpException('Shared file is too large to open.');
     }
     // Detect Drive/OneDrive HTML interstitial pages — the share blob would
     // never be HTML, so this means the URL no longer serves the file.

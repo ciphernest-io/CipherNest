@@ -14,6 +14,22 @@ import 'cloud/cloud_service.dart';
 import 'database_service.dart';
 import 'encryption_service.dart';
 
+/// Debug-only logging for this file.
+///
+/// This server's log lines used to carry the two values that are the ONLY
+/// thing standing between another app on the device and decrypted vault
+/// media: the loopback port it listens on, and the file id that addresses a
+/// session. A MASVS device test recovered a complete decrypted track after
+/// reading both straight out of logcat (finding F-12, feeding F-03).
+///
+/// debugPrint is NOT compiled out of Flutter release builds, so gating is
+/// the only thing that keeps these out of a shipped log. Never call
+/// debugPrint directly in this file.
+void _log(String message) {
+  if (!kDebugMode) return;
+  debugPrint(message);
+}
+
 /// Per-video streaming session state. Created on `beginSession`, lives until
 /// `endSession`. Caches the (decrypted) file key + sizes so we don't re-derive
 /// them for every range request.
@@ -113,6 +129,31 @@ class VideoStreamingServer {
   /// service to defer locking during playback.
   bool get hasActiveSessions => _sessions.isNotEmpty;
 
+  /// Timestamp of the last range request actually served. Drives
+  /// [isStreamingActive].
+  DateTime? _lastServedAt;
+
+  /// Whether media is genuinely streaming right now.
+  ///
+  /// The auto-lock used to defer on [hasActiveSessions], which is only "a
+  /// session object exists". Nothing clears that on pause, so a single played
+  /// track disabled auto-lock for the rest of the process lifetime, and with
+  /// no manual lock either the vault could never be closed (MASVS F-33, found
+  /// on device). A player that is actually playing keeps asking for bytes, so
+  /// recent traffic is the honest signal: pause the track and this goes false
+  /// within [_streamIdleGrace], which re-arms the lock.
+  ///
+  /// The grace window absorbs the gap between range requests on a well-buffered
+  /// stream. It must stay comfortably longer than that gap or the lock will
+  /// fire mid-playback, which is the bug the old predicate was avoiding.
+  bool get isStreamingActive {
+    final last = _lastServedAt;
+    if (last == null) return false;
+    return DateTime.now().difference(last) < _streamIdleGrace;
+  }
+
+  static const Duration _streamIdleGrace = Duration(seconds: 45);
+
   /// Maximum plaintext bytes returned in a single HTTP response, regardless
   /// of how much the client requested. When ExoPlayer opens the URL it sends
   /// `Range: bytes=0-`, which the pre-fix code interpreted as "download the
@@ -135,10 +176,33 @@ class VideoStreamingServer {
   /// With it, the player's next request is almost always a disk-cache hit.
   static const int _prefetchChunks = 8;
 
+  /// Per-process bearer token, minted on first start and carried as the
+  /// first path segment of every stream URL.
+  ///
+  /// Android does not isolate loopback between apps, so before this existed
+  /// any installed app holding INTERNET could fetch decrypted vault media
+  /// from this server by connecting to 127.0.0.1 and naming a file id. That
+  /// was demonstrated during MASVS testing: a process running as a different
+  /// uid pulled a complete decrypted track, 8.7 MB with its tags intact,
+  /// having read the port and the file id out of logcat (finding F-03, with
+  /// the log leak as F-12).
+  ///
+  /// 32 bytes from a cryptographic RNG. It never leaves the process except
+  /// inside a loopback URL handed to the in-app player, and it is discarded
+  /// on [stop].
+  String? _token;
+
+  String _mintToken() {
+    final rnd = math.Random.secure();
+    final bytes = List<int>.generate(32, (_) => rnd.nextInt(256));
+    return base64Url.encode(bytes).replaceAll('=', '');
+  }
+
   /// Starts the server (idempotent). Returns the bound port.
   Future<int> start() async {
     if (_server != null && _port != null) return _port!;
 
+    _token ??= _mintToken();
     final handler = const Pipeline().addHandler(_route);
     _server = await shelf_io.serve(
       handler,
@@ -146,7 +210,7 @@ class VideoStreamingServer {
       0, // OS picks free port
     );
     _port = _server!.port;
-    debugPrint('VideoStreamingServer listening on 127.0.0.1:$_port');
+    _log('VideoStreamingServer listening on 127.0.0.1:<port>');
     return _port!;
   }
 
@@ -155,6 +219,8 @@ class VideoStreamingServer {
     await _server?.close(force: true);
     _server = null;
     _port = null;
+    // A fresh token next time: any URL that escaped is dead on restart.
+    _token = null;
     for (final session in _sessions.values) {
       await session.dispose();
     }
@@ -167,7 +233,7 @@ class VideoStreamingServer {
   Future<String> beginSession(CnestFile file) async {
     final port = await start();
     await _openSession(file);
-    return 'http://127.0.0.1:$port/${file.id}';
+    return 'http://127.0.0.1:$port/$_token/${file.id}';
   }
 
   /// URL for [file] WITHOUT opening a session — the session is created
@@ -175,7 +241,7 @@ class VideoStreamingServer {
   /// can hold hundreds of cloud tracks without hundreds of header fetches.
   Future<String> urlFor(CnestFile file) async {
     final port = await start();
-    return 'http://127.0.0.1:$port/${file.id}';
+    return 'http://127.0.0.1:$port/$_token/${file.id}';
   }
 
   Future<_StreamingSession> _openSession(CnestFile file) async {
@@ -206,7 +272,7 @@ class VideoStreamingServer {
       prefixLen - 1,
     );
     final headerElapsed = DateTime.now().difference(headerStart).inMilliseconds;
-    debugPrint(
+    _log(
       'VideoStreamingServer beginSession ${file.id}: '
       'header fetched in ${headerElapsed}ms '
       '(${plaintextSize ~/ 1024 ~/ 1024} MB video, $totalChunks chunks)',
@@ -288,7 +354,7 @@ class VideoStreamingServer {
         // it just doesn't wipe the bytes already there.
         session.writeHandle = await cacheFile.open(mode: FileMode.append);
         session.cachedChunks.addAll(seededChunks);
-        debugPrint(
+        _log(
           'VideoStreamingServer: resumed ${seededChunks.length}/'
           '$totalChunks cached chunks for ${file.id}',
         );
@@ -308,7 +374,7 @@ class VideoStreamingServer {
     if (!isAudio) {
       unawaited(
         _ensureChunks(session, 0, math.min(_prefetchChunks, totalChunks) - 1)
-            .catchError((e) => debugPrint('VideoStreamingServer warmup: $e')),
+            .catchError((e) => _log('VideoStreamingServer warmup: $e')),
       );
     }
 
@@ -330,7 +396,7 @@ class VideoStreamingServer {
         if (file == null || file.cloudId == null) return null;
         return await _openSession(file);
       } catch (e) {
-        debugPrint('VideoStreamingServer lazy open $fileId failed: $e');
+        _log('VideoStreamingServer lazy open $fileId failed: $e');
         return null;
       } finally {
         // The result is in _sessions now (or failed) — clear the gate so a
@@ -351,16 +417,37 @@ class VideoStreamingServer {
   // Request handler
   // ---------------------------------------------------------------------------
 
+  /// Length-independent compare, so a wrong token cannot be recovered by
+  /// timing the rejection. Both operands are ASCII base64url.
+  static bool _constantTimeEquals(String a, String b) {
+    if (a.length != b.length) return false;
+    var diff = 0;
+    for (var i = 0; i < a.length; i++) {
+      diff |= a.codeUnitAt(i) ^ b.codeUnitAt(i);
+    }
+    return diff == 0;
+  }
+
   Future<Response> _route(Request request) async {
     if (request.method != 'GET' && request.method != 'HEAD') {
       return Response(405);
     }
-    // Path is /<file_id>
-    final fileId = request.url.path;
+    // Path is /<token>/<file_id>. The token gates the whole server; without
+    // it a local process only needs to guess a port and a file id.
+    final segments = request.url.pathSegments;
+    final token = _token;
+    if (token == null ||
+        segments.length != 2 ||
+        !_constantTimeEquals(segments[0], token)) {
+      return Response.notFound('Not found');
+    }
+    final fileId = segments[1];
     final session = await _sessionFor(fileId);
     if (session == null) {
       return Response.notFound('No active session for $fileId');
     }
+    // Liveness signal for the auto-lock deferral. See [isStreamingActive].
+    _lastServedAt = DateTime.now();
 
     final total = session.plaintextSize;
     final rangeHeader = request.headers['range'];
@@ -442,7 +529,7 @@ class VideoStreamingServer {
     try {
       final bytes = await _serveRange(session, rangeStart, rangeEnd);
       final elapsed = DateTime.now().difference(started).inMilliseconds;
-      debugPrint(
+      _log(
         'VideoStreamingServer served $fileId bytes $rangeStart-$rangeEnd '
         '(${bytes.length} B) in ${elapsed}ms',
       );
@@ -456,7 +543,7 @@ class VideoStreamingServer {
       if (prefetchEnd > lastServedChunk) {
         unawaited(
           _ensureChunks(session, lastServedChunk + 1, prefetchEnd).catchError(
-            (e) => debugPrint('VideoStreamingServer prefetch: $e'),
+            (e) => _log('VideoStreamingServer prefetch: $e'),
           ),
         );
       }
@@ -467,7 +554,7 @@ class VideoStreamingServer {
         headers: headers,
       );
     } catch (e, st) {
-      debugPrint('VideoStreamingServer range error for $fileId '
+      _log('VideoStreamingServer range error for $fileId '
           'bytes $rangeStart-$rangeEnd: $e\n$st');
       return Response.internalServerError(body: 'Range fetch failed: $e');
     }
@@ -567,7 +654,7 @@ class VideoStreamingServer {
             math.min(chunkIdx + _prefetchChunks, session.totalChunks - 1);
         if (ahead > chunkIdx) {
           unawaited(_ensureChunks(session, chunkIdx + 1, ahead)
-              .catchError((e) => debugPrint('audio read-ahead: $e')));
+              .catchError((e) => _log('audio read-ahead: $e')));
         }
         final sliceEnd =
             math.min(chunkIdx * chunkSize + chunkSize - 1, pEnd);
@@ -651,7 +738,7 @@ class VideoStreamingServer {
           await session.completeMarker.writeAsBytes(const []);
           // The idx is subsumed by the `.done` marker.
           if (await session.idxFile.exists()) await session.idxFile.delete();
-          debugPrint(
+          _log(
             'VideoStreamingServer: ${session.file.id} fully cached on disk',
           );
         } catch (_) {
@@ -678,7 +765,7 @@ class VideoStreamingServer {
       );
       await tmp.rename(session.idxFile.path);
     } catch (e) {
-      debugPrint('VideoStreamingServer: idx write failed: $e');
+      _log('VideoStreamingServer: idx write failed: $e');
     }
   }
 
