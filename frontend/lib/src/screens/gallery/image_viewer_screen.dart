@@ -249,7 +249,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   double get _expandedTileWidth {
     final controller = _activeVideo;
     if (controller == null || _stripViewport <= 0) return _frameTileW;
-    final frames = _expandedFrameCount(controller.value.duration);
+    final frames = _expandedFrameCount(_effectiveVideoDuration(controller));
     // Fixed scrub SPAN (~68% of the bar) regardless of frame count, so a short
     // clip's 3-4 frames each become WIDE and the film is still long enough to
     // scrub — instead of a tiny 3-tile stub. Long clips pack more, thinner
@@ -262,7 +262,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     final f = _currentFiles[index];
     if (!_isVideoFile(f)) return _photoSlot;
     if (_videoExpanded && index == _currentIndex && _activeVideo != null) {
-      return _expandedFrameCount(_activeVideo!.value.duration) *
+      return _expandedFrameCount(_effectiveVideoDuration(_activeVideo)) *
               _expandedTileWidth +
           6;
     }
@@ -297,16 +297,34 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
   }
 
   void _loadVideoDurationHint() {
-    _videoDurationHint = null;
-    if (_currentFiles.isEmpty || !_currentIsVideo) return;
+    if (_currentFiles.isEmpty || !_currentIsVideo) {
+      _videoDurationHint = null;
+      return;
+    }
     final file = _currentFiles[_currentIndex];
+    // Seed synchronously from the stored duration so the pill and the
+    // expanded seeker are right instantly, even when video_player reports a
+    // zero duration for the container (variable frame rate / fragmented MP4).
+    _videoDurationHint = (file.durationMs != null && file.durationMs! > 0)
+        ? Duration(milliseconds: file.durationMs!)
+        : null;
     final expectIndex = _currentIndex;
     FileMetadataService().extract(file).then((meta) {
       if (!mounted || _currentIndex != expectIndex) return;
-      if (meta.duration != null) {
+      if (meta.duration != null && meta.duration! > Duration.zero) {
         setState(() => _videoDurationHint = meta.duration);
       }
     });
+  }
+
+  /// Duration that drives the seeker and the pill: the player's own when it
+  /// knows it, otherwise the metadata hint. video_player reports
+  /// Duration.zero for some containers even though playback works, which
+  /// stranded the seeker at the end and showed "0:00"; the hint covers those.
+  Duration _effectiveVideoDuration(VideoPlayerController? c) {
+    final d = c?.value.duration ?? Duration.zero;
+    if (d > Duration.zero) return d;
+    return _videoDurationHint ?? Duration.zero;
   }
 
   /// Content-x where slot [index] begins (excluding the leading pad).
@@ -392,9 +410,12 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     final centerX =
         _filmStripController.offset + _stripViewport / 2 - _stripLeadPad;
     final segStart = _slotStart(_currentIndex) + 3;
-    final duration = controller.value.duration;
+    final duration = _effectiveVideoDuration(controller);
     final segWidth = _expandedFrameCount(duration) * _expandedTileWidth;
-    if (centerX < segStart - 12 || centerX > segStart + segWidth + 12) {
+    // No negative slack on the start side: the playhead stops exactly at the
+    // film's left edge, then a further drag hands off to selecting the
+    // previous item — no stub of seeker poking out past the strip.
+    if (centerX < segStart || centerX > segStart + segWidth + 12) {
       // Scrubbed past the segment — collapse and let selection take over.
       setState(() => _videoExpanded = false);
       _pendingScrubFraction = null;
@@ -497,7 +518,8 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     if (controller == null) return 0;
     final segStart = _slotStart(_currentIndex) + 3;
     final segWidth =
-        _expandedFrameCount(controller.value.duration) * _expandedTileWidth;
+        _expandedFrameCount(_effectiveVideoDuration(controller)) *
+            _expandedTileWidth;
     final raw =
         _stripLeadPad + segStart + fraction * segWidth - _stripViewport / 2;
     if (!_filmStripController.hasClients) return max(0.0, raw);
@@ -1348,25 +1370,17 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                 backgroundColor: Colors.transparent,
                 elevation: 0,
                 iconTheme: IconThemeData(color: overlayColor),
-                title: Column(
-                  children: [
-                    Text(
-                      _currentFiles[_currentIndex].filename,
-                      // Two lines + counter still fit the 56 px toolbar.
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 14, color: overlayColor),
-                    ),
-                    if (!widget.standalone)
-                      Text(
+                // No filename in the header — it crowds the frame and lives in
+                // the details panel already. Just the position counter.
+                title: widget.standalone
+                    ? null
+                    : Text(
                         '${_currentIndex + 1} / ${_currentFiles.length}',
                         style: TextStyle(
-                          fontSize: 10,
-                          color: overlayColor.withValues(alpha: 0.7),
+                          fontSize: 13,
+                          color: overlayColor.withValues(alpha: 0.85),
                         ),
                       ),
-                  ],
-                ),
                 leading: IconButton(
                   icon: ThemeIcon('arrowLeft'),
                   onPressed: () {
@@ -2280,7 +2294,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
 
     if (expandedHere) {
       final controller = _activeVideo!;
-      final frames = _expandedFrameCount(controller.value.duration);
+      final frames = _expandedFrameCount(_effectiveVideoDuration(controller));
       String? source;
       if (file.localPath != null && File(file.localPath!).existsSync()) {
         source = file.localPath;
@@ -2294,7 +2308,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
             key: ValueKey('expanded_${file.id}_$frames'),
             file: file,
             source: source,
-            duration: controller.value.duration,
+            duration: _effectiveVideoDuration(controller),
             frameCount: frames,
             tileWidth: _expandedTileWidth,
             // Slightly taller than the regular thumbs — Samsung's expanded
@@ -2384,7 +2398,8 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                     ValueListenableBuilder<VideoPlayerValue>(
                       valueListenable: _activeVideo!,
                       builder: (_, value, _) {
-                        final total = value.duration.inMilliseconds;
+                        final total =
+                            _effectiveVideoDuration(_activeVideo).inMilliseconds;
                         final fraction = total == 0
                             ? 0.0
                             : (value.position.inMilliseconds / total)
@@ -4221,14 +4236,20 @@ class _VideoPill extends StatelessWidget {
         fontFeatures: const [FontFeature.tabularFigures()],
       ),
     );
-    final totalText = Text(
-      vertical ? _fmt(duration) : ' / ${_fmt(duration)}',
-      style: TextStyle(
-        color: Colors.white60,
-        fontSize: vertical ? 9 : 13,
-        fontFeatures: const [FontFeature.tabularFigures()],
-      ),
-    );
+    // Only show a total once a real duration is known. video_player hands us
+    // Duration.zero for some containers; a bare "/ 0:00" reads as broken, so
+    // in that case show just the running position.
+    final hasTotal = duration != null && duration > Duration.zero;
+    final Widget totalText = !hasTotal
+        ? const SizedBox.shrink()
+        : Text(
+            vertical ? _fmt(duration) : ' / ${_fmt(duration)}',
+            style: TextStyle(
+              color: Colors.white60,
+              fontSize: vertical ? 9 : 13,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          );
     if (vertical) {
       return Column(
         mainAxisSize: MainAxisSize.min,
