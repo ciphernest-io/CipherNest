@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../src/config/routes.dart';
+import 'audio_player_service.dart';
 import 'cache_manager_service.dart';
 import 'key_manager_service.dart';
 import 'thumb_store.dart';
@@ -31,6 +32,17 @@ class AppLockService {
   static const String prefsKeyMinutes = 'auto_lock_minutes';
   static const int defaultMinutes = 5;
 
+  /// Opt-in: leave media playing, and the process alive, after the vault
+  /// closes or the app is swiped out of recents.
+  ///
+  /// Off by default, because the safe reading of "I closed the app" is that
+  /// the vault closed with it. When on, locking leaves playback running and
+  /// the native [TaskExitService] leaves the process alone on a swipe-away.
+  ///
+  /// The key is duplicated in TaskExitService.kt, which reads it straight out
+  /// of Flutter's preferences file. Renaming it here means renaming it there.
+  static const String prefsKeyKeepPlaying = 'keep_playing_on_close_v1';
+
   Timer? _timer;
   Duration _timeout = const Duration(minutes: defaultMinutes);
   DateTime _lastActivity = DateTime.now();
@@ -38,6 +50,18 @@ class AppLockService {
   bool Function()? _isPlaybackActive;
 
   int get timeoutMinutes => _timeout.inMinutes;
+
+  bool _keepPlayingOnClose = false;
+
+  /// Cached so [lockNow] can stay synchronous. Kept in step by
+  /// [setKeepPlayingOnClose] and reloaded at [init].
+  bool get keepPlayingOnClose => _keepPlayingOnClose;
+
+  Future<void> setKeepPlayingOnClose(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(prefsKeyKeepPlaying, value);
+    _keepPlayingOnClose = value;
+  }
 
   Future<void> init({
     required GlobalKey<NavigatorState> navigatorKey,
@@ -47,6 +71,7 @@ class AppLockService {
     _isPlaybackActive = isPlaybackActive;
     final prefs = await SharedPreferences.getInstance();
     _setupCompleted = prefs.getBool('setup_completed_v1') ?? false;
+    _keepPlayingOnClose = prefs.getBool(prefsKeyKeepPlaying) ?? false;
     await reloadTimeout();
   }
 
@@ -162,6 +187,13 @@ class AppLockService {
     // that hands them out still listening. Both were confirmed on a device
     // (MASVS F-01, F-02, F-03). Fire-and-forget: the UI must not wait on
     // disk IO to show the login screen.
+    // Playback is the one thing a user may legitimately want to outlive the
+    // lock, so it is the one thing that is opt-out rather than unconditional.
+    // Left running, it also keeps the decrypted track title on the lock
+    // screen, which is why the default is to stop.
+    if (!_keepPlayingOnClose) {
+      unawaited(AudioPlayerService().stop());
+    }
     unawaited(VideoStreamingServer().stop());
     unawaited(CacheManagerService().purgeAllLargePlaintext());
     _navKey?.currentState

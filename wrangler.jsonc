@@ -29,7 +29,32 @@
     // still applies the SPA fallback above.
     "run_worker_first": true
   },
+  // Workers Logs. The shape Cloudflare now prompts for, with ONE deliberate
+  // inversion: invocation_logs is false.
+  //
+  // Invocation logs are the automatic per-request records, and they include
+  // the request URL. That is the problem. A share link whose '#' was
+  // percent-encoded into '%23' by a messaging app carries the decryption key
+  // in the PATH, and the OAuth callback on auth.ciphernest.io carries a
+  // single-use authorization code in the query. Turning invocation logs on
+  // would persist both for the retention window, which is 3 days on the free
+  // plan and 7 on paid. For a product whose central claim is that the key is
+  // never sent to a server, writing it into our own log store is the worst
+  // possible place for it to land (MASVS report W-01).
+  //
+  // enabled stays true so explicit console.log output still works if we ever
+  // add any. There is none today, and none should ever include a URL.
   "observability": {
-    "enabled": true
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": false,
+      "persist": true
+    },
+    "traces": {
+      "enabled": false,
+      "head_sampling_rate": 1,
+      "persist": true
+    }
   }
 }

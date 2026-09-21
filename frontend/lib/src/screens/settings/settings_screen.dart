@@ -86,6 +86,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // Security
   int _autoLockMinutes = AppLockService.defaultMinutes;
+  bool _keepPlayingOnClose = false;
   BiometricCapability _bioCapability = BiometricCapability.unavailable;
   bool _bioEnabled = false;
   String? _bioSubtitleOverride; // invalidation notice, shown once detected
@@ -174,6 +175,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _showYearAgo = prefs.getBool('gallery_show_year_ago') ?? true;
         _autoLockMinutes = prefs.getInt(AppLockService.prefsKeyMinutes) ??
             AppLockService.defaultMinutes;
+        _keepPlayingOnClose =
+            prefs.getBool(AppLockService.prefsKeyKeepPlaying) ?? false;
         if (lastRunMs > 0) {
           final dt = DateTime.fromMillisecondsSinceEpoch(lastRunMs);
           _lastSyncDisplay = '${dt.month}/${dt.day} ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}';
@@ -1330,6 +1333,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: _pickAutoLock,
+          ),
+      // Closing the app should close the vault. The exception is deliberate
+      // background playback, which needs the process to outlive the task, so
+      // it is opt-in rather than assumed (MASVS F-34).
+      SwitchListTile(
+            secondary: ThemeIcon('musicNotes', color: cs.primary),
+            title: Text('Keep playing after closing',
+                style: TextStyle(color: cs.onSurface)),
+            subtitle: Text(
+              _keepPlayingOnClose
+                  ? 'Music continues and the vault stays open until it stops'
+                  : 'Closing the app or clearing it from recents locks the vault',
+              style: TextStyle(color: cs.onSurface.withAlpha(140)),
+            ),
+            value: _keepPlayingOnClose,
+            onChanged: (v) async {
+              await AppLockService().setKeepPlayingOnClose(v);
+              if (mounted) _setState(() => _keepPlayingOnClose = v);
+            },
           ),
       // Hidden outright when the device can never support it (no sensor /
           // no lock screen) — an impossible toggle is worse than none.

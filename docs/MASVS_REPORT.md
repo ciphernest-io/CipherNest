@@ -145,7 +145,7 @@ One WebView-capable component is merged into the manifest: `io.flutter.plugins.u
 
 ## 4. Findings
 
-Thirty-three findings here, plus five in the web section. Severity reflects impact on the product's core claim, which is that neither the developer nor the cloud provider can read the user's files, and that a lost or seized device does not yield them.
+Thirty-four findings here, plus five in the web section. Severity reflects impact on the product's core claim, which is that neither the developer nor the cloud provider can read the user's files, and that a lost or seized device does not yield them.
 
 F-32 and F-33 were found during the device pass rather than in the source review, and they are the reason a device pass was worth running.
 
@@ -157,12 +157,12 @@ Findings appear below in identifier order. This index gives the severity ranking
 
 | Severity | Findings |
 |---|---|
-| High | W-01, F-01, F-02, F-03, F-04, F-05, F-06, F-07, F-08, F-09, F-10, F-11, F-33 |
+| High | W-01, F-01, F-02, F-03, F-04, F-05, F-06, F-07, F-08, F-09, F-10, F-11, F-33, F-34 |
 | Medium | F-12, F-13, F-14, F-15, F-16, F-18, F-19, F-20, F-21, F-22, F-23, F-27, F-28, F-29, F-32, W-02 |
 | Low | F-17, F-24, F-25, F-26, F-30, F-31, W-03, W-04 |
 | Info | W-05 |
 
-Device-verified findings: F-01, F-02, F-03, F-04, F-05, F-06, F-08, F-11, F-12, F-14, F-15, F-18, F-21, F-32, F-33, and partly F-27. The rest are static or binary only, and each says so at the top of its entry.
+Device-verified findings: F-01, F-02, F-03, F-04, F-05, F-06, F-08, F-10, F-11, F-12, F-14, F-15, F-18, F-21, F-32, F-33, F-34, and partly F-27. The rest are static or binary only, and each says so at the top of its entry.
 
 ---
 
@@ -425,7 +425,7 @@ The restore screen gets this right, setting both (`frontend/lib/src/screens/auth
 
 **Severity: High. MASVS-PLATFORM-3. MASTG-TEST-0008.**
 
-**Verification: Static only. The clipboard step was dropped in favour of reading the stored share row, which proves the same claim more directly.**
+**Verification: Device-verified in round 2. The full phrase pasted into another app, remained in Samsung's clipboard history afterwards, and Android showed no sensitive-content indicator. The copied share link carried its `#k=` key.**
 
 ```dart
 // frontend/lib/src/screens/settings/view_phrase_screen.dart:168
@@ -976,6 +976,24 @@ This also made one planned test unanswerable. Whether the loopback server contin
 
 ---
 
+### F-34. Swiping the app away does not close the vault
+
+**Severity: High. MASVS-AUTH-2, MASVS-STORAGE-1.**
+
+**Verification: Device-verified, reported from normal use. After clearing the app from recents and reopening it, the vault was still unlocked, with the media notification still in the shade.**
+
+The vault key lives in the Dart heap. It is cleared when the vault locks or when the process dies. Neither happens on a swipe-away, because the media foreground service keeps the process alive whenever a track is loaded, paused included. So the user performs the gesture that every Android user reads as "close this app", the process survives, and reopening lands straight back inside an unlocked vault.
+
+This is the same root cause as F-33 seen from the other end. F-33 was the lock timer never firing; this is the process never dying. Either one alone leaves the vault open, and before the F-33 fix both were true at once.
+
+A second, smaller part of the same report: locking the vault left music playing. That is defensible on its own, but it also leaves the decrypted track title on the lock screen through the media session, which is F-18.
+
+**Fix.** A `TaskExitService` receives `onTaskRemoved` and ends the process, so a swipe-away is a real close. Because deliberate background playback is a legitimate reason to want the opposite, it is a setting rather than an assumption: "Keep playing after closing", off by default. When it is off, locking also stops playback. When it is on, both behaviours are left alone and the user has chosen that.
+
+**Status: FIXED in code on 2026-09-21, not yet re-verified on device.** The device was disconnected when the build completed.
+
+---
+
 ## 5. What passed, and why it matters
 
 A findings list read alone gives a false impression. The cryptographic core of this application is the strongest part of it, and several controls that commonly fail elsewhere hold here.
@@ -1010,7 +1028,7 @@ MASVS does not cover web. This section assesses `worker.js` and `web-viewer/` ag
 
 **W-01. A mangled share link puts the decryption key in the request path, where the server sees and logs it. High. ASVS V7 and V8.**
 
-**Status: PARTIALLY FIXED in code on 2026-09-20.** The Worker now detects `%23` in the path and answers with a 302 to the normalized `#` form before serving anything, so the key stops being re-sent on every subsequent asset request and never reaches the page's own address bar or history. That does not unsend the first request. Deciding what to do about request logging, and whether to re-mint existing shares, is still open and is the reason this stays the top item in section 10.
+**Status: PARTIALLY FIXED in code on 2026-09-20.** Round 2 added an important mitigating fact: the Worker's invocation logging appears to have been disabled on the account throughout, so the keys this finding warns about were probably never persisted anywhere. That is indicated rather than proven, and it does not change the defect. The Worker now detects `%23` in the path and answers with a 302 to the normalized `#` form before serving anything, so the key stops being re-sent on every subsequent asset request and never reaches the page's own address bar or history. That does not unsend the first request. Deciding what to do about request logging, and whether to re-mint existing shares, is still open and is the reason this stays the top item in section 10.
 
 This is the most severe finding in the assessment, and it falsifies the claim CipherNest repeats most often.
 
@@ -1072,17 +1090,17 @@ Run on 2026-09-20 against the installed shipped build, hash `832e059d`, on a Sam
 | 3 | Preferences and database contents | Complete. Confirms F-04, F-11, F-14, F-15, F-21 |
 | 4 | Release logging | Complete. Confirms F-12, with a refinement |
 | 5 | Loopback server reachable cross-uid | Complete. Confirms F-03 |
-| 6 | Keystore refuses without authentication | Partial. Key backing read; enrolment-change test not run |
+| 6 | Keystore refuses without authentication | Complete, round 2. Enrolment invalidation works |
 | 7 | Screen capture coverage | Complete. Confirms F-05, corrects one claim |
 | 8 | Residue after share, open, print | Partial. Public storage clean; handoff paths not exercised |
-| 9 | Clipboard contents | Not run, dropped deliberately |
+| 9 | Clipboard contents | Complete, round 2. Confirms F-10 |
 | 10 | Media session disclosure | Complete. Confirms F-18 |
 | 11 | Exported component probing | Complete. Confirms F-08 and the PLATFORM-1 surface |
-| 12 | TLS interception | Not run |
-| 13 | Traffic inventory | Not run |
-| 14 | Link mangling through messaging apps | Not run |
+| 12 | TLS interception | Not run. Tooling lacked the decryption feature |
+| 13 | Traffic inventory | Complete, round 2. Refines F-22 |
+| 14 | Link mangling through messaging apps | Inconclusive. Logging was off at the time |
 | 15 | Device-to-device transfer | Partial. Backup eligibility read; transfer not tested |
-| 16 | Anonymous share link sender identity | Not run |
+| 16 | Anonymous share link sender identity | Complete for Drive. OneDrive blocked by a product bug |
 | 17 | GPS EXIF across upload paths | Not run |
 | 18 | OAuth relay under R8 | Not run |
 
@@ -1146,6 +1164,28 @@ The body was a complete ID3v2-tagged MP3 whose embedded title was readable. No c
 **17. GPS EXIF.** Requires a geotagged photo added by two different paths and compared after export. Not performed, so F-30 stays static.
 
 **18. OAuth relay under R8.** Requires a full OneDrive sign-out and sign-in on the shipped build. Not reached. This one matters more than its position suggests. `MainActivity.relayOAuthReturn` reaches a plugin static field, R8 does run on release builds, and `proguard-rules.pro` contains no keep rules. The path fails closed and silently, so it should be exercised on every release.
+
+### Round 2, run by the developer on 2026-09-21
+
+The device pass continued against the fixed build for tests that the fixes do not touch.
+
+**6. Keystore enrolment invalidation works.** Adding a fingerprint in Android settings caused the app to refuse biometric unlock with "Your device security settings changed" and fall back to the master password. `setInvalidatedByBiometricEnrollment(true)` fires as intended. Two nuances were observed and neither is a defect: an already-unlocked session stays unlocked until it is closed, because invalidation destroys the key rather than the running session, and removing a fingerprint did not invalidate. The removal case is worth a follow-up, along with the untested cases of removing every fingerprint and of a device with none enrolled.
+
+**9. Clipboard confirms F-10.** The full twelve-word phrase pasted into another app. It remained in Samsung's clipboard history afterwards, for as long as any other entry. Android showed no sensitive-content indicator, which is the `EXTRA_IS_SENSITIVE` flag the app does not set. The copied share link contained its `#k=` key.
+
+**13. Traffic inventory, and a refinement to F-22.** Captured with PCAPdroid, filtered to this app. Roughly 68 connections, all to `www.googleapis.com` over TLS on 443, plus DNS. A OneDrive sign-in added `graph.microsoft.com`, `login.microsoftonline.com` and `my.microsoftpersonalcontent.com`. Nothing else appeared.
+
+Two things follow. No Google Fonts host was contacted, which confirms at runtime that the unused `google_fonts` dependency never fetches, so the privacy claim holds. And `auth.ciphernest.io` did not appear, because the OAuth callback loads in Chrome rather than in the app. That matters for the wording of F-22: the policy sentence "the app does not contact any server operated by me" is literally accurate. The disclosure gap is that the sign-in flow the app starts causes the user's browser to contact it, and that host sees the authorization code and the IP address. The fix is a disclosure, not a correction.
+
+`my.microsoftpersonalcontent.com` was not previously in any inventory. It is a Microsoft content host and it is not on the Worker's proxy allowlist.
+
+**12. Interception not run.** The capture tool on the device offered no TLS decryption option, so no certificate was installed and no interception was attempted. Full-payload capture showed TLS records only. MASVS-NETWORK-1 therefore remains static only.
+
+**14. Link mangling inconclusive, and W-01 is probably smaller than written.** No requests appeared in the Worker's logs, because invocation logging was not enabled on the account at the time. If logging was off for the whole life of the share feature then no share key was ever persisted, and W-01's disclosure half never happened. That has not been proven, only strongly indicated, and it does not change the code defect.
+
+**16. Share link identity, and a product bug.** A Google Drive share revealed nothing about the sender. Opening the decoded Drive URL while signed out simply downloaded the encrypted file, with no name, email or profile picture anywhere. That closes the question for Drive.
+
+The OneDrive case could not be tested, because the share does not work at all. Opening a OneDrive share link as an anonymous recipient redirects to `login.live.com` and returns a sign-in page instead of the file. The viewer reports the HTML interstitial correctly. The cause is in `onedrive_provider.dart`, which builds the recipient URL by appending `?download=1` to the `1drv.ms` link returned by `createLink`. That does not produce an anonymous direct download. This is a functional defect rather than a MASVS finding, but it means the sharing feature is broken for every OneDrive user, and it is tracked outside this report.
 
 ## 8. Known gaps and accepted risks
 

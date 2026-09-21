@@ -33,6 +33,9 @@ class MainActivity : AudioServiceFragmentActivity() {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         applySecureWindow()
+        // Must be running before the task can be swiped away, otherwise there
+        // is nothing in the task to receive onTaskRemoved.
+        TaskExitService.start(this)
         relayOAuthReturn(intent)
     }
 

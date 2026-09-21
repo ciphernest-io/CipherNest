@@ -144,6 +144,15 @@
             android:exported="false"
             android:foregroundServiceType="dataSync"/>
 
+        <!-- Receives onTaskRemoved when the app is swiped out of recents, so a
+             swipe-away actually closes the vault instead of leaving the process
+             alive behind the media notification. stopWithTask must stay false:
+             with it true Android stops the service without ever calling
+             onTaskRemoved, which is the only callback we want. -->
+        <service android:name=".TaskExitService"
+            android:exported="false"
+            android:stopWithTask="false"/>
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
