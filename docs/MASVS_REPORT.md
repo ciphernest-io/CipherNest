@@ -192,7 +192,15 @@ Several of these are named after the user's own filename. `File('${dir.path}/${f
 
 **Fix.** Add a maximum-age sweep independent of the size budget, deleting any `*_decrypted.*`, `*.plain*`, `*_audio.bin`, or filename-named artefact older than a few minutes. Name every temporary plaintext file by opaque id, never by `file.filename`. Purge the cache on lock, not only on vault reset.
 
-**Status: FIXED, device-verified on 2026-09-22.** With the vault locked, the cache held no `.plain`, `_decrypted` or `_audio.bin` artifact of any kind, and had fallen from 19 MB to 126 KB. Only thumbnails remained, which is by design. Purge of all large decrypted artifacts on lock (`cache_manager_service.dart` `purgeAllLargePlaintext`).
+**Status: PARTIALLY FIXED, device-verified on 2026-09-22. Corrected from an earlier over-claim.**
+
+Large artifacts are gone. With the vault locked the cache held no `.plain`, `_decrypted` or `_audio.bin` file of any kind, and had fallen from 19 MB to 126 KB. The handoff leftovers from F-07 were cleared too.
+
+What remains is decrypted **thumbnails**, and they are not nothing. A thumbnail is a small copy of the photo. Keeping them across a lock was a deliberate performance trade, not an oversight: they are expensive to rebuild, needing a download and a decrypt each, so purging them would make the grid slow and data-hungry after every unlock. That trade was made without being written down, which is why this entry previously read as fully fixed. It is not.
+
+The residual exposure is bounded. The cache lives in the app's private directory, whose parent is mode `drwx------` and owned by the app's uid, so no other application on the device can read it. It is reachable by root, by a forensic extraction, or by the app itself. That is the same threat model as the rest of app-private storage, and it is the threat model F-11 already fails against.
+
+The proper resolution is to encrypt the thumbnail cache at rest under a vault-derived key rather than choosing between speed and safety. That is tracked in section 11. Purge of all large decrypted artifacts on lock (`cache_manager_service.dart` `purgeAllLargePlaintext`).
 
 ---
 
@@ -1308,6 +1316,7 @@ F-01, F-02, F-03, F-05, F-06, F-08, F-09, F-12, F-27, F-30, F-32, F-33, F-34, an
 | F-07 | High | Delete the materialized plaintext when the share or open future returns; scope the `open_file` provider to one cache subdirectory; sanitize the filename at the two vault call sites |
 | F-10 | High | Set `EXTRA_IS_SENSITIVE` on the phrase and share-link copies, add a timed clear, and reconsider whether the phrase needs a copy button at all |
 | F-11 | High | Encrypt the metadata database with a key derived from the vault seed and wrapped by the Keystore. Needs a migration, so it goes last of the four |
+| F-01 residual | Medium | Encrypt the thumbnail cache at rest under a vault-derived key, so locking neither leaves readable imagery nor forces the grid to rebuild from scratch |
 | F-13 | Medium | Require biometric or password confirmation before creating a share link |
 | F-14 | Medium | Pass `encryptedSharedPreferences: true`, behind a one-way migration flag |
 | F-15 | Medium | Add a Keystore-wrapped layer around the seed blob, raise the password ceiling past 20 characters, add persisted backoff on failed unlocks |

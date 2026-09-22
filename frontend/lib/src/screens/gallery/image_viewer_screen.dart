@@ -2783,6 +2783,28 @@ class _InfoSheetBodyState extends State<_InfoSheetBody> {
           const SizedBox(height: 4),
           _InfoLine(items: row2, color: cs.onSurface.withAlpha(170)),
         ],
+        // Where the photo was taken, when the file carries it. Read from the
+        // file's own EXIF, never from the device, and shown only here. Until
+        // the ingest path was fixed the tag was being stripped before
+        // encryption, so this line also makes the preservation visible
+        // instead of something only a hex editor could confirm.
+        if (meta?.locationLabel != null) ...[
+          const SizedBox(height: 10),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ThemeIcon('location_on', size: 15, color: cs.onSurface.withAlpha(170)),
+              const SizedBox(width: 6),
+              Text(
+                meta!.locationLabel!,
+                style: TextStyle(
+                  color: cs.onSurface.withAlpha(170),
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: 24),
         _AddTagChip(),
         const SizedBox(height: 32),

@@ -29,6 +29,14 @@ class FileMetadata {
   final String? shutterSpeed;
   final double? exposureBias;
 
+  /// Where the photo was taken, when the file carries it.
+  ///
+  /// Read from the file's own EXIF and never from the device. It is display
+  /// only: nothing indexes, stores or transmits it, and it leaves the app
+  /// exactly as it arrived, inside the encrypted blob.
+  final double? latitude;
+  final double? longitude;
+
   // Video
   final bool isVideo;
   final Duration? duration;
@@ -49,12 +57,26 @@ class FileMetadata {
     this.aperture,
     this.shutterSpeed,
     this.exposureBias,
+    this.latitude,
+    this.longitude,
     this.isVideo = false,
     this.duration,
     this.videoCodec,
     this.audioCodec,
     this.fps,
   });
+
+  bool get hasLocation => latitude != null && longitude != null;
+
+  /// Signed decimal degrees, four places. Enough to place a photo to about
+  /// ten metres without implying survey precision.
+  String? get locationLabel {
+    if (!hasLocation) return null;
+    final ns = latitude! >= 0 ? 'N' : 'S';
+    final ew = longitude! >= 0 ? 'E' : 'W';
+    return '${latitude!.abs().toStringAsFixed(4)}° $ns, '
+        '${longitude!.abs().toStringAsFixed(4)}° $ew';
+  }
 
   int? get megapixels {
     if (width == null || height == null) return null;
@@ -222,6 +244,9 @@ class FileMetadataService {
       }
     }
 
+    double? latitude;
+    double? longitude;
+
     // TIER 2 — EXIF from local bytes. Skip for videos (JPEG EXIF only).
     if (!isVideo) {
       final bytes = await _tryReadLocalBytes(file);
@@ -239,6 +264,10 @@ class FileMetadataService {
               ? focal35.toDouble()
               : _ratioOf(tags['EXIF FocalLength']);
           aperture = _ratioOf(tags['EXIF FNumber']);
+          latitude = _gpsDegrees(
+              tags['GPS GPSLatitude'], tags['GPS GPSLatitudeRef']);
+          longitude = _gpsDegrees(
+              tags['GPS GPSLongitude'], tags['GPS GPSLongitudeRef']);
           shutter = _formatShutter(tags['EXIF ExposureTime']);
           exposureBias = _ratioOf(tags['EXIF ExposureBiasValue']);
           // Fall back to EXIF dimensions if AssetEntity didn't fill them.
@@ -266,6 +295,8 @@ class FileMetadataService {
     }
 
     return FileMetadata(
+      latitude: latitude,
+      longitude: longitude,
       captured: file.createdAt,
       filename: file.filename,
       sizeBytes: file.sizeBytes,
@@ -326,6 +357,35 @@ class FileMetadataService {
   /// Parses a rational EXIF tag (e.g. focal=23/1, aperture=180/100) into a
   /// double. Falls back to `double.tryParse` for the rare camera that
   /// writes plain floats instead of ratios.
+  /// EXIF stores coordinates as three rationals (degrees, minutes, seconds)
+  /// plus a hemisphere letter. Returns signed decimal degrees, or null when
+  /// either half is missing or malformed.
+  double? _gpsDegrees(IfdTag? value, IfdTag? ref) {
+    if (value == null || ref == null) return null;
+    try {
+      final parts = value.values.toList();
+      if (parts.length < 3) return null;
+      double asDouble(dynamic v) {
+        if (v is Ratio) {
+          if (v.denominator == 0) return 0;
+          return v.numerator / v.denominator;
+        }
+        if (v is num) return v.toDouble();
+        return 0;
+      }
+
+      final deg = asDouble(parts[0]) +
+          asDouble(parts[1]) / 60 +
+          asDouble(parts[2]) / 3600;
+      if (deg == 0) return null;
+      final hemisphere = ref.printable.trim().toUpperCase();
+      final negative = hemisphere.startsWith('S') || hemisphere.startsWith('W');
+      return negative ? -deg : deg;
+    } catch (_) {
+      return null;
+    }
+  }
+
   double? _ratioOf(IfdTag? tag) {
     if (tag == null) return null;
     final list = tag.values.toList();
