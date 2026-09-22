@@ -193,9 +193,17 @@ const MAX_REDIRECTS = 10;
 // months because of it, and it was never a URL-format problem: a browser
 // carried the cookie and saw the file the whole time.
 //
-// Following by hand also lets every hop be checked against the allowlist.
-// `redirect: 'follow'` validated only the first URL, so a redirect could
-// previously walk the proxy anywhere it liked.
+// IMPORTANT, measured not assumed: this jar stays EMPTY on Cloudflare.
+// Workers do not expose Set-Cookie from subrequest responses; getSetCookie()
+// returns an empty array on every hop, with caching disabled and with it on.
+// So the handshake cannot be performed here, and OneDrive shares cannot be
+// served to a browser recipient through this proxy. The app does the same
+// walk with dart:io and DOES get the cookies, which is why in-app recipients
+// work. See handleProxy for how that is surfaced.
+//
+// The loop is kept regardless, because following by hand lets every hop be
+// checked against the allowlist. `redirect: 'follow'` validated only the
+// first URL, so a redirect could previously walk the proxy anywhere.
 async function fetchFollowingCookies(startUrl) {
   let current = startUrl;
   const jar = new Map();
@@ -214,6 +222,12 @@ async function fetchFollowingCookies(startUrl) {
       method: 'GET',
       redirect: 'manual',
       headers,
+      // Cloudflare strips Set-Cookie from responses it considers cacheable,
+      // and the whole point of this loop is reading Set-Cookie. Without
+      // these the jar stays empty and the upstream keeps serving its
+      // sign-in interstitial. Diagnosed from a trace showing 0 cookies on
+      // every hop.
+      cf: { cacheTtl: 0 },
     });
 
     for (const raw of res.headers.getSetCookie?.() ?? []) {
@@ -267,6 +281,20 @@ async function handleProxy(url) {
   // If the cloud host returned HTML, sniff the first 300 bytes into a
   // custom header so the recipient page can show WHAT the cloud sent
   // (sign-in page, virus warning, access denied, etc.).
+  // A OneDrive host answering with HTML means the cookie handshake above
+  // could not be performed, which on Cloudflare it never can. Relaying the
+  // sign-in page would make the viewer report "the cloud returned an HTML
+  // page", which is true and useless. Say the actual thing instead.
+  if (
+    upstreamContentType.includes('text/html') &&
+    /(^|\.)(1drv\.ms|onedrive\.live\.com)$/.test(parsed.host)
+  ) {
+    return new Response(
+      'ONEDRIVE_NEEDS_APP',
+      { status: 409, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' } },
+    );
+  }
+
   let debugSnippet = '';
   let bodyToReturn = upstream.body;
   if (upstreamContentType.includes('text/html')) {

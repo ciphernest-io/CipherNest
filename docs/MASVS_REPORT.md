@@ -1173,6 +1173,18 @@ The body was a complete ID3v2-tagged MP3 whose embedded title was readable. No c
 
 **18. OAuth relay under R8.** Requires a full OneDrive sign-out and sign-in on the shipped build. Not reached. This one matters more than its position suggests. `MainActivity.relayOAuthReturn` reaches a plugin static field, R8 does run on release builds, and `proguard-rules.pro` contains no keep rules. The path fails closed and silently, so it should be exercised on every release.
 
+### Round 2 closed, 2026-09-22
+
+The dynamic programme is complete. All eighteen planned tests are closed: fifteen produced a result and three are recorded as unverifiable with the equipment available. The fix re-verification pass is also done, and its outcomes are folded into each finding's status above.
+
+One item remains outstanding and it is hardware-dependent, not a test that was skipped: confirming the StrongBox key path on a device that has StrongBox. Until that happens, no public material should claim StrongBox protection, only that the code requests it and falls back to the TEE, which has been observed working.
+
+The web infrastructure was deployed on 2026-09-22 and verified live: security headers present on every response, the auth host still restricted to the callback page, `%23` normalisation redirecting correctly, and the Google Drive relay unaffected.
+
+That deployment also surfaced a platform limit worth recording, because it changes what the product can promise. Cloudflare Workers do not expose `Set-Cookie` from subrequest responses. Measured, not assumed: with caching left on and with it disabled, `getSetCookie()` returned an empty array on every hop. The cookie handshake OneDrive requires therefore cannot be performed in the Worker, so **OneDrive shares work for recipients who open them in the CipherNest app and cannot work for recipients who open them in a browser**. The proxy now returns a specific status for that case and the viewer explains it, rather than relaying a Microsoft sign-in page and reporting it as an unexpected HTML response. Google Drive shares are unaffected and work on both paths.
+
+Removing that limitation means not depending on a provider's public-link behaviour at all, which is an architecture decision rather than a patch.
+
 ### Round 2, run by the developer on 2026-09-21
 
 The device pass continued against the fixed build for tests that the fixes do not touch.

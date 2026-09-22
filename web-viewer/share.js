@@ -327,6 +327,16 @@ async function aesGcmDecryptChunk(key, input, aad, expectedIndex) {
 async function fetchViaProxy(downloadUrl) {
   const proxyUrl = '/proxy?u=' + encodeURIComponent(downloadUrl);
   const resp = await fetch(proxyUrl, { credentials: 'omit' });
+  if (resp.status === 409) {
+    const why = (await resp.text()).trim();
+    if (why === 'ONEDRIVE_NEEDS_APP') {
+      throw new Error(
+        'This link is stored on OneDrive, which only hands the file over ' +
+        'after a browser sign-in handshake that this page cannot perform. ' +
+        'Open the link in the CipherNest app instead, where it works.'
+      );
+    }
+  }
   if (!resp.ok) throw new Error('Server returned ' + resp.status);
   // Detect when the cloud host returned an HTML interstitial (Google Drive
   // virus-scan warning, OneDrive sign-in page, etc.) instead of the real blob.
