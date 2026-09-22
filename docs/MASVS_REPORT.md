@@ -192,7 +192,7 @@ Several of these are named after the user's own filename. `File('${dir.path}/${f
 
 **Fix.** Add a maximum-age sweep independent of the size budget, deleting any `*_decrypted.*`, `*.plain*`, `*_audio.bin`, or filename-named artefact older than a few minutes. Name every temporary plaintext file by opaque id, never by `file.filename`. Purge the cache on lock, not only on vault reset.
 
-**Status: FIXED in code on 2026-09-20, not yet re-verified on device.** purge of all large decrypted artifacts on lock (`cache_manager_service.dart` `purgeAllLargePlaintext`).
+**Status: FIXED, device-verified on 2026-09-22.** With the vault locked, the cache held no `.plain`, `_decrypted` or `_audio.bin` artifact of any kind, and had fallen from 19 MB to 126 KB. Only thumbnails remained, which is by design. Purge of all large decrypted artifacts on lock (`cache_manager_service.dart` `purgeAllLargePlaintext`).
 
 ---
 
@@ -216,7 +216,7 @@ Lock is also evaluated only on resume. `frontend/lib/src/app.dart:66-71` handles
 
 **Fix.** On `lockNow()`: stop the streaming server, drop all sessions, and delete the large plaintext artefacts. Handle `AppLifecycleState.paused` so the timeout starts at background time rather than being measured after the app is already visible again. Add an "Immediately" timeout option. Cap the playback deferral.
 
-**Status: FIXED in code on 2026-09-20, not yet re-verified on device.** lock now stops the streaming server and purges decrypted media from disk.
+**Status: FIXED, device-verified on 2026-09-22.** Locking left nothing decrypted on disk. Lock now stops the streaming server and purges decrypted media from disk.
 
 ---
 
@@ -249,7 +249,7 @@ Android does not namespace loopback per application. Any installed app holding `
 
 **Fix.** Mint a random per-process token at start, require it as a path prefix or header, and reject everything else. Maintain an explicit allowlist of live session ids so `_sessionFor` cannot resurrect a closed one. Call `stop()` from `lockNow()` and on sign-out. Remove the id and port from the logs.
 
-**Status: FIXED in code on 2026-09-20, not yet re-verified on device.** per-process 32-byte token required as the first path segment, constant-time compared; token discarded on stop.
+**Status: FIXED, device-verified on 2026-09-22.** Video and audio both play normally through the tokenised URL, so the token did not break the player. Per-process 32-byte token required as the first path segment, constant-time compared; token discarded on stop.
 
 ---
 
@@ -391,7 +391,7 @@ The Worker enforces a host allowlist for the web viewer (`worker.js:27-51`), so 
 
 **Fix.** Require `https` and restrict the host to the same allowlist the Worker uses. Stream the body with a size ceiling instead of buffering.
 
-**Status: FIXED in code on 2026-09-20, not yet re-verified on device.** host allowlist and `https` requirement on the share download URL, plus a 512 MB body cap.
+**Status: FIXED, device-verified on 2026-09-22.** A real share link still opens, so the allowlist rejects nothing it should accept. Host allowlist and `https` requirement on the share download URL, plus a 512 MB body cap.
 
 ---
 
@@ -990,7 +990,7 @@ A second, smaller part of the same report: locking the vault left music playing.
 
 **Fix.** A `TaskExitService` receives `onTaskRemoved` and ends the process, so a swipe-away is a real close. Because deliberate background playback is a legitimate reason to want the opposite, it is a setting rather than an assumption: "Keep playing after closing", off by default. When it is off, locking also stops playback. When it is on, both behaviours are left alone and the user has chosen that.
 
-**Status: FIXED in code on 2026-09-21, device-verified on 2026-09-22 with one follow-up.** A swipe-away now locks the vault and clears the media notification, and the opt-in setting restores the old behaviour. The follow-up: an explicit "Lock vault now" was still honouring that setting and leaving music playing, which defeats the gesture. Corrected so an explicit lock always stops playback while the automatic paths honour the setting.
+**Status: FIXED, device-verified on 2026-09-22 including the follow-up.** All four close behaviours confirmed: auto-lock after pausing, explicit lock stopping playback, swipe-away locking with the notification cleared, and the opt-in setting restoring background playback. A swipe-away now locks the vault and clears the media notification, and the opt-in setting restores the old behaviour. The follow-up: an explicit "Lock vault now" was still honouring that setting and leaving music playing, which defeats the gesture. Corrected so an explicit lock always stops playback while the automatic paths honour the setting.
 
 ---
 
