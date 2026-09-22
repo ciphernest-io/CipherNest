@@ -1153,7 +1153,26 @@ The body was a complete ID3v2-tagged MP3 whose embedded title was readable. No c
 
 ### What the partial tests showed
 
-**6. Keystore.** The biometric wrap's stored backing value was read as `tee`, so on this device StrongBox was unavailable and the documented fallback took effect. That is correct behaviour, and it means any public claim of StrongBox protection would be wrong for this hardware class. The enrolment-change test, which is the one that proves `setInvalidatedByBiometricEnrollment` actually fires, was not performed.
+**6. Keystore.** On the SM-A556E the biometric wrap's stored backing value was read as `tee`, because that device has no StrongBox and the documented fallback took effect.
+
+Completed on 2026-09-22 on a **Samsung SM-S938B (Galaxy S25 Ultra), Android 16, SDK 36**, which does have the hardware. The app recorded its own answer:
+
+```xml
+<!-- shared_prefs/ciphernest_bio.xml -->
+<string name="backing">strongbox</string>
+```
+
+Corroborated three ways on the same device, because the app's own string only proves which branch it took:
+
+- `pm list features` reports `android.hardware.strongbox_keystore=300`, KeyMint 3.00.
+- `android.hardware.security.keymint.IKeyMintDevice/strongbox` is a registered binder service, distinct from `/default`, and `android.hardware.security.keymint-service-spu-qti` runs as its own process (pid 1140) alongside the TEE service (pid 1143). SPU is Qualcomm's discrete secure element, physically separate from the TEE.
+- No `StrongBoxUnavailableException` appears in logcat, so the request with the app's full parameter set was never refused.
+
+The full spec was accepted: AES-256 GCM, `setUserAuthenticationRequired(true)`, `setUserAuthenticationParameters(0, AUTH_BIOMETRIC_STRONG)`, `setUnlockedDeviceRequired(true)`, `setInvalidatedByBiometricEnrollment(true)`, `setIsStrongBoxBacked(true)`. That combination is not guaranteed to be supported by every StrongBox implementation, so accepting it is the substantive result, not merely the presence of the feature flag.
+
+The enrolment-change test, which is the one that proves `setInvalidatedByBiometricEnrollment` actually fires, was still not performed.
+
+A second behaviour was observed on the same device and is worth recording because the A55 could never exercise it. With **no fingerprints enrolled**, the setup screen omitted the biometric toggle rather than offering it and failing. That is `capability()` returning `noneEnrolled` (`frontend/android/app/src/main/kotlin/io/ciphernest/vault/BiometricSeedVault.kt:58`) with the UI honouring it.
 
 **8. Residue.** Public storage was counted before and after the session and was unchanged: DCIM/Camera 453, Download 333, Pictures 12, Movies 3, Documents 20. Nothing was written outside the sandbox by the app. Three filenames matched a CipherNest-shaped grep, and all three are the operator's own pre-existing downloads, not app output. The share-out and document-open paths were not exercised, so the part of F-07 that matters most is untested.
 
@@ -1177,11 +1196,13 @@ The body was a complete ID3v2-tagged MP3 whose embedded title was readable. No c
 
 The dynamic programme is complete. All eighteen planned tests are closed: fifteen produced a result and three are recorded as unverifiable with the equipment available. The fix re-verification pass is also done, and its outcomes are folded into each finding's status above.
 
-One item remains outstanding and it is hardware-dependent, not a test that was skipped: confirming the StrongBox key path on a device that has StrongBox. Until that happens, no public material should claim StrongBox protection, only that the code requests it and falls back to the TEE, which has been observed working.
+The one item that remained outstanding, confirming the StrongBox key path on hardware that has StrongBox, was **closed on 2026-09-22** on a Samsung SM-S938B. The app took the StrongBox branch. Details under test 6 above.
 
 The web infrastructure was deployed on 2026-09-22 and verified live: security headers present on every response, the auth host still restricted to the callback page, `%23` normalisation redirecting correctly, and the Google Drive relay unaffected.
 
-That deployment also surfaced a platform limit worth recording, because it changes what the product can promise. Cloudflare Workers do not expose `Set-Cookie` from subrequest responses. Measured, not assumed: with caching left on and with it disabled, `getSetCookie()` returned an empty array on every hop. The cookie handshake OneDrive requires therefore cannot be performed in the Worker, so **OneDrive shares work for recipients who open them in the CipherNest app and cannot work for recipients who open them in a browser**. The proxy now returns a specific status for that case and the viewer explains it, rather than relaying a Microsoft sign-in page and reporting it as an unexpected HTML response. Google Drive shares are unaffected and work on both paths.
+That deployment also surfaced a platform limit worth recording. Cloudflare Workers do not expose `Set-Cookie` from subrequest responses. Measured, not assumed: with caching left on and with it disabled, `getSetCookie()` returned an empty array on every hop.
+
+**The conclusion originally drawn from that measurement was wrong and is corrected here.** This paragraph previously stated that OneDrive shares could not work for recipients who open them in a browser. They do. Both plain and password-protected OneDrive shares were confirmed working on `share.ciphernest.io` in a normal window and in incognito, and in the app. The platform limit is real; the failure it was blamed for had a different cause, which is diagnosed in the OneDrive entry below. The 409 status added for the supposed case has been removed. Google Drive shares were unaffected throughout.
 
 Removing that limitation means not depending on a provider's public-link behaviour at all, which is an architecture decision rather than a patch.
 
@@ -1268,7 +1289,7 @@ These are stated rather than fixed. Each is a deliberate position or a limit of 
 
 **Dynamic testing was partial.** A device pass was run on one handset, and section 7 records exactly which tests produced a result and which did not. Seven produced nothing. The gaps are not evenly distributed: they fall hardest on the network and privacy controls, which is why every PASS in this report is still marked static only. No finding here was contradicted by the device, but absence of contradiction across eleven tests is not the same as verification across eighteen.
 
-**One device, one Android version.** All dynamic results come from a Samsung SM-A556E on Android 16. Behaviour that varies by manufacturer or API level was not sampled. The StrongBox fallback observed here is one concrete example: this device has no StrongBox, so the code took its TEE path, and hardware that does have StrongBox was not exercised.
+**One device for most results, two for the Keystore.** All dynamic results except the Keystore backing come from a Samsung SM-A556E on Android 16. Behaviour that varies by manufacturer or API level was not otherwise sampled. The Keystore item was repeated on a Samsung SM-S938B, which established that the code takes the TEE path on hardware without StrongBox and the StrongBox path on hardware with it. No non-Samsung device and no Android version below 16 was tested at runtime.
 
 **No penetration test and no fuzzing.** Reverse engineering was limited to string and symbol inspection of the shipped binary. No instrumentation with Frida or Objection, and no attempt at runtime hooking or memory inspection. Two findings were exercised to the point of proof, F-03 and F-08, because both were reachable with ordinary platform tooling and neither required modifying the app. Nothing else was exploited.
 
@@ -1383,7 +1404,7 @@ These are closed as unverifiable, not as passing. Each states what would be need
 
 **F-27, device-to-device transfer.** Needs a second device sitting at its first-time setup screen. The fix shipped without the proof, because the fix is correct regardless of what a transfer would have done.
 
-**The StrongBox key path.** The test device has no StrongBox, so only the documented TEE fallback has been observed. Nothing public should claim StrongBox protection until the strong path is seen on hardware that has it.
+**The biometric enrolment-change path.** `setInvalidatedByBiometricEnrollment(true)` is set, and the key generation that carries it has now been observed on both TEE and StrongBox hardware, but the invalidation itself has never been triggered. Proving it means enrolling a new fingerprint on a device holding a live wrap and confirming the app falls back to the password rather than failing open. Not done.
 
 ### Resolved by evidence rather than by code
 
@@ -1426,3 +1447,4 @@ One deliberate difference is worth recording. Ente declares `ACCESS_MEDIA_LOCATI
 |---|---|---|
 | 2026-09-20 | 1.0 | Initial assessment at commit `c43cd1a`, static and binary only. |
 | 2026-09-20 | 1.1 | Device pass on a Samsung SM-A556E, Android 16, against the installed shipped build. Eight tests complete, three partial, seven not run. Added F-32 and F-33, both found during testing. Corrected the F-05 claim about the Active Shares screen. Corrected F-17, which had reported R8 as disabled. Added evidence markers throughout and a statement that all five passing controls remain unverified at runtime. |
+| 2026-09-22 | 1.2 | Closed the StrongBox item on a Samsung SM-S938B: the app takes the StrongBox branch, corroborated against the platform's own HAL registration. Recorded the `noneEnrolled` UI path, observed on the same device. Corrected the OneDrive browser claim, which was stated as settled and was wrong. Replaced the StrongBox entry in verification debt with the biometric enrolment-change path, which is what actually remains unproven. |
