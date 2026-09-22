@@ -1218,7 +1218,9 @@ Update, 2026-09-22. The first fix attempt was aimed at the wrong API and did not
 
 The likely root cause is upstream of the URL format: `createLink` returns 200 while granting a scope other than `anonymous`, and the app never checked. A scope check now fails loudly at creation time rather than minting a link that is dead for every recipient. Resolving it properly may require hosting share blobs somewhere directly fetchable rather than relying on a provider's public-link behaviour.
 
-The OneDrive case could not be tested, because the share does not work at all. Opening a OneDrive share link as an anonymous recipient redirects to `login.live.com` and returns a sign-in page instead of the file. The viewer reports the HTML interstitial correctly. The cause is in `onedrive_provider.dart`, which builds the recipient URL by appending `?download=1` to the `1drv.ms` link returned by `createLink`. That does not produce an anonymous direct download. This is a functional defect rather than a MASVS finding, but it means the sharing feature is broken for every OneDrive user, and it is tracked outside this report.
+The OneDrive case could not be tested, because the share does not work at all. Opening a OneDrive share link as an anonymous recipient redirects to `login.live.com` and returns a sign-in page instead of the file. The viewer reports the HTML interstitial correctly. The cause is in `onedrive_provider.dart`, which builds the recipient URL by appending `?download=1` to the `1drv.ms` link returned by `createLink`. That does not produce an anonymous direct download. This is a functional defect rather than a MASVS finding, but it means the sharing feature is broken for every OneDrive user.
+
+Resolved on 2026-09-22 by removing the capability rather than faking it. Microsoft's migrated consumer accounts issue sharing links that require a browser redemption step before the file can be fetched, and a magic link needs an address that answers an anonymous GET with bytes. Share creation is now refused on non-Google accounts, with a message explaining why, so the failure surfaces to the sender at creation instead of to the recipient on opening.
 
 ## 8. Known gaps and accepted risks
 
@@ -1320,7 +1322,7 @@ F-01, F-02, F-03, F-05, F-06, F-08, F-09, F-12, F-27, F-30, F-32, F-33, F-34, an
 | F-07 | High | Delete the materialized plaintext when the share or open future returns; scope the `open_file` provider to one cache subdirectory; sanitize the filename at the two vault call sites |
 | F-10 | High | Set `EXTRA_IS_SENSITIVE` on the phrase and share-link copies, add a timed clear, and reconsider whether the phrase needs a copy button at all |
 | F-11 | High | Encrypt the metadata database with a key derived from the vault seed and wrapped by the Keystore. Needs a migration, so it goes last of the four |
-| F-01 residual | Medium | Encrypt the thumbnail cache at rest under a vault-derived key, so locking neither leaves readable imagery nor forces the grid to rebuild from scratch |
+
 | F-13 | Medium | Require biometric or password confirmation before creating a share link |
 | F-14 | Medium | Pass `encryptedSharedPreferences: true`, behind a one-way migration flag |
 | F-15 | Medium | Add a Keystore-wrapped layer around the seed blob, raise the password ceiling past 20 characters, add persisted backoff on failed unlocks |
@@ -1340,6 +1342,14 @@ F-01, F-02, F-03, F-05, F-06, F-08, F-09, F-12, F-27, F-30, F-32, F-33, F-34, an
 | W-03 | Low | Complete the remaining SA-WEB-01 steps: origin check, rate limit, bot challenge, magic-byte validation |
 | W-04 | Low | Strip the fragment with `history.replaceState` once the key is read into memory |
 | W-05 | Info | Add a subresource integrity attribute to the bundled Argon2 module |
+
+### Accepted, with the reason stated
+
+**The thumbnail cache keeps decrypted imagery across a lock.** Large artifacts are purged; thumbnails are not, because rebuilding them costs a download and a decrypt each and the grid would be slow and data-hungry after every unlock.
+
+Encrypting them was considered and rejected for now, on priority rather than principle. The exposure needs an attacker who has the device, has the vault locked, and can extract app-private data with root or forensic tooling. No other application on the device can read it. That is precisely the attacker F-11 already hands the entire metadata database to, including every filename, local path, folder and album name, content hash, and a complete timeline of user activity. Encrypting thumbnails while that database sits in plaintext would be securing the smaller of two doors into the same room.
+
+The sequence is therefore F-11 first. Once the vault has a key wired into storage, extending it to the thumbnail cache is cheap, and it can be reconsidered then.
 
 ### Requires a product decision, not a fix
 
