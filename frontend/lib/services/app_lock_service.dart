@@ -135,7 +135,7 @@ class AppLockService {
     if (_onboardingInProgress) return;
     final elapsed = DateTime.now().difference(_lastActivity);
     if (elapsed >= _timeout && !(_isPlaybackActive?.call() ?? false)) {
-      lockNow();
+      lockNow(stopPlayback: !_keepPlayingOnClose);
     } else {
       recordActivity();
     }
@@ -164,7 +164,7 @@ class AppLockService {
     }
     _deferringSince = null;
     if (_onboardingInProgress) return;
-    lockNow();
+    lockNow(stopPlayback: !_keepPlayingOnClose);
   }
 
   /// Locks now and routes to the login screen.
@@ -173,7 +173,16 @@ class AppLockService {
   /// inactivity timer. Until that action existed this method had no callers
   /// at all, so there was no way for a user to close their own vault
   /// (MASVS F-32).
-  void lockNow() {
+  ///
+  /// [stopPlayback] defaults to true because an explicit lock should do what
+  /// it says. The "keep playing after closing" setting is about CLOSING the
+  /// app, not about locking it: someone who taps Lock vault is usually about
+  /// to hand over the phone, and leaving a vault track playing with its
+  /// decrypted title on the lock screen would defeat the gesture. The
+  /// inactivity path passes the setting through instead, because there the
+  /// user has not asked for anything and background playback is the whole
+  /// point of the option.
+  void lockNow({bool stopPlayback = true}) {
     _timer?.cancel();
     _deferringSince = null;
     if (!KeyManagerService().isUnlocked) return;
@@ -187,11 +196,7 @@ class AppLockService {
     // that hands them out still listening. Both were confirmed on a device
     // (MASVS F-01, F-02, F-03). Fire-and-forget: the UI must not wait on
     // disk IO to show the login screen.
-    // Playback is the one thing a user may legitimately want to outlive the
-    // lock, so it is the one thing that is opt-out rather than unconditional.
-    // Left running, it also keeps the decrypted track title on the lock
-    // screen, which is why the default is to stop.
-    if (!_keepPlayingOnClose) {
+    if (stopPlayback) {
       unawaited(AudioPlayerService().stop());
     }
     unawaited(VideoStreamingServer().stop());

@@ -1343,7 +1343,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 style: TextStyle(color: cs.onSurface)),
             subtitle: Text(
               _keepPlayingOnClose
-                  ? 'Music continues and the vault stays open until it stops'
+                  ? 'Music survives closing the app and auto-lock. Lock vault '
+                      'now always stops it'
                   : 'Closing the app or clearing it from recents locks the vault',
               style: TextStyle(color: cs.onSurface.withAlpha(140)),
             ),
