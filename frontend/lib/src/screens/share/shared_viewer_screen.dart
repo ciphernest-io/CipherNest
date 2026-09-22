@@ -331,9 +331,17 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
       );
     }
     // Second gate, independent of what the server claimed the type was:
-    // every CipherNest blob opens with the format version byte.
+    // every CipherNest share blob opens with a share-format version byte.
+    //
+    // BOTH versions must be listed here. This gate originally accepted only
+    // EncryptionService.formatVersion (0x01), so when share header v2 was
+    // introduced it rejected every newly created share at download, before
+    // the decrypt that understands v2 ever ran. Old links kept working,
+    // which made it look like the new format was unreadable rather than
+    // that this check was stale.
     if (bodyBytes.isEmpty ||
-        bodyBytes.first != EncryptionService.formatVersion) {
+        (bodyBytes.first != EncryptionService.formatVersion &&
+            bodyBytes.first != shareFormatV2)) {
       throw const HttpException(
         'That did not arrive as a CipherNest file. The share may have been '
         'revoked, or the link may be incomplete.',
