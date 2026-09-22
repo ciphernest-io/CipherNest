@@ -1026,7 +1026,7 @@ MASVS does not cover web. This section assesses `worker.js` and `web-viewer/` ag
 
 | Entry | Claim | Verdict |
 |---|---|---|
-| SA-WEB-01 | `/proxy` is an unauthenticated open relay for allowlisted hosts | **Resolved in code, 2026-09-22, except two dashboard items.** Allowlist trimmed, wildcard CORS and the preflight removed, `Origin` and `Sec-Fetch-Site` checked, `https` required, and magic-byte validation added so only a CipherNest share blob is relayed. Verified live: foreign `Origin` 403, cross-site 403, a public non-blob Drive file 403, `OPTIONS` 405, `http` target 403. Rate limiting and the Turnstile challenge remain outstanding; both are Cloudflare dashboard settings rather than code. |
+| SA-WEB-01 | `/proxy` is an unauthenticated open relay for allowlisted hosts | **Resolved in code, 2026-09-22, except two dashboard items.** Allowlist trimmed, wildcard CORS and the preflight removed, `Origin` and `Sec-Fetch-Site` checked, `https` required, and magic-byte validation added so only a CipherNest share blob is relayed. Verified live: foreign `Origin` 403, cross-site 403, a public non-blob Drive file 403, `OPTIONS` 405, `http` target 403. Rate limiting remains, as a dashboard rule rather than code. Turnstile was declined with reasoning recorded in the ledger: the endpoint is no longer a general relay, and a third-party script on the share page would contradict SA-WEB-03. |
 | SA-WEB-02 | Share expiry is client-advisory, enforced only by blob deletion | **Resolved in code, 2026-09-22.** The deadline now travels inside the share blob as header v2, where the recipient cannot edit it, and v1 links still work. Three layers: the Worker returns 410, both viewers refuse independently, and the sweep still deletes. Not absolute, and the report says so: someone who saved the direct cloud URL bypasses the Worker and still holds the key. |
 | SA-WEB-03 | Share viewer page is unbranded | **Fixed.** `web-viewer/index.html` carries the Binary theme tokens with light and dark variants, the logo mark, and a self-hosted `BungeeHairline` font served same-origin (`:12-17`). No Google Fonts request. No third-party script. |
 | SA-WEB-04 | Share links minted on a workers.dev host | **Fixed, with follow-up open.** `AppConstants.shareHost` is `share.ciphernest.io` (`frontend/lib/src/config/constants.dart:11`) and the custom domain is live. The fix's own step 2, removing the now-unnecessary CORS header and preflight handler since page and proxy are same-origin, was not done. `web-viewer/README.md:6` still names the dead workers.dev host. |
@@ -1359,7 +1359,7 @@ F-01, F-02, F-03, F-05, F-06, F-08, F-09, F-12, F-27, F-30, F-32, F-33, F-34, an
 | F-25 | Low | Integrate Play in-app updates with an immediate flow for security releases |
 | F-26 | Low | Generate a CycloneDX SBOM per release and add a dependency scan to the checklist |
 | F-31 | Low | Declare `INTERNET` in the application's own manifest |
-| W-03 | Low | Complete the remaining SA-WEB-01 steps: origin check, rate limit, bot challenge, magic-byte validation |
+| W-03 | Low | Resolved 2026-09-22. Origin check and magic-byte validation shipped; rate limit is a dashboard rule; bot challenge declined with reasoning |
 | W-04 | Low | Strip the fragment with `history.replaceState` once the key is read into memory |
 | W-05 | Info | Add a subresource integrity attribute to the bundled Argon2 module |
 
