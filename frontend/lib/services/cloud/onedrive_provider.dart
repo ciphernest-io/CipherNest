@@ -914,13 +914,35 @@ class OneDriveProvider implements CloudProvider {
       }
       final linkJson = jsonDecode(linkResp.body) as Map<String, dynamic>;
       final link = linkJson['link'] as Map<String, dynamic>;
-      // The webUrl is the share URL (e.g. https://1drv.ms/...).
-      // For direct-binary download we transform it to the OneDrive-recommended
-      // pattern by appending '?download=1' — works for anonymous share URLs.
       final shareUrl = link['webUrl'] as String;
-      final downloadUrl = '$shareUrl?download=1';
-      return (cloudId: cloudId, downloadUrl: downloadUrl);
+      return (cloudId: cloudId, downloadUrl: _anonymousDownloadUrl(shareUrl));
     });
+  }
+
+  /// Turns the `1drv.ms` web URL from `createLink` into something an
+  /// anonymous recipient can actually download bytes from.
+  ///
+  /// The previous form appended `?download=1` to the web URL. That is a
+  /// OneDrive web-app convention, not an API, and for an anonymous caller it
+  /// does not serve the file: the request redirects to `login.live.com` and
+  /// returns a sign-in page. The share viewer reported it faithfully as "the
+  /// cloud host returned an HTML page instead of the encrypted file", which is
+  /// exactly what had happened. Every OneDrive share ever created was
+  /// therefore dead on arrival for the recipient. Found during MASVS round 2
+  /// test 16; a functional defect rather than a security finding.
+  ///
+  /// The documented anonymous route is the shares endpoint, addressed by a
+  /// share token: base64 of the sharing URL, made URL-safe, padding stripped,
+  /// prefixed with `u!`. That host is already on both the app's and the
+  /// Worker's download allowlists.
+  ///
+  /// Google Drive is unaffected; it uses `webContentLink` and works.
+  static String _anonymousDownloadUrl(String shareUrl) {
+    final token = base64Encode(utf8.encode(shareUrl))
+        .replaceAll('/', '_')
+        .replaceAll('+', '-')
+        .replaceAll('=', '');
+    return 'https://api.onedrive.com/v1.0/shares/u!$token/root/content';
   }
 
   @override
