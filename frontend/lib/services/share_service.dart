@@ -15,6 +15,13 @@ import 'database_service.dart';
 import 'encryption_service.dart';
 import 'subscription_service.dart';
 
+/// Share-blob header version that carries the expiry deadline in-band.
+///
+/// Distinct from [EncryptionService.formatVersion], which versions the vault
+/// file format. A share blob reuses the vault body verbatim but frames its
+/// own header, so the two version numbers are independent.
+const int shareFormatV2 = 0x02;
+
 /// Orchestrates the create / list / revoke share flows.
 class ShareService {
   static final ShareService _instance = ShareService._internal();
@@ -79,6 +86,9 @@ class ShareService {
       shareKey = await EncryptionService.generateShareKey();
     }
 
+    // Deadline is needed before the header is built, since v2 carries it.
+    final expiresAt = expiry == null ? null : DateTime.now().add(expiry);
+
     // 4. Re-wrap the file key under the share key and frame the share header.
     //    Share header v1:
     //      [1 version][4 region-len BE][region]
@@ -90,8 +100,30 @@ class ShareService {
     final region = salt == null
         ? wrapped
         : Uint8List.fromList([...salt, ...wrapped]);
+    // Share header v2:
+    //   [1 version=0x02][8 expiry epoch-ms BE, 0 = never][4 region-len BE][region]
+    //
+    // v1 was [1 version][4 region-len][region], with expiry living only in
+    // the URL fragment. That made expiry advisory in the weakest possible
+    // way: the recipient holds the URL, so deleting `&exp=` from it removed
+    // the deadline entirely (SA-WEB-02).
+    //
+    // Carrying it in the blob means the recipient cannot edit it, and both
+    // viewers plus the Worker can enforce it. It is deliberately PLAINTEXT
+    // and outside the sealed region, because the Worker has no key and must
+    // be able to read it. It reveals only when a link stops working, which
+    // the sender chose and the recipient already knows.
+    //
+    // Honest about what this is not: someone who saved the direct cloud URL
+    // can still fetch the blob past expiry and decrypt it with a key they
+    // already hold. Real revocation is still deleting the blob, which the
+    // sweep does. This closes casual bypass, not determined archiving.
+    final expiryMs = expiresAt?.millisecondsSinceEpoch ?? 0;
     final shareHeader = BytesBuilder(copy: false)
-      ..addByte(EncryptionService.formatVersion)
+      ..addByte(shareFormatV2)
+      ..add((ByteData(8)..setUint64(0, expiryMs, Endian.big))
+          .buffer
+          .asUint8List())
       ..add((ByteData(4)..setUint32(0, region.length, Endian.big))
           .buffer
           .asUint8List())
@@ -115,7 +147,6 @@ class ShareService {
     // 7. Construct magic link. Attach the file's display name so the
     // recipient's download preserves it (fragment stays client-side, so
     // the filename never reaches the server).
-    final expiresAt = expiry == null ? null : DateTime.now().add(expiry);
     final shareUrl = await _buildShareUrl(
       downloadUrl: uploaded.downloadUrl,
       shareKey: shareKey,
@@ -164,7 +195,19 @@ class ShareService {
     }
     // Original filename, base64url-encoded so it survives special chars
     // (spaces, unicode). Recipient uses it as the `<a download=…>` value.
-    fragment.write('&n=${base64Url.encode(utf8.encode(filename))}');
+    //
+    // NOT attached to a password-protected share. The whole premise of a
+    // password link is that the link alone reveals nothing without the
+    // password, and a filename is frequently the most telling thing about a
+    // file. Sending "link + password separately" stops meaning anything if
+    // the link already says `medical-results-2026.pdf` (SA-WEB-05).
+    //
+    // Plain shares keep it: there the key is in the fragment anyway, so the
+    // name adds no disclosure, and the recipient gets a correctly named
+    // download instead of `shared-file.jpg`.
+    if (salt == null) {
+      fragment.write('&n=${base64Url.encode(utf8.encode(filename))}');
+    }
 
     return 'https://${AppConstants.shareHost}/s/$encodedDl#${fragment.toString()}';
   }

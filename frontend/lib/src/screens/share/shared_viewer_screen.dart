@@ -16,6 +16,7 @@ import 'package:video_player/video_player.dart';
 import '../../../crypto/aes_gcm.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/notify.dart';
+import '../../../services/share_service.dart' show shareFormatV2;
 
 /// Receives a CipherNest magic link (either via the `ciphernest://` custom
 /// scheme or an `https://<AppConstants.shareHost>/s/...` App Link) and
@@ -355,19 +356,43 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
     bool isPasswordMode,
   ) async {
     if (blob.length < 5) throw const FormatException('Blob too short');
-    if (blob[0] != EncryptionService.formatVersion) {
-      throw FormatException('Unsupported share version ${blob[0]}');
+
+    // v1: [1 ver][4 region-len][region]
+    // v2: [1 ver][8 expiry epoch-ms BE, 0 = never][4 region-len][region]
+    //
+    // v1 links stay readable: shares already in circulation must not break
+    // because the format moved on.
+    final version = blob[0];
+    final int regionLenOffset;
+    if (version == shareFormatV2) {
+      if (blob.length < 13) throw const FormatException('Blob too short');
+      final expiryMs =
+          ByteData.sublistView(blob, 1, 9).getUint64(0, Endian.big);
+      // The authoritative deadline, because unlike the fragment copy the
+      // recipient cannot edit it (SA-WEB-02).
+      if (expiryMs != 0 &&
+          DateTime.now().millisecondsSinceEpoch > expiryMs) {
+        throw const FormatException('This share link has expired.');
+      }
+      regionLenOffset = 9;
+    } else if (version == EncryptionService.formatVersion) {
+      regionLenOffset = 1;
+    } else {
+      throw FormatException('Unsupported share version $version');
     }
-    final regionLen =
-        ByteData.sublistView(blob, 1, 5).getUint32(0, Endian.big);
-    final regionEnd = 5 + regionLen;
+
+    final regionLen = ByteData.sublistView(
+            blob, regionLenOffset, regionLenOffset + 4)
+        .getUint32(0, Endian.big);
+    final regionEnd = regionLenOffset + 4 + regionLen;
     if (blob.length < regionEnd) {
       throw const FormatException('Blob too short for declared header');
     }
 
+    final regionStart = regionLenOffset + 4;
     final wrappedKey = isPasswordMode
-        ? blob.sublist(5 + 16, regionEnd) // skip 16-byte salt
-        : blob.sublist(5, regionEnd);
+        ? blob.sublist(regionStart + 16, regionEnd) // skip 16-byte salt
+        : blob.sublist(regionStart, regionEnd);
 
     final fileKeyBytes = await AesGcmCipher().decrypt(wrappedKey, shareKey);
     final fileKey = SecretKey(fileKeyBytes);

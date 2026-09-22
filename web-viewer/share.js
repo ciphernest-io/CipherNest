@@ -20,6 +20,9 @@ const ENCRYPTED_CHUNK_SIZE = 524316; // 512 KiB plaintext + 12-byte nonce + 16-b
 const NONCE_SIZE = 12;
 const MAC_SIZE = 16;
 const FORMAT_VERSION = 0x01; // first byte of every CipherNest blob
+// Share blobs frame their own header and version it separately from the
+// vault file format. v2 carries the expiry deadline in-band.
+const SHARE_FORMAT_V2 = 0x02;
 const BODY_PREAMBLE_SIZE = 20; // 16-byte content_id + 4-byte total_chunks (BE)
 
 const $ = (id) => document.getElementById(id);
@@ -205,12 +208,34 @@ async function decryptAndRender(downloadUrl, shareKeyBytes, opts) {
   // The salt is also in the URL fragment's p= (already used to derive
   // shareKey via Argon2id), so we skip past it here.
   if (blob.length < 5) throw new Error('blob too short');
-  if (blob[0] !== FORMAT_VERSION) {
+
+  // v1: [1 ver][4 region-len][region]
+  // v2: [1 ver][8 expiry epoch-ms BE, 0 = never][4 region-len][region]
+  //
+  // Expiry used to live only in the URL fragment, where the recipient could
+  // simply delete it. Carrying it in the blob makes it something they cannot
+  // edit (SA-WEB-02). v1 links keep working: shares already in circulation
+  // must not break because the format moved on.
+  let regionLenOffset;
+  if (blob[0] === SHARE_FORMAT_V2) {
+    if (blob.length < 13) throw new Error('blob too short');
+    const expiryMs = Number(
+      new DataView(blob.buffer, blob.byteOffset + 1, 8).getBigUint64(0, false)
+    );
+    if (expiryMs !== 0 && Date.now() > expiryMs) {
+      throw new Error('This share link has expired.');
+    }
+    regionLenOffset = 9;
+  } else if (blob[0] === FORMAT_VERSION) {
+    regionLenOffset = 1;
+  } else {
     throw new Error('unsupported share version ' + blob[0]);
   }
-  const regionLen = readU32BE(blob, 1);
-  const regionEnd = 5 + regionLen;
-  const wrappedStart = passwordMode ? 5 + 16 : 5;
+
+  const regionLen = readU32BE(blob, regionLenOffset);
+  const regionStart = regionLenOffset + 4;
+  const regionEnd = regionStart + regionLen;
+  const wrappedStart = passwordMode ? regionStart + 16 : regionStart;
   const wrappedFileKey = blob.subarray(wrappedStart, regionEnd);
   const fileKeyBytes = await aesGcmDecrypt(shareKey, wrappedFileKey);
   const fileKey = await crypto.subtle.importKey(

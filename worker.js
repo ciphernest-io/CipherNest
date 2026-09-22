@@ -73,7 +73,14 @@ const OAUTH_INLINE_SCRIPT_HASH =
 const SECURITY_HEADERS = {
   'Content-Security-Policy': [
     "default-src 'self'",
-    `script-src 'self' ${OAUTH_INLINE_SCRIPT_HASH}`,
+    // 'wasm-unsafe-eval' is required for WebAssembly.compile, which the
+    // bundled Argon2 (hash-wasm) uses to derive the key for a
+    // password-protected share. Without it the CSP blocks the module and
+    // password shares fail in the browser with a compile error, which is
+    // exactly what shipping this header without testing that path caused.
+    // It permits WASM compilation only; it does NOT enable eval() or
+    // inline script, so the policy stays tight.
+    `script-src 'self' 'wasm-unsafe-eval' ${OAUTH_INLINE_SCRIPT_HASH}`,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' blob: data:",
     "media-src 'self' blob:",
@@ -151,8 +158,11 @@ export default {
     }
 
     if (url.pathname === '/proxy') {
-      if (request.method === 'OPTIONS') return corsPreflight();
-      if (request.method === 'GET') return handleProxy(url);
+      // No OPTIONS handler any more: the viewer and /proxy are same-origin,
+      // so no browser ever sends a preflight for it. The old one answered
+      // with a wildcard and advertised the endpoint to every origin
+      // (SA-WEB-01 step 2).
+      if (request.method === 'GET') return handleProxy(url, request);
       return new Response('Method not allowed', { status: 405 });
     }
 
@@ -162,17 +172,6 @@ export default {
   },
 };
 
-function corsPreflight() {
-  return new Response(null, {
-    status: 204,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
-      'Access-Control-Allow-Headers': '*',
-      'Access-Control-Max-Age': '86400',
-    },
-  });
-}
 
 // Chrome-flavored User-Agent. Drive serves different content to non-browser
 // UAs: a sign-in page instead of the file bytes for an anonymous download.
@@ -193,17 +192,16 @@ const MAX_REDIRECTS = 10;
 // months because of it, and it was never a URL-format problem: a browser
 // carried the cookie and saw the file the whole time.
 //
-// IMPORTANT, measured not assumed: this jar stays EMPTY on Cloudflare.
-// Workers do not expose Set-Cookie from subrequest responses; getSetCookie()
-// returns an empty array on every hop, with caching disabled and with it on.
-// So the handshake cannot be performed here, and OneDrive shares cannot be
-// served to a browser recipient through this proxy. The app does the same
-// walk with dart:io and DOES get the cookies, which is why in-app recipients
-// work. See handleProxy for how that is surfaced.
+// Measured, and worth recording because it is counter-intuitive: this jar
+// stays EMPTY on Cloudflare. Workers do not expose Set-Cookie from
+// subrequest responses, so getSetCookie() returns nothing on every hop,
+// with caching on and off. Freshly minted OneDrive shares are served
+// anyway, so the handshake is evidently not required for them; a stale or
+// already-redeemed link behaves differently and returns the interstitial.
 //
-// The loop is kept regardless, because following by hand lets every hop be
-// checked against the allowlist. `redirect: 'follow'` validated only the
-// first URL, so a redirect could previously walk the proxy anywhere.
+// The loop earns its place regardless: following by hand is what lets every
+// hop be checked against the allowlist. `redirect: 'follow'` validated only
+// the first URL, so a redirect could previously walk the proxy anywhere.
 async function fetchFollowingCookies(startUrl) {
   let current = startUrl;
   const jar = new Map();
@@ -253,7 +251,37 @@ async function fetchFollowingCookies(startUrl) {
   throw new Error('Upstream redirected too many times');
 }
 
-async function handleProxy(url) {
+// Origins allowed to drive the proxy. The viewer and /proxy are the same
+// origin, so nothing legitimate is ever cross-origin here (SA-WEB-01 step 3).
+//
+// Stated plainly, because it is easy to overrate: this is a filter, not a
+// boundary. Browsers enforce it on themselves; curl and scripts ignore
+// Origin entirely and can forge it. It stops a malicious WEB PAGE using this
+// Worker as a relay. It does not stop a script. Rate limiting and a bot
+// challenge are what stop scripts, and both live in the Cloudflare dashboard
+// rather than in this file.
+const SELF_ORIGIN = 'https://share.ciphernest.io';
+
+function originAllowed(request) {
+  const origin = request.headers.get('Origin');
+  if (origin && origin !== SELF_ORIGIN) return false;
+  const site = request.headers.get('Sec-Fetch-Site');
+  if (site && site !== 'same-origin' && site !== 'none') return false;
+  return true;
+}
+
+// Share-blob header bytes the proxy is willing to relay.
+//   0x01  v1: [1 ver][4 region-len][region]
+//   0x02  v2: [1 ver][8 expiry epoch-ms BE][4 region-len][region]
+const SHARE_V1 = 0x01;
+const SHARE_V2 = 0x02;
+const SHARE_HEAD_BYTES = 13;
+
+async function handleProxy(url, request) {
+  if (!originAllowed(request)) {
+    return new Response('Forbidden', { status: 403 });
+  }
+
   const target = url.searchParams.get('u');
   if (!target) return new Response('Missing u parameter', { status: 400 });
 
@@ -264,6 +292,9 @@ async function handleProxy(url) {
     return new Response('Bad target URL', { status: 400 });
   }
 
+  if (parsed.protocol !== 'https:') {
+    return new Response('Only https targets are relayed', { status: 403 });
+  }
   if (!isAllowed(parsed.host)) {
     return new Response('Host not allowed: ' + parsed.host, { status: 403 });
   }
@@ -275,54 +306,103 @@ async function handleProxy(url) {
     return new Response(String(e.message || e), { status: 502 });
   }
 
-  const upstreamContentType =
-    upstream.headers.get('Content-Type') || 'application/octet-stream';
-
-  // If the cloud host returned HTML, sniff the first 300 bytes into a
-  // custom header so the recipient page can show WHAT the cloud sent
-  // (sign-in page, virus warning, access denied, etc.).
-  // A OneDrive host answering with HTML means the cookie handshake above
-  // could not be performed, which on Cloudflare it never can. Relaying the
-  // sign-in page would make the viewer report "the cloud returned an HTML
-  // page", which is true and useless. Say the actual thing instead.
-  if (
-    upstreamContentType.includes('text/html') &&
-    /(^|\.)(1drv\.ms|onedrive\.live\.com)$/.test(parsed.host)
-  ) {
-    return new Response(
-      'ONEDRIVE_NEEDS_APP',
-      { status: 409, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' } },
-    );
+  if (!upstream.body) {
+    return new Response('Upstream returned no body', { status: 502 });
   }
 
-  let debugSnippet = '';
-  let bodyToReturn = upstream.body;
-  if (upstreamContentType.includes('text/html')) {
-    const buf = await upstream.arrayBuffer();
-    const bytes = new Uint8Array(buf, 0, Math.min(400, buf.byteLength));
-    debugSnippet = new TextDecoder('utf-8')
-      .decode(bytes)
+  // Read just enough of the body to inspect the share header, then stream the
+  // rest untouched. Buffering the whole blob would work and would also mean
+  // holding a video in memory for no reason.
+  const reader = upstream.body.getReader();
+  const head = [];
+  let headLen = 0;
+  let done = false;
+  while (headLen < SHARE_HEAD_BYTES && !done) {
+    const r = await reader.read();
+    if (r.done) {
+      done = true;
+      break;
+    }
+    head.push(r.value);
+    headLen += r.value.length;
+  }
+  const headBytes = new Uint8Array(headLen);
+  {
+    let at = 0;
+    for (const c of head) {
+      headBytes.set(c, at);
+      at += c.length;
+    }
+  }
+
+  // Refuse to relay anything that is not a CipherNest share blob
+  // (SA-WEB-01 step 6). Before this, any public file on an allowlisted host
+  // could be pulled through the Worker, which made it a general-purpose
+  // download relay for Google Drive. It also catches the cloud host's HTML
+  // sign-in or virus-warning interstitials without needing to trust the
+  // Content-Type it claimed.
+  const version = headBytes[0];
+  if (headLen === 0 || (version !== SHARE_V1 && version !== SHARE_V2)) {
+    const snippet = new TextDecoder('utf-8')
+      .decode(headBytes.subarray(0, Math.min(64, headLen)))
       .replace(/[\r\n]+/g, ' ')
-      .replace(/\s{2,}/g, ' ')
-      .slice(0, 300);
-    bodyToReturn = buf;
+      .slice(0, 60);
+    return new Response('Not a CipherNest share blob', {
+      status: 403,
+      headers: {
+        'Content-Type': 'text/plain',
+        'Cache-Control': 'no-store',
+        'X-CipherNest-Debug': snippet,
+      },
+    });
   }
+
+  // Expiry, enforced server-side (SA-WEB-02). v2 carries the deadline in the
+  // blob, where the recipient cannot edit it, unlike the fragment copy they
+  // could simply delete. Not absolute: someone who saved the direct cloud URL
+  // bypasses this Worker entirely and still holds the key. Deleting the blob,
+  // which the sender's sweep does, remains the only real revocation.
+  if (version === SHARE_V2 && headLen >= 9) {
+    const expiryMs = Number(
+      new DataView(headBytes.buffer, headBytes.byteOffset + 1, 8).getBigUint64(0, false),
+    );
+    if (expiryMs !== 0 && Date.now() > expiryMs) {
+      return new Response('This share link has expired.', {
+        status: 410,
+        headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' },
+      });
+    }
+  }
+
+  // Re-attach the bytes already read, then hand over the rest of the stream.
+  const body = new ReadableStream({
+    start(controller) {
+      if (headLen) controller.enqueue(headBytes);
+      if (done) controller.close();
+    },
+    async pull(controller) {
+      const r = await reader.read();
+      if (r.done) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(r.value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
 
   const headers = new Headers();
-  headers.set('Content-Type', upstreamContentType);
+  headers.set('Content-Type', 'application/octet-stream');
   const len = upstream.headers.get('Content-Length');
   if (len) headers.set('Content-Length', len);
-  headers.set('Access-Control-Allow-Origin', '*');
-  headers.set(
-    'Access-Control-Expose-Headers',
-    'X-CipherNest-Debug, X-CipherNest-Final-Url',
-  );
   headers.set('Cache-Control', 'no-store');
-  headers.set('X-CipherNest-Final-Url', upstream.url);
-  if (debugSnippet) headers.set('X-CipherNest-Debug', debugSnippet);
+  headers.set('X-Content-Type-Options', 'nosniff');
+  // No Access-Control-Allow-Origin. The viewer and this endpoint are the same
+  // origin, so CORS does not apply to the only legitimate caller, and the
+  // wildcard was letting any page on the internet read the response
+  // (SA-WEB-01 step 2).
 
-  return new Response(bodyToReturn, {
-    status: upstream.status,
-    headers,
-  });
+  return new Response(body, { status: upstream.status, headers });
 }
