@@ -1220,7 +1220,15 @@ The likely root cause is upstream of the URL format: `createLink` returns 200 wh
 
 The OneDrive case could not be tested, because the share does not work at all. Opening a OneDrive share link as an anonymous recipient redirects to `login.live.com` and returns a sign-in page instead of the file. The viewer reports the HTML interstitial correctly. The cause is in `onedrive_provider.dart`, which builds the recipient URL by appending `?download=1` to the `1drv.ms` link returned by `createLink`. That does not produce an anonymous direct download. This is a functional defect rather than a MASVS finding, but it means the sharing feature is broken for every OneDrive user.
 
-Resolved on 2026-09-22 by removing the capability rather than faking it. Microsoft's migrated consumer accounts issue sharing links that require a browser redemption step before the file can be fetched, and a magic link needs an address that answers an anonymous GET with bytes. Share creation is now refused on non-Google accounts, with a message explaining why, so the failure surfaces to the sender at creation instead of to the recipient on opening.
+Root cause found and fixed on 2026-09-22, after two wrong diagnoses worth recording.
+
+The first attempt blamed the URL format and switched to a different Microsoft endpoint. That returned 401. The second concluded Microsoft was refusing anonymous sharing outright, and share creation was gated to Google accounts. Both were wrong, and the thing that disproved them was a single observation: opening the raw sharing link in a signed-out browser showed the file immediately. Anonymous sharing worked the whole time. Only programs were being turned away.
+
+The actual cause is cookies. Microsoft's migrated consumer accounts answer the first request with a redirect chain that sets a session cookie, and serve the bytes only when it comes back. Both download paths followed redirects automatically, and automatic following does not carry `Set-Cookie` between hops, in Dart's HTTP helpers and in the Worker's `fetch` alike. Each therefore arrived at the final hop without the cookie and received the HTML interstitial, which the viewer correctly reported as a sign-in page. A browser carried the cookie and saw the file, which is exactly why the two behaviours disagreed.
+
+Both paths now follow redirects by hand and carry cookies forward: `_downloadBlob` in `shared_viewer_screen.dart` for in-app recipients and `fetchFollowingCookies` in `worker.js` for browser recipients. The original `?download=1` URL was correct from the start and has been restored, and the Google-only gate has been removed. Verified against a live share: two redirect hops, then 1,842,227 bytes beginning `0x01`, the CipherNest format byte.
+
+This also tightened F-08. Manual following means every hop is checked against the allowlist; automatic following validated only the first URL, so a redirect could previously walk either client to any host it liked. A body check was added too: a share that does not begin with the format byte is rejected regardless of the content type the server claimed.
 
 ## 8. Known gaps and accepted risks
 

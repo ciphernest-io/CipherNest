@@ -939,31 +939,22 @@ class OneDriveProvider implements CloudProvider {
     });
   }
 
-  /// Turns the `1drv.ms` web URL from `createLink` into something an
-  /// anonymous recipient can actually download bytes from.
+  /// The recipient-facing download URL for a share.
   ///
-  /// The previous form appended `?download=1` to the web URL. That is a
-  /// OneDrive web-app convention, not an API, and for an anonymous caller it
-  /// does not serve the file: the request redirects to `login.live.com` and
-  /// returns a sign-in page. The share viewer reported it faithfully as "the
-  /// cloud host returned an HTML page instead of the encrypted file", which is
-  /// exactly what had happened. Every OneDrive share ever created was
-  /// therefore dead on arrival for the recipient. Found during MASVS round 2
-  /// test 16; a functional defect rather than a security finding.
+  /// `?download=1` on the sharing URL is correct and always was. What was
+  /// missing is cookies. Microsoft's migrated consumer accounts answer the
+  /// first request with a redirect chain that sets a session cookie, and only
+  /// serve bytes once that cookie comes back. Both Dart's http helpers and
+  /// the Worker's fetch follow redirects WITHOUT carrying Set-Cookie between
+  /// hops, so each got the HTML interstitial and reported it as a sign-in
+  /// page. A browser carried the cookie and saw the file, which is why this
+  /// looked like "anonymous sharing is blocked" when it never was.
   ///
-  /// The documented anonymous route is the shares endpoint, addressed by a
-  /// share token: base64 of the sharing URL, made URL-safe, padding stripped,
-  /// prefixed with `u!`. That host is already on both the app's and the
-  /// Worker's download allowlists.
-  ///
-  /// Google Drive is unaffected; it uses `webContentLink` and works.
-  static String _anonymousDownloadUrl(String shareUrl) {
-    final token = base64Encode(utf8.encode(shareUrl))
-        .replaceAll('/', '_')
-        .replaceAll('+', '-')
-        .replaceAll('=', '');
-    return 'https://api.onedrive.com/v1.0/shares/u!$token/root/content';
-  }
+  /// Both download paths now follow redirects by hand and carry cookies
+  /// forward: `_downloadShareBlob` in shared_viewer_screen.dart for in-app
+  /// recipients, and `handleProxy` in worker.js for browser recipients.
+  /// Verified against a live share: 1,842,227 bytes beginning 0x01.
+  static String _anonymousDownloadUrl(String shareUrl) => '$shareUrl?download=1';
 
   @override
   Future<void> deletePublicShare(String cloudId) async {

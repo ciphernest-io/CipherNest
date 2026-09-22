@@ -174,6 +174,71 @@ function corsPreflight() {
   });
 }
 
+// Chrome-flavored User-Agent. Drive serves different content to non-browser
+// UAs: a sign-in page instead of the file bytes for an anonymous download.
+const BROWSER_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
+
+const MAX_REDIRECTS = 10;
+
+// Fetches an upstream blob, following redirects by hand and carrying cookies
+// forward.
+//
+// Microsoft's migrated consumer accounts answer the first request with a
+// redirect chain that sets a session cookie, and serve the file only when
+// that cookie comes back. `redirect: 'follow'` does not carry Set-Cookie
+// between hops, so this proxy kept receiving the HTML interstitial and the
+// viewer reported it as a sign-in page. OneDrive sharing looked broken for
+// months because of it, and it was never a URL-format problem: a browser
+// carried the cookie and saw the file the whole time.
+//
+// Following by hand also lets every hop be checked against the allowlist.
+// `redirect: 'follow'` validated only the first URL, so a redirect could
+// previously walk the proxy anywhere it liked.
+async function fetchFollowingCookies(startUrl) {
+  let current = startUrl;
+  const jar = new Map();
+
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const headers = {
+      'User-Agent': BROWSER_UA,
+      Accept: '*/*',
+      'Accept-Language': 'en-US,en;q=0.9',
+    };
+    if (jar.size) {
+      headers.Cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
+    }
+
+    const res = await fetch(current.toString(), {
+      method: 'GET',
+      redirect: 'manual',
+      headers,
+    });
+
+    for (const raw of res.headers.getSetCookie?.() ?? []) {
+      const [pair] = raw.split(';');
+      const eq = pair.indexOf('=');
+      if (eq > 0) jar.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
+    }
+
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get('Location');
+      if (!loc) throw new Error('Upstream redirected with no target');
+      // Relative targets are normal here: one hop in the OneDrive chain is
+      // path-only.
+      current = new URL(loc, current);
+      if (!isAllowed(current.host)) {
+        throw new Error('Upstream redirected to a host not allowed: ' + current.host);
+      }
+      continue;
+    }
+
+    return res;
+  }
+  throw new Error('Upstream redirected too many times');
+}
+
 async function handleProxy(url) {
   const target = url.searchParams.get('u');
   if (!target) return new Response('Missing u parameter', { status: 400 });
@@ -189,20 +254,12 @@ async function handleProxy(url) {
     return new Response('Host not allowed: ' + parsed.host, { status: 403 });
   }
 
-  // Chrome-flavored User-Agent — Drive can serve different content for
-  // non-browser UAs (sign-in HTML instead of the file bytes for anonymous
-  // downloads). Real Chrome UA sidesteps that.
-  const upstream = await fetch(parsed.toString(), {
-    method: 'GET',
-    redirect: 'follow',
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-        '(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-      Accept: '*/*',
-      'Accept-Language': 'en-US,en;q=0.9',
-    },
-  });
+  let upstream;
+  try {
+    upstream = await fetchFollowingCookies(parsed);
+  } catch (e) {
+    return new Response(String(e.message || e), { status: 502 });
+  }
 
   const upstreamContentType =
     upstream.headers.get('Content-Type') || 'application/octet-stream';

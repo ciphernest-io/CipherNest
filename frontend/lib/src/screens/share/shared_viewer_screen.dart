@@ -7,7 +7,6 @@ import 'package:chewie/chewie.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
@@ -233,8 +232,29 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
     return _allowedDownloadSuffixes.any(host.endsWith);
   }
 
+  /// Redirect hops to follow by hand before giving up.
+  static const int _maxRedirects = 10;
+
+  /// Fetches the share blob, following redirects manually and carrying
+  /// cookies forward.
+  ///
+  /// Microsoft's migrated consumer accounts answer the first request with a
+  /// redirect chain that sets a session cookie, and serve the bytes only when
+  /// that cookie comes back. Automatic redirect following, in Dart's http
+  /// helpers and in the Worker alike, drops Set-Cookie between hops, so both
+  /// received the HTML interstitial and reported it as a sign-in page. A
+  /// browser carried the cookie and saw the file, which is why this looked
+  /// for a while like Microsoft blocking anonymous sharing when it never was.
+  ///
+  /// Following by hand also lets every hop be checked against the allowlist,
+  /// which automatic following did not do: previously only the first URL was
+  /// validated and a redirect could walk anywhere.
+  ///
+  /// dart:io rather than package:http because the latter flattens repeated
+  /// Set-Cookie headers into one comma-joined string, which cannot be parsed
+  /// back reliably (expiry dates contain commas).
   Future<Uint8List> _downloadBlob(String url) async {
-    final uri = Uri.parse(url);
+    var uri = Uri.parse(url);
     if (!_isAllowedDownloadHost(uri)) {
       throw HttpException(
         'This link points somewhere CipherNest does not recognise '
@@ -244,23 +264,81 @@ class _SharedViewerScreenState extends State<SharedViewerScreen> {
       );
     }
 
-    final resp = await http.get(uri);
-    if (resp.statusCode != 200) {
-      throw HttpException('Download failed (${resp.statusCode})');
+    final client = HttpClient();
+    final jar = <String, String>{};
+    try {
+      for (var hop = 0; hop <= _maxRedirects; hop++) {
+        final req = await client.getUrl(uri);
+        req.followRedirects = false;
+        if (jar.isNotEmpty) {
+          req.headers.set(HttpHeaders.cookieHeader,
+              jar.entries.map((e) => '${e.key}=${e.value}').join('; '));
+        }
+        final res = await req.close();
+        for (final c in res.cookies) {
+          jar[c.name] = c.value;
+        }
+
+        if (res.isRedirect || (res.statusCode >= 300 && res.statusCode < 400)) {
+          final loc = res.headers.value(HttpHeaders.locationHeader);
+          await res.drain<void>();
+          if (loc == null) {
+            throw const HttpException('Download failed (redirect with no target)');
+          }
+          uri = uri.resolve(loc);
+          if (!_isAllowedDownloadHost(uri)) {
+            throw HttpException(
+              'This link redirected to a host CipherNest does not '
+              'recognise (${uri.host}).',
+            );
+          }
+          continue;
+        }
+
+        if (res.statusCode != 200) {
+          await res.drain<void>();
+          throw HttpException('Download failed (${res.statusCode})');
+        }
+
+        final builder = BytesBuilder(copy: false);
+        await for (final chunk in res) {
+          builder.add(chunk);
+          if (builder.length > _maxShareBytes) {
+            throw const HttpException('Shared file is too large to open.');
+          }
+        }
+        final bodyBytes = builder.takeBytes();
+        final contentType = res.headers.contentType?.mimeType ?? '';
+        return _validateShareBody(bodyBytes, contentType);
+      }
+      throw const HttpException('Download failed (too many redirects)');
+    } finally {
+      client.close(force: true);
     }
-    if (resp.bodyBytes.length > _maxShareBytes) {
-      throw const HttpException('Shared file is too large to open.');
-    }
-    // Detect Drive/OneDrive HTML interstitial pages — the share blob would
-    // never be HTML, so this means the URL no longer serves the file.
-    final ct = resp.headers['content-type'] ?? '';
-    if (ct.contains('text/html')) {
+  }
+
+  /// Rejects the cloud host's HTML interstitial, which is what arrives when a
+  /// share has been revoked, has expired, or needs a session we do not have.
+  Uint8List _validateShareBody(Uint8List bodyBytes, String contentType) {
+    // An HTML body means the cloud served a page rather than the file: the
+    // share was revoked, it expired, or the session handshake did not
+    // complete. The blob itself is never HTML.
+    if (contentType.contains('text/html')) {
       throw const HttpException(
         'Cloud host returned an HTML page instead of the encrypted file. '
         'The share may have been revoked or the link is malformed.',
       );
     }
-    return resp.bodyBytes;
+    // Second gate, independent of what the server claimed the type was:
+    // every CipherNest blob opens with the format version byte.
+    if (bodyBytes.isEmpty ||
+        bodyBytes.first != EncryptionService.formatVersion) {
+      throw const HttpException(
+        'That did not arrive as a CipherNest file. The share may have been '
+        'revoked, or the link may be incomplete.',
+      );
+    }
+    return bodyBytes;
   }
 
   /// Decrypts the share blob (format v1). Share header:
