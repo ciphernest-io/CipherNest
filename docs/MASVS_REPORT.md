@@ -1290,6 +1290,62 @@ Suggested order, by impact per unit of work rather than by severity alone.
 
 **Verification debt to clear alongside the fixes.** Seven planned tests produced no result. Three of them cover controls this report currently marks PASS on static evidence alone, which means those passes are unproven: tests 12 and 13 for MASVS-NETWORK-1, and test 18 for MASVS-AUTH-1. Clearing that debt needs a VpnService capture app or a rooted test device, and a full OAuth round trip on a release build. Until then, treat the five passing controls as claims rather than results.
 
+## 11. Disposition of every finding
+
+Every finding has a stated outcome. Nothing is left as an open question without a decision attached.
+
+Counts at this revision: 14 fixed in code, 21 open, 5 web findings of which 2 are fixed or partly fixed.
+
+### Fixed in code
+
+F-01, F-02, F-03, F-05, F-06, F-08, F-09, F-12, F-27, F-30, F-32, F-33, F-34, and W-02. Of these only F-05, F-06 and F-34 have been re-verified on the device against the finding they close. The rest are pending the re-verification pass.
+
+### To be fixed, in this order
+
+| Finding | Severity | Planned resolution |
+|---|---|---|
+| F-04 | High | Stop persisting `share_url`. Keep the share key wrapped, rebuild the link on demand, and mark the clipboard copy sensitive |
+| F-07 | High | Delete the materialized plaintext when the share or open future returns; scope the `open_file` provider to one cache subdirectory; sanitize the filename at the two vault call sites |
+| F-10 | High | Set `EXTRA_IS_SENSITIVE` on the phrase and share-link copies, add a timed clear, and reconsider whether the phrase needs a copy button at all |
+| F-11 | High | Encrypt the metadata database with a key derived from the vault seed and wrapped by the Keystore. Needs a migration, so it goes last of the four |
+| F-13 | Medium | Require biometric or password confirmation before creating a share link |
+| F-14 | Medium | Pass `encryptedSharedPreferences: true`, behind a one-way migration flag |
+| F-15 | Medium | Add a Keystore-wrapped layer around the seed blob, raise the password ceiling past 20 characters, add persisted backoff on failed unlocks |
+| F-16 | Medium | Fail the release build instead of falling back to the debug signing key |
+| F-18 | Medium | Default lock-screen track titles and cover art to off |
+| F-19 | Medium | Add timeouts to every network call, sized by operation |
+| F-20 | Medium | Delete rows by `account_id` when an account is removed, and purge that account's cache |
+| F-21 | Medium | Store the deleted-file tracker as an HMAC or move it into the database, and add every vault-derived key to the reset list |
+| F-22 | Medium | Correct the privacy policy wording and answer Data Safety against the shipped build. Partly outside this repository |
+| F-23 | Medium | Add a cloud-side delete and a bulk export |
+| F-28 | Medium | Make share revocation reliable: provisional rows before upload, condemned-row retry, and reconciliation against the cloud |
+| F-29 | Medium | Name log and backup objects by HMAC rather than raw device id, and pad sealed metadata to a fixed length |
+| F-17 | Low | Add `--obfuscate --split-debug-info` to the release command and archive the symbols |
+| F-25 | Low | Integrate Play in-app updates with an immediate flow for security releases |
+| F-26 | Low | Generate a CycloneDX SBOM per release and add a dependency scan to the checklist |
+| F-31 | Low | Declare `INTERNET` in the application's own manifest |
+| W-03 | Low | Complete the remaining SA-WEB-01 steps: origin check, rate limit, bot challenge, magic-byte validation |
+| W-04 | Low | Strip the fragment with `history.replaceState` once the key is read into memory |
+| W-05 | Info | Add a subresource integrity attribute to the bundled Argon2 module |
+
+### Requires a product decision, not a fix
+
+**F-24, minimum platform version.** Raising `minSdk` from 24 to 26 or 28 would drop devices that no longer receive security patches and would make the Keystore path uniform, at the cost of some install base. That trade is the developer's to make, and it is recorded here rather than silently deferred.
+
+### Cannot be verified with the equipment available
+
+These are closed as unverifiable, not as passing. Each states what would be needed.
+
+**MASVS-NETWORK-1, traffic interception.** Needs a rooted device or a working interception add-on. Until then the control passes on static evidence only, which is stated wherever the verdict appears.
+
+**F-27, device-to-device transfer.** Needs a second device sitting at its first-time setup screen. The fix shipped without the proof, because the fix is correct regardless of what a transfer would have done.
+
+**The StrongBox key path.** The test device has no StrongBox, so only the documented TEE fallback has been observed. Nothing public should claim StrongBox protection until the strong path is seen on hardware that has it.
+
+### Resolved by evidence rather than by code
+
+**W-01** was the assessment's most severe finding and is now Low. Six messaging applications were tested and none reproduced the link mangling the finding depends on, and the Worker was never recording request URLs. The defensive code stays because a future link handler could behave differently, but no evidence suggests any key was ever disclosed. The premise came from a source comment that had never been checked.
+
 ## Revision history
 
 | Date | Version | Change |
