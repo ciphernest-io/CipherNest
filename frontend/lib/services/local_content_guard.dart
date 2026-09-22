@@ -8,6 +8,7 @@ import 'package:photo_manager/photo_manager.dart';
 import '../src/models/file_model.dart';
 import 'database_service.dart';
 import 'encryption_service.dart';
+import 'media_origin.dart';
 
 /// Decides whether a local gallery file may be trusted as a display shortcut
 /// for a vault entry — the fix for "filename is not identity".
@@ -47,7 +48,13 @@ class LocalContentGuard {
     AssetEntity? asset,
   }) async {
     try {
-      final f = localFile ?? (asset != null ? await asset.file : null);
+      // MUST read the same bytes the upload did. Uploads take the original
+      // via MediaOrigin so the geotag survives (F-30); reading the redacted
+      // MediaStore copy here would make the size gate below fail on every
+      // geotagged photo and quietly push the whole gallery onto the cloud
+      // path. Both sides have to agree on what "the local file" is.
+      final f = localFile ??
+          (asset != null ? await MediaOrigin.fileWithMetadata(asset) : null);
       if (f == null || !await f.exists()) return false;
 
       final len = await f.length();

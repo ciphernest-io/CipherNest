@@ -30,6 +30,7 @@ import 'file_metadata_service.dart';
 import 'mp4_metadata_parser.dart';
 import 'subscription_service.dart';
 import 'upload_foreground_guard.dart';
+import 'media_origin.dart';
 
 /// Which picker surface the user came through. Drives type classification
 /// exactly as the four home-screen upload buttons always did; [other] (and
@@ -582,7 +583,7 @@ class UploadPipeline {
         try {
           final asset = await AssetEntity.fromId(id);
           if (asset != null) {
-            final f = await asset.file;
+            final f = await MediaOrigin.fileWithMetadata(asset);
             if (f != null) {
               return _GalleryAssetMatch(assetId: asset.id, localPath: f.path);
             }
@@ -612,7 +613,7 @@ class UploadPipeline {
                 );
           for (final a in assets) {
             if (a.title == filename) {
-              final f = await a.file;
+              final f = await MediaOrigin.fileWithMetadata(a);
               if (f != null) {
                 // Filename is not identity — require the byte length to
                 // match too. (fileSize == 0 ⇒ unknown; accept on name.)

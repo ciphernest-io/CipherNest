@@ -13,6 +13,7 @@ import 'database_backup_service.dart';
 import 'database_service.dart';
 import 'subscription_service.dart';
 import 'encryption_service.dart';
+import 'media_origin.dart';
 
 class MigrationService {
   static final MigrationService _instance = MigrationService._internal();
@@ -153,7 +154,7 @@ class MigrationService {
       // Fast path: MediaStore id already matches a stored vault file.
       if (existingAssetIds.contains(asset.id)) continue;
 
-      final file = await asset.file;
+      final file = await MediaOrigin.fileWithMetadata(asset);
       if (file == null) continue;
 
       final name = asset.title ?? file.path.split('/').last;
@@ -226,7 +227,7 @@ class MigrationService {
       // self-expires within the freshness window after the run ends.
       await AutoSyncService.refreshRunLease();
       try {
-        final file = await asset.file;
+        final file = await MediaOrigin.fileWithMetadata(asset);
         if (file == null) {
           skipped++;
           continue;
@@ -306,7 +307,7 @@ class MigrationService {
     // anything already stored.
     if (!await FreeTierGuard.canStoreMore()) return false;
 
-    final file = await asset.file;
+    final file = await MediaOrigin.fileWithMetadata(asset);
     if (file == null) return false;
 
     final filename = asset.title ?? file.path.split('/').last;

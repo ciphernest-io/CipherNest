@@ -25,6 +25,7 @@ import 'sync/device_registry_service.dart';
 import 'sync/sync_coordinator.dart';
 import 'sync_service.dart';
 import 'system_folders.dart';
+import 'media_origin.dart';
 
 /// One gallery asset inside the scan window, tagged with whether the vault
 /// already has it. Duplicates still ride through [AutoSyncService.runFullSync]
@@ -380,7 +381,7 @@ class AutoSyncService {
     for (final asset in allAssets) {
       if (!seenIds.add(asset.id)) continue;
 
-      final file = await asset.file;
+      final file = await MediaOrigin.fileWithMetadata(asset);
       // Unreadable asset: drop it from the window entirely. Documented
       // trade-off — it can't wedge the watermark, at the cost of never
       // being retried if it becomes readable later.
@@ -545,7 +546,7 @@ class AutoSyncService {
       throw StateError('No active cloud account');
     }
 
-    final file = await asset.file;
+    final file = await MediaOrigin.fileWithMetadata(asset);
     if (file == null) return false;
 
     final filename = asset.title ?? file.path.split('/').last;

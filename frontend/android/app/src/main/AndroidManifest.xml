@@ -5,6 +5,14 @@
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32"/>
+    <!-- Preserves the photo's own metadata, location included, when a gallery
+         asset is read for upload. Without it MediaStore hands back a redacted
+         copy and the geotag is destroyed before encryption, so a photo
+         restored from the vault is no longer the photo that was taken
+         (MASVS F-30). CipherNest never reads, indexes or transmits location:
+         the bytes go into the encrypted blob untouched. Requested at the
+         first gallery upload, not during onboarding. -->
+    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION"/>
     <uses-permission android:name="android.permission.SET_WALLPAPER"/>
     <!-- Background music playback (just_audio_background). -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
