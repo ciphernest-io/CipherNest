@@ -14,6 +14,7 @@ import 'cloud/cloud_service.dart';
 import 'database_service.dart';
 import 'encryption_service.dart';
 import 'subscription_service.dart';
+import 'cloud/cloud_account.dart';
 
 /// Orchestrates the create / list / revoke share flows.
 class ShareService {
@@ -47,6 +48,28 @@ class ShareService {
     }
     final account = AccountRegistry().activeAccount;
     if (account == null) throw Exception('No active cloud account');
+
+    // Google Drive only, for now.
+    //
+    // A magic link needs a URL that returns bytes to an anonymous GET. Drive
+    // gives that. OneDrive does not, on accounts Microsoft has migrated to
+    // the SharePoint backend: createLink hands back a link that redirects
+    // into a browser sign-in redemption flow, and any direct fetch gets 401.
+    // That was not a URL-format problem and no rewriting fixes it.
+    //
+    // Refusing up front is the honest behaviour. The alternative shipped for
+    // months: the sender saw a link, copied it, sent it, and the recipient
+    // got a Microsoft sign-in page. A share that silently does not work is
+    // worse than a feature that says it is unavailable (MASVS round 2,
+    // test 16).
+    if (account.providerType != CloudAccount.providerGoogle) {
+      throw Exception(
+        'Share links are only available on Google Drive accounts right now. '
+        'Microsoft does not allow this account to create links that open '
+        'without signing in, so any link made here would not work for the '
+        'person you sent it to.',
+      );
+    }
 
     // Plus gate — the dialog enforces this in UI; this is the backstop so no
     // other call path can mint gated shares. Free tier: links expire in at
