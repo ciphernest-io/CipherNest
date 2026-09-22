@@ -335,7 +335,7 @@ The image-cache purge in `lockNow()` happens after resume, which is strictly aft
 
 **Severity: High. MASVS-STORAGE-2, MASVS-PLATFORM-1. MASTG-TEST-0004.**
 
-**Verification: Static only. The share-out and document-open steps were not performed, so no residue of this kind was generated. Public storage was unchanged against a pre-test baseline.**
+**Verification: Device-verified in round 2. Both handoff paths left a decrypted copy on disk, each named after the user's own filename, still present minutes after the operation finished.**
 
 Sharing out and opening a document both write full plaintext to the cache and hand a granted content URI to an app of the user's choosing.
 
@@ -1092,7 +1092,7 @@ Run on 2026-09-20 against the installed shipped build, hash `832e059d`, on a Sam
 | 5 | Loopback server reachable cross-uid | Complete. Confirms F-03 |
 | 6 | Keystore refuses without authentication | Complete, round 2. Enrolment invalidation works |
 | 7 | Screen capture coverage | Complete. Confirms F-05, corrects one claim |
-| 8 | Residue after share, open, print | Partial. Public storage clean; handoff paths not exercised |
+| 8 | Residue after share, open, print | Complete, round 2. Confirms F-07 |
 | 9 | Clipboard contents | Complete, round 2. Confirms F-10 |
 | 10 | Media session disclosure | Complete. Confirms F-18 |
 | 11 | Exported component probing | Complete. Confirms F-08 and the PLATFORM-1 surface |
@@ -1172,6 +1172,17 @@ The device pass continued against the fixed build for tests that the fixes do no
 **6. Keystore enrolment invalidation works.** Adding a fingerprint in Android settings caused the app to refuse biometric unlock with "Your device security settings changed" and fall back to the master password. `setInvalidatedByBiometricEnrollment(true)` fires as intended. Two nuances were observed and neither is a defect: an already-unlocked session stays unlocked until it is closed, because invalidation destroys the key rather than the running session, and removing a fingerprint did not invalidate. The removal case is worth a follow-up, along with the untested cases of removing every fingerprint and of a device with none enrolled.
 
 **9. Clipboard confirms F-10.** The full twelve-word phrase pasted into another app. It remained in Samsung's clipboard history afterwards, for as long as any other entry. Android showed no sensitive-content indicator, which is the `EXTRA_IS_SENSITIVE` flag the app does not set. The copied share link contained its `#k=` key.
+
+**8. Residue confirms F-07, including the filename leak.** After sharing a photo out and opening a document, the cache held both copies in the clear:
+
+```
+cache/A document.docx                                       23341   ZIP/OOXML, plaintext
+cache/share_plus/pexels-david-atkins-...-6337789.jpg       708639   JPEG, plaintext
+```
+
+Both are named after the user's original filename, which is the specific defect F-07 describes at `documents_screen.dart:180` and in the export path. Both were still present minutes after the sharing and opening had finished, so nothing deletes them on completion. Public storage was counted again and remains unchanged from the round 1 baseline, so the leak is confined to app-private storage and the deliberate handoff.
+
+One incidental confirmation of an earlier fix. No `.plain` video caches remained, and the cache had fallen from 19 MB to 4.9 MB, so the purge-on-lock added for F-01 and F-02 is doing its job on the paths it covers. It does not cover these two, because they are written by the handoff code rather than by the streaming cache.
 
 **13. Traffic inventory, and a refinement to F-22.** Captured with PCAPdroid, filtered to this app. Roughly 68 connections, all to `www.googleapis.com` over TLS on 443, plus DNS. A OneDrive sign-in added `graph.microsoft.com`, `login.microsoftonline.com` and `my.microsoftpersonalcontent.com`. Nothing else appeared.
 
