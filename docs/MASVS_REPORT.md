@@ -1377,6 +1377,37 @@ These are closed as unverifiable, not as passing. Each states what would be need
 
 **W-01** was the assessment's most severe finding and is now Low. Six messaging applications were tested and none reproduced the link mangling the finding depends on, and the Worker was never recording request URLs. The defensive code stays because a future link handler could behave differently, but no evidence suggests any key was ever disclosed. The premise came from a source comment that had never been checked.
 
+## 12. Peer comparison: Ente Photos
+
+Read from the `ente-io/ente` repository on `main`, 2026-09-22, because the obvious question about several accepted risks in this report is whether a comparable product solves them. Ente is an established open-source end-to-end encrypted photo app, so it is the fairest available yardstick.
+
+This is a source read of one competitor, not an audit of it. It covers the files named below and nothing else, and absence of evidence in those files is not proof of absence in the product.
+
+| Control | Ente | CipherNest after this pass |
+|---|---|---|
+| Local database encrypted | No. `sqlite3_flutter_libs` and `sqlite_async`, no SQLCipher | No. F-11 open |
+| Secure-storage backend on Android | `FlutterSecureStorage` with iOS options only and no `AndroidOptions`, so the same weak platform default | Same. F-14 open |
+| Auth token and account email | Plain `SharedPreferences` | Inside the account record in secure storage |
+| Wrapped key material | `key_attributes` in plain `SharedPreferences` | Seed blob in plain `SharedPreferences`. F-15 open |
+| `allowBackup` | false | false |
+| `dataExtractionRules` | Present, both blocks, five domains | Present, effectively identical. F-27 fixed |
+| Decrypted media on disk | Yes, in Documents, per their own code comment | Yes, in cache |
+| Decrypted media purged on lock | Not found | Yes. F-01 and F-02 fixed |
+| `FLAG_SECURE` | Not set, and no screenshot-blocking dependency | Set on the window. F-05 and F-06 fixed |
+| Cleartext traffic | `usesCleartextTraffic="true"` application-wide | Permitted for loopback only, via network security config |
+| `ACCESS_MEDIA_LOCATION` | Declared | Not declared; reading the original file achieves the same result |
+| Root, tamper or integrity detection | None found | None |
+
+Three things follow.
+
+**Nobody in this class encrypts the local database, so there is nothing to copy.** The answer to "do they protect against root access" is no, not for local storage. That does not make F-11 less real. It means fixing it would put this product ahead of its nearest comparable peer rather than merely level with it, and it removes the excuse that the risk is normal and therefore acceptable.
+
+**Two of the accepted risks in this report are genuinely industry-standard.** The weak secure-storage backend and wrapped key material in plain preferences are present in both products, arrived at independently. That raises their priority rather than lowering it, but it does mean neither is an unusual lapse.
+
+**Three of the fixes in this pass put CipherNest ahead.** Screen protection, the loopback-only cleartext policy, and purging decrypted media on lock are all absent from the peer. The independently identical data-extraction rules are a useful check on F-27: two teams reached the same file without consulting each other.
+
+One deliberate difference is worth recording. Ente declares `ACCESS_MEDIA_LOCATION`; this app does not, because a device test showed the geotag survives without it when the original file is read rather than the MediaStore copy. Their approach guarantees the behaviour across devices and API levels; this one avoids a sensitive permission on the store listing. If a device is ever found that redacts anyway, theirs is the safer choice and the manifest comment says where to restore it.
+
 ## Revision history
 
 | Date | Version | Change |
