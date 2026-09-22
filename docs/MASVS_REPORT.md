@@ -1214,6 +1214,10 @@ Both halves of this finding's real-world path therefore fail to reproduce: no te
 
 **16. Share link identity, and a product bug.** A Google Drive share revealed nothing about the sender. Opening the decoded Drive URL while signed out simply downloaded the encrypted file, with no name, email or profile picture anywhere. That closes the question for Drive.
 
+Update, 2026-09-22. The first fix attempt was aimed at the wrong API and did not work. Probing a live, unrevoked link showed why: the account carries `migratedtospo=true`, meaning Microsoft has moved it onto the SharePoint backend. Both the legacy `api.onedrive.com` endpoint and the Graph `/shares` endpoint return 401 for an anonymous caller, and the short link itself redirects into a `reauth=1` loop that ends on a sign-in page. That is a browser redemption flow, which no plain GET can satisfy, and it is what the share viewer and the Worker proxy both hit.
+
+The likely root cause is upstream of the URL format: `createLink` returns 200 while granting a scope other than `anonymous`, and the app never checked. A scope check now fails loudly at creation time rather than minting a link that is dead for every recipient. Resolving it properly may require hosting share blobs somewhere directly fetchable rather than relying on a provider's public-link behaviour.
+
 The OneDrive case could not be tested, because the share does not work at all. Opening a OneDrive share link as an anonymous recipient redirects to `login.live.com` and returns a sign-in page instead of the file. The viewer reports the HTML interstitial correctly. The cause is in `onedrive_provider.dart`, which builds the recipient URL by appending `?download=1` to the `1drv.ms` link returned by `createLink`. That does not produce an anonymous direct download. This is a functional defect rather than a MASVS finding, but it means the sharing feature is broken for every OneDrive user, and it is tracked outside this report.
 
 ## 8. Known gaps and accepted risks

@@ -915,6 +915,26 @@ class OneDriveProvider implements CloudProvider {
       final linkJson = jsonDecode(linkResp.body) as Map<String, dynamic>;
       final link = linkJson['link'] as Map<String, dynamic>;
       final shareUrl = link['webUrl'] as String;
+
+      // createLink returns 200 even when it did NOT grant what was asked for.
+      // Microsoft will quietly hand back an organisation- or user-scoped link
+      // when anonymous sharing is unavailable for the account, and the old
+      // code took the webUrl regardless. The result was a share that looked
+      // fine to the sender and was dead for every recipient: the link bounces
+      // through a browser redemption flow and any direct fetch gets 401.
+      //
+      // Fail here instead, with the scope Microsoft actually returned, so the
+      // sender learns immediately and we learn what the account allows.
+      final grantedScope = (link['scope'] as String?)?.toLowerCase();
+      if (grantedScope != null && grantedScope != 'anonymous') {
+        throw Exception(
+          'OneDrive would not create a public link for this file. Microsoft '
+          'granted a "$grantedScope" link instead of an anonymous one, which '
+          'only opens for people signed in to your account. Check whether '
+          'link sharing with "Anyone" is allowed on your Microsoft account.',
+        );
+      }
+
       return (cloudId: cloudId, downloadUrl: _anonymousDownloadUrl(shareUrl));
     });
   }
