@@ -149,7 +149,7 @@ Thirty-four findings here, plus five in the web section. Severity reflects impac
 
 F-32 and F-33 were found during the device pass rather than in the source review, and they are the reason a device pass was worth running.
 
-The single most severe finding in this assessment is W-01 in section 6, because it is the only one where key material reaches a third party. It is filed under the web component because that is where the defect lives.
+W-01 was the most severe finding when this assessment was written, because it was the only one where key material could reach a third party. Round 2 reduced it to Low: no tested messaging app reproduces the mangling, and the Worker was never recording request URLs. The fix stays; the demonstrated risk did not.
 
 Status values: OPEN means unfixed as of the assessed commit. No finding in this report has been remediated, because this assessment reports before it fixes.
 
@@ -157,9 +157,9 @@ Findings appear below in identifier order. This index gives the severity ranking
 
 | Severity | Findings |
 |---|---|
-| High | W-01, F-01, F-02, F-03, F-04, F-05, F-06, F-07, F-08, F-09, F-10, F-11, F-33, F-34 |
+| High | F-01, F-02, F-03, F-04, F-05, F-06, F-07, F-08, F-09, F-10, F-11, F-33, F-34 |
 | Medium | F-12, F-13, F-14, F-15, F-16, F-18, F-19, F-20, F-21, F-22, F-23, F-27, F-28, F-29, F-32, W-02 |
-| Low | F-17, F-24, F-25, F-26, F-30, F-31, W-03, W-04 |
+| Low | W-01, F-17, F-24, F-25, F-26, F-31, W-03, W-04 |
 | Info | W-05 |
 
 Device-verified findings: F-01, F-02, F-03, F-04, F-05, F-06, F-08, F-10, F-11, F-12, F-14, F-15, F-18, F-21, F-32, F-33, F-34, and partly F-27. The rest are static or binary only, and each says so at the top of its entry.
@@ -887,7 +887,7 @@ Sealed metadata is not length-padded. `maxNameBytes = 120` with `_chunkSize = 10
 
 **Severity: Low. MASVS-PRIVACY-3.**
 
-**Verification: Static only. Not exercised on the device.**
+**Verification: Device-verified in round 2, and worse than first written. A geotagged photo lost its location through both the auto-sync route and a manual add. Code review then confirmed every gallery ingest path used the redacting read, the permission was declared nowhere, and the app displays location nowhere.**
 
 The app never reads location. A grep for GPS, latitude and longitude tags across `frontend/lib` returns nothing, and `ACCESS_MEDIA_LOCATION` is not declared in the shipped APK. EXIF is read for display only, from local plaintext, and is never persisted to the cloud (`frontend/lib/services/file_metadata_service.dart:225-253`).
 
@@ -899,7 +899,7 @@ This needs device confirmation before it is treated as settled. See section 7.
 
 **Fix.** Decide explicitly. Either declare `ACCESS_MEDIA_LOCATION`, use `originFile`, and state in the policy that EXIF including location is preserved inside the encrypted file and never extracted; or keep the redaction, apply it on both paths for consistency, and document it as a feature.
 
-**Status: OPEN, needs device verification.**
+**Status: FIXED in code on 2026-09-22, not yet re-verified on device.** `ACCESS_MEDIA_LOCATION` is declared and requested at the first gallery upload, and every ingest path now reads the original through a `MediaOrigin` helper that falls back to the redacted copy if the permission is refused. The local-content guard reads through the same helper, because its size gate would otherwise reject every geotagged photo and push the gallery onto the cloud path. The decision taken was to preserve the metadata inside the encrypted blob rather than strip it, on the grounds that the files are encrypted before they leave the device and the app never reads, indexes or transmits location.
 
 ---
 
@@ -990,7 +990,7 @@ A second, smaller part of the same report: locking the vault left music playing.
 
 **Fix.** A `TaskExitService` receives `onTaskRemoved` and ends the process, so a swipe-away is a real close. Because deliberate background playback is a legitimate reason to want the opposite, it is a setting rather than an assumption: "Keep playing after closing", off by default. When it is off, locking also stops playback. When it is on, both behaviours are left alone and the user has chosen that.
 
-**Status: FIXED in code on 2026-09-21, not yet re-verified on device.** The device was disconnected when the build completed.
+**Status: FIXED in code on 2026-09-21, device-verified on 2026-09-22 with one follow-up.** A swipe-away now locks the vault and clears the media notification, and the opt-in setting restores the old behaviour. The follow-up: an explicit "Lock vault now" was still honouring that setting and leaving music playing, which defeats the gesture. Corrected so an explicit lock always stops playback while the automatic paths honour the setting.
 
 ---
 
@@ -1026,7 +1026,7 @@ MASVS does not cover web. This section assesses `worker.js` and `web-viewer/` ag
 
 ### New web findings
 
-**W-01. A mangled share link puts the decryption key in the request path, where the server sees and logs it. High. ASVS V7 and V8.**
+**W-01. A mangled share link puts the decryption key in the request path, where the server sees and logs it. Low, reduced from High after round 2. ASVS V7 and V8.**
 
 **Status: PARTIALLY FIXED in code on 2026-09-20.** Round 2 added an important mitigating fact: the Worker's invocation logging appears to have been disabled on the account throughout, so the keys this finding warns about were probably never persisted anywhere. That is indicated rather than proven, and it does not change the defect. The Worker now detects `%23` in the path and answers with a 302 to the normalized `#` form before serving anything, so the key stops being re-sent on every subsequent asset request and never reaches the page's own address bar or history. That does not unsend the first request. Deciding what to do about request logging, and whether to re-mint existing shares, is still open and is the reason this stays the top item in section 10.
 
@@ -1098,11 +1098,11 @@ Run on 2026-09-20 against the installed shipped build, hash `832e059d`, on a Sam
 | 11 | Exported component probing | Complete. Confirms F-08 and the PLATFORM-1 surface |
 | 12 | TLS interception | Not run. Tooling lacked the decryption feature |
 | 13 | Traffic inventory | Complete, round 2. Refines F-22 |
-| 14 | Link mangling through messaging apps | Inconclusive. Logging was off at the time |
+| 14 | Link mangling through messaging apps | Complete, round 2. No app reproduced it |
 | 15 | Device-to-device transfer | Partial. Backup eligibility read; transfer not tested |
 | 16 | Anonymous share link sender identity | Complete for Drive. OneDrive blocked by a product bug |
-| 17 | GPS EXIF across upload paths | Not run |
-| 18 | OAuth relay under R8 | Not run |
+| 17 | GPS EXIF across upload paths | Complete, round 2. Confirms F-30 |
+| 18 | OAuth relay under R8 | Complete, round 2, incidentally. Sign-in succeeded |
 
 Two findings were discovered during this pass rather than confirmed by it: F-32 and F-33. Both came from the operator noticing the vault would not lock.
 
@@ -1190,9 +1190,19 @@ Two things follow. No Google Fonts host was contacted, which confirms at runtime
 
 `my.microsoftpersonalcontent.com` was not previously in any inventory. It is a Microsoft content host and it is not on the Worker's proxy allowlist.
 
-**12. Interception not run.** The capture tool on the device offered no TLS decryption option, so no certificate was installed and no interception was attempted. Full-payload capture showed TLS records only. MASVS-NETWORK-1 therefore remains static only.
+**12. Interception not run, and now formally accepted as unverified.** TLS decryption in the capture tool requires a separate add-on distributed outside the app store, and its certificate could not be installed on the test device. No interception was attempted and none was approximated.
 
-**14. Link mangling inconclusive, and W-01 is probably smaller than written.** No requests appeared in the Worker's logs, because invocation logging was not enabled on the account at the time. If logging was off for the whole life of the share feature then no share key was ever persisted, and W-01's disclosure half never happened. That has not been proven, only strongly indicated, and it does not change the code defect.
+The static position is strong: no `badCertificateCallback`, no custom `SecurityContext`, no `HttpOverrides` anywhere, cleartext permitted only for loopback, and Dart's HTTP stack uses its own trust store rather than the Android user store, which is why a user-installed certificate would not intercept it in the first place. None of that is a substitute for observing a failed interception. MASVS-NETWORK-1 remains PASS on static evidence only, and closing it properly needs a rooted device or a working interception add-on. That is listed as verification debt in section 10.
+
+**14. No messaging app reproduced the mangling, and W-01 shrinks accordingly.** A share link was sent through WhatsApp on the phone, WhatsApp Desktop, Messenger, Telegram, Gmail and SMS. The link was then copied out of each app and inspected directly, which shows what that app stored rather than what a browser later does with it. Every one preserved the `#`. None produced `%23`.
+
+Separately, the Worker's invocation logging was never enabled on the account, and invocation logs are the only ones that record a request URL.
+
+Both halves of this finding's real-world path therefore fail to reproduce: no tested intermediary mangles the link, and nothing was recording URLs even if one had. The defect in the code is real and the handling in `share.js` exists for a reason, so the fix stays, but the exploitation path is not demonstrated and no evidence suggests any key was ever disclosed. Severity is reduced from High to Low on that basis. The apps tested are the common ones for this user, not an exhaustive set, and a future link handler could still behave differently.
+
+**17. GPS is destroyed on the gallery path, confirming F-30 and widening it.** A geotagged photo was added by auto-sync, exported, and had no location. The same photo added manually and exported again also had no location. Code review then confirmed why, and that the problem is larger than the original finding described: every gallery ingest path called the redacting MediaStore read, `ACCESS_MEDIA_LOCATION` was declared nowhere, and the app reads or displays location nowhere at all. So this is not an inconsistency between two routes. It is silent, unrecoverable data loss on the route most users will take, with no feature that would reveal it.
+
+**18. OAuth relay survives R8.** Not run as a dedicated test, but a full OneDrive sign-out and sign-in was completed on a release build during test 13, which is exactly what this test checks. The relay into the plugin's static field is not broken by minification on this build. It still needs re-checking on every release, because it fails closed and silently.
 
 **16. Share link identity, and a product bug.** A Google Drive share revealed nothing about the sender. Opening the decoded Drive URL while signed out simply downloaded the encrypted file, with no name, email or profile picture anywhere. That closes the question for Drive.
 
