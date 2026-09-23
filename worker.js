@@ -141,36 +141,47 @@ function normalizeEncodedFragment(url) {
 }
 
 export default {
+  // Every response leaves through withSecurityHeaders, without exception.
+  // Applying it at each return site instead left thirteen responses bare,
+  // including every error handleProxy can produce, which are the ones an
+  // unauthenticated caller reaches most easily. In particular the 403 that
+  // rejects a non-share body echoes a 60-byte snippet of whatever the
+  // upstream sent, so nosniff on that path is not decoration. Wrapping the
+  // router means a new branch cannot forget.
   async fetch(request, env) {
-    const url = new URL(request.url);
-
-    const normalized = normalizeEncodedFragment(url);
-    if (normalized) return normalized;
-
-    if (url.hostname === AUTH_HOST) {
-      if (url.pathname !== AUTH_PATH && !AUTH_ASSETS.has(url.pathname)) {
-        return new Response('Not found', { status: 404 });
-      }
-      if (request.method !== 'GET' && request.method !== 'HEAD') {
-        return new Response('Method not allowed', { status: 405 });
-      }
-      return withSecurityHeaders(await env.ASSETS.fetch(request));
-    }
-
-    if (url.pathname === '/proxy') {
-      // No OPTIONS handler any more: the viewer and /proxy are same-origin,
-      // so no browser ever sends a preflight for it. The old one answered
-      // with a wildcard and advertised the endpoint to every origin
-      // (SA-WEB-01 step 2).
-      if (request.method === 'GET') return handleProxy(url, request);
-      return new Response('Method not allowed', { status: 405 });
-    }
-
-    // Everything else: static assets. SPA fallback handled by
-    // wrangler.jsonc's assets.not_found_handling.
-    return withSecurityHeaders(await env.ASSETS.fetch(request));
+    return withSecurityHeaders(await route(request, env));
   },
 };
+
+async function route(request, env) {
+  const url = new URL(request.url);
+
+  const normalized = normalizeEncodedFragment(url);
+  if (normalized) return normalized;
+
+  if (url.hostname === AUTH_HOST) {
+    if (url.pathname !== AUTH_PATH && !AUTH_ASSETS.has(url.pathname)) {
+      return new Response('Not found', { status: 404 });
+    }
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return new Response('Method not allowed', { status: 405 });
+    }
+    return env.ASSETS.fetch(request);
+  }
+
+  if (url.pathname === '/proxy') {
+    // No OPTIONS handler any more: the viewer and /proxy are same-origin,
+    // so no browser ever sends a preflight for it. The old one answered
+    // with a wildcard and advertised the endpoint to every origin
+    // (SA-WEB-01 step 2).
+    if (request.method === 'GET') return handleProxy(url, request);
+    return new Response('Method not allowed', { status: 405 });
+  }
+
+  // Everything else: static assets. SPA fallback handled by
+  // wrangler.jsonc's assets.not_found_handling.
+  return env.ASSETS.fetch(request);
+}
 
 
 // Chrome-flavored User-Agent. Drive serves different content to non-browser

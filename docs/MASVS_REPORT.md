@@ -1198,7 +1198,9 @@ The dynamic programme is complete. All eighteen planned tests are closed: fiftee
 
 The one item that remained outstanding, confirming the StrongBox key path on hardware that has StrongBox, was **closed on 2026-09-22** on a Samsung SM-S938B. The app took the StrongBox branch. Details under test 6 above.
 
-The web infrastructure was deployed on 2026-09-22 and verified live: security headers present on every response, the auth host still restricted to the callback page, `%23` normalisation redirecting correctly, and the Google Drive relay unaffected.
+The web infrastructure was deployed on 2026-09-22 and verified live: security headers on static responses, the auth host still restricted to the callback page, `%23` normalisation redirecting correctly, and the Google Drive relay unaffected.
+
+**Corrected 2026-09-23.** This paragraph first claimed headers on *every* response. Re-probing the live endpoint showed `GET /proxy` returning a bare `400` with no header set at all. The wrapper had been applied at two return sites, both static-asset paths, leaving thirteen responses bare including every error `handleProxy` can produce. The 403 that rejects a non-share body is the one that matters, because it echoes a 60-byte snippet of the upstream response in `X-CipherNest-Debug`, so a missing `nosniff` there is not cosmetic. Fixed by routing the whole Worker through the wrapper rather than per branch, so a new route cannot omit it. Verified against four response shapes, including the streaming relay, that no existing header or body is disturbed.
 
 That deployment also surfaced a platform limit worth recording. Cloudflare Workers do not expose `Set-Cookie` from subrequest responses. Measured, not assumed: with caching left on and with it disabled, `getSetCookie()` returned an empty array on every hop.
 
@@ -1447,4 +1449,5 @@ One deliberate difference is worth recording. Ente declares `ACCESS_MEDIA_LOCATI
 |---|---|---|
 | 2026-09-20 | 1.0 | Initial assessment at commit `c43cd1a`, static and binary only. |
 | 2026-09-20 | 1.1 | Device pass on a Samsung SM-A556E, Android 16, against the installed shipped build. Eight tests complete, three partial, seven not run. Added F-32 and F-33, both found during testing. Corrected the F-05 claim about the Active Shares screen. Corrected F-17, which had reported R8 as disabled. Added evidence markers throughout and a statement that all five passing controls remain unverified at runtime. |
+| 2026-09-23 | 1.3 | Corrected the claim that security headers were on every response. They were on static responses only; thirteen return sites, including all proxy errors, were bare. Fixed in the Worker and re-verified. |
 | 2026-09-22 | 1.2 | Closed the StrongBox item on a Samsung SM-S938B: the app takes the StrongBox branch, corroborated against the platform's own HAL registration. Recorded the `noneEnrolled` UI path, observed on the same device. Corrected the OneDrive browser claim, which was stated as settled and was wrong. Replaced the StrongBox entry in verification debt with the biometric enrolment-change path, which is what actually remains unproven. |
