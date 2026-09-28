@@ -32,9 +32,9 @@ class OneDriveProvider implements CloudProvider {
   //
   // Host is a dedicated custom domain on the `ciphernest` Worker that serves
   // ONLY the callback page (worker.js AUTH_HOST), so share-viewer changes can
-  // never break sign-in. The old ciphernest.ciphernest20.workers.dev host went
-  // dark when custom domains were attached (404 on every path, verified
-  // 18 Sep 2026), so it must never come back here.
+  // never break sign-in. The old workers.dev host went dark when custom
+  // domains were attached (404 on every path, verified 18 Sep 2026), so it
+  // must never come back here.
   static const String _redirectHost = 'auth.ciphernest.io';
   static const String _redirectPath = '/oauth-callback';
   static const String _redirectUri = 'https://$_redirectHost$_redirectPath';

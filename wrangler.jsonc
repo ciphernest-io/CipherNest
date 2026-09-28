@@ -4,10 +4,10 @@
   "main": "./worker.js",
   "compatibility_date": "2026-07-05",
   "compatibility_flags": ["nodejs_compat"],
-  // Two Custom Domains on one Worker. Applied on deploy: `wrangler deploy` (or
-  // the GitHub-triggered Workers build) creates each DNS record + TLS cert
-  // automatically. The zone ciphernest.io is on the same (ciphernest20)
-  // Cloudflare account, which is required for this.
+  // Two Custom Domains on one Worker. Applied on deploy: `wrangler deploy`
+  // creates each DNS record + TLS cert automatically. This requires the
+  // ciphernest.io zone to live on the same Cloudflare account you are
+  // deploying from.
   //   share.ciphernest.io  the share viewer (every path)
   //   auth.ciphernest.io   ONLY /oauth-callback, the OneDrive OAuth return page
   //                        (worker.js 404s everything else on this host). Kept

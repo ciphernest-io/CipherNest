@@ -2,9 +2,9 @@
 
 Static page that decrypts CipherNest "magic-link" shares entirely in the
 browser. Deployed as a **Cloudflare Worker with static assets** (see
-`../wrangler.jsonc` and `../worker.js`), currently reachable at
-`https://ciphernest.ciphernest20.workers.dev`. A `share.ciphernest.io` custom
-domain is planned before public launch — see `docs/DOMAIN_DNS_SETUP.md` and
+`../wrangler.jsonc` and `../worker.js`), served on the `share.ciphernest.io`
+custom domain. The earlier workers.dev address is dead and must not be used
+(see `docs/DOMAIN_DNS_SETUP.md`). The custom domain landed before public launch — see `docs/DOMAIN_DNS_SETUP.md` and
 `docs/self_audit_ledger.md` (SA-WEB-04); the share base URL is baked into every
 link at creation, so it must be finalised before any real user mints a share.
 
@@ -61,7 +61,8 @@ This directory holds the static assets:
 
 Deployed with Wrangler from the repo root (where `wrangler.jsonc` lives):
 
-1. Sign in to the `ciphernest20` Cloudflare account (`wrangler login`).
+1. Sign in to the Cloudflare account that holds the `ciphernest.io` zone
+   (`wrangler login`).
 2. From the repo root, run `wrangler deploy`. It reads `wrangler.jsonc`, uploads
    `worker.js`, and publishes this `web-viewer/` directory as the Worker's
    static assets.
