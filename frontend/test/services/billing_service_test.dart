@@ -12,11 +12,13 @@ import 'package:ciphernest/src/config/billing.dart';
 /// touched before the key and lock checks, these fail loudly instead of
 /// silently shipping a build that phones home at the wrong moment.
 void main() {
-  test('the shipped public key is empty until the dashboard exists', () {
-    // When this legitimately changes (plan step 4), update the expectation
-    // here deliberately rather than deleting the test.
-    expect(kRevenueCatPublicKey, isEmpty,
-        reason: 'set in plan step 4, not before');
+  test('the shipped public key is a PUBLIC RevenueCat key, never a secret', () {
+    // goog_ is the public Android SDK key prefix. RevenueCat secret keys use
+    // different prefixes (sk_, and the v2 secret forms). This test exists to
+    // catch a paste of the wrong key into a file that ships in a public repo.
+    expect(kRevenueCatPublicKey, startsWith('goog_'));
+    expect(kRevenueCatPublicKey, isNot(startsWith('sk_')));
+    expect(kRevenueCatPublicKey.length, greaterThan(20));
   });
 
   test('entitlement id matches the RevenueCat dashboard', () {
@@ -24,9 +26,11 @@ void main() {
     expect(kPlusEntitlementId, 'plus');
   });
 
-  test('ensureConfigured refuses, without touching the SDK, when the key is '
-      'empty', () async {
-    // Would throw MissingPluginException if it reached Purchases.setLogLevel.
+  test('ensureConfigured refuses, without touching the SDK, while the vault is '
+      'locked', () async {
+    // billingId is null outside an unlocked vault. Would throw
+    // MissingPluginException if it reached Purchases.setLogLevel, which is
+    // exactly what makes this a real guard test rather than a tautology.
     expect(await BillingService().ensureConfigured(), isFalse);
     expect(BillingService().isConfigured, isFalse);
   });

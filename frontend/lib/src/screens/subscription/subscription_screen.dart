@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
+import 'package:purchases_flutter/purchases_flutter.dart';
 
+import '../../../services/billing_service.dart';
 import '../../../services/notify.dart';
-import '../../../services/subscription_service.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
@@ -22,9 +24,16 @@ class SubscriptionScreenArgs {
 /// mention of the free tier. Position: right after the phrase step, in
 /// every flow that has one (signup type-back, restore phrase entry).
 ///
-/// Billing is stubbed until the payments project lands: the CTA grants the
-/// LOCAL entitlement (SubscriptionService seam) so Free/Plus gates are
-/// testable end to end; RevenueCat replaces only the CTA body.
+/// Prices come from the live RevenueCat offering, so they are editable from
+/// the dashboard without an app update. **Opening this screen is the only
+/// routine moment the app contacts RevenueCat** (see [BillingService]); it is
+/// never contacted at app start.
+///
+/// When the offering cannot be read - no network, or the Play products do not
+/// exist yet - the screen shows indicative prices and **disables the buy
+/// button**, because there is no package to purchase. It never silently grants
+/// an entitlement.
+///
 /// `kPaywallEnabled` in flags.dart gates whether flows route here at all.
 class SubscriptionScreen extends StatefulWidget {
   const SubscriptionScreen({super.key, this.args = const SubscriptionScreenArgs()});
@@ -39,6 +48,37 @@ enum _Plan { monthly, annual, lifetime }
 
 class _SubscriptionScreenState extends State<SubscriptionScreen> {
   _Plan _plan = _Plan.annual;
+
+  Offering? _offering;
+  bool _loadingPrices = true;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadOffering();
+  }
+
+  /// Trigger 1 of the contact rule. Failure is not an error state: the screen
+  /// still works, it just cannot sell anything.
+  Future<void> _loadOffering() async {
+    final offerings = await BillingService().offerings();
+    if (!mounted) return;
+    setState(() {
+      _offering = offerings?.current;
+      _loadingPrices = false;
+    });
+  }
+
+  /// The package for the selected plan, or null when the offering is missing
+  /// or does not carry that duration.
+  Package? get _selectedPackage => switch (_plan) {
+        _Plan.monthly => _offering?.monthly,
+        _Plan.annual => _offering?.annual,
+        _Plan.lifetime => _offering?.lifetime,
+      };
+
+  bool get _canBuy => !_busy && _selectedPackage != null;
 
   /// Every exit converges here: flow steps advance to [SubscriptionScreenArgs.nextRoute]
   /// (stack cleared — the phrase screens must not survive beneath), upsell
@@ -64,24 +104,76 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   void _continueFree() => _leave();
 
   Future<void> _purchase() async {
-    // Billing stub: grants the LOCAL entitlement so the Free/Plus gates
-    // (including the 1,000-file cap) are testable end to end. RevenueCat's
-    // purchase flow replaces this body; the screen and call site stay.
-    await SubscriptionService().setPlusEntitlement(true);
-    Notify.info('Plus unlocked on this device. Billing arrives with v1.1.');
-    if (!mounted) return;
-    _leave();
+    final pkg = _selectedPackage;
+    if (pkg == null || _busy) return;
+    setState(() => _busy = true);
+    try {
+      final ok = await BillingService().purchase(pkg);
+      if (!mounted) return;
+      if (ok) {
+        Notify.info('Plus is active. Thank you.');
+        _leave();
+        return;
+      }
+      Notify.error('The purchase went through but Plus is not active yet. '
+          'Try Restore purchase in a moment.');
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      // A user backing out of the Play sheet is not a failure and must not be
+      // reported as one.
+      if (PurchasesErrorHelper.getErrorCode(e) ==
+          PurchasesErrorCode.purchaseCancelledError) {
+        return;
+      }
+      Notify.error(e.message ?? 'Could not complete the purchase.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
-  void _restorePurchase() {
-    Notify.info('Purchase restore lands with billing in v1.1.');
+  /// Restores a subscription already attached to this vault's billing ID.
+  /// Because that ID derives from the recovery phrase, this is what carries a
+  /// subscription onto a new device after a phrase restore.
+  Future<void> _restorePurchase() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final ok = await BillingService().restore();
+      if (!mounted) return;
+      if (ok) {
+        Notify.info('Plus restored.');
+        _leave();
+        return;
+      }
+      Notify.info('No active purchase found for this recovery phrase.');
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      Notify.error(e.message ?? 'Could not restore purchases.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
-  String get _priceLine => switch (_plan) {
-        _Plan.monthly => r'$1.99 / month',
-        _Plan.annual => r'$19.99 / year',
-        _Plan.lifetime => r'$39 one-time',
+  /// Live price when the offering loaded, otherwise the indicative figure.
+  /// The fallback exists so the screen is never blank; the buy button is
+  /// disabled in that state, so nobody is quoted a price they cannot pay.
+  String get _priceLine {
+    final store = _selectedPackage?.storeProduct;
+    if (store != null) {
+      final p = store.priceString;
+      return switch (_plan) {
+        _Plan.monthly => '$p / month',
+        _Plan.annual => '$p / year',
+        _Plan.lifetime => '$p one-time',
       };
+    }
+    if (_loadingPrices) return 'Loading prices...';
+    return switch (_plan) {
+      _Plan.monthly => r'$1.99 / month',
+      _Plan.annual => r'$14.99 / year',
+      _Plan.lifetime => r'$39.99 one-time',
+    };
+  }
 
   String get _priceSub => switch (_plan) {
         _Plan.monthly => 'Cancel anytime.',
@@ -90,8 +182,12 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
           "Founder's Edition. Limited to the first 1,000 supporters.",
       };
 
-  String get _ctaLabel =>
-      _plan == _Plan.lifetime ? 'Buy Lifetime' : 'Start Plus';
+  String get _ctaLabel {
+    if (_busy) return 'Working...';
+    if (_loadingPrices) return 'Loading...';
+    if (_selectedPackage == null) return 'Unavailable right now';
+    return _plan == _Plan.lifetime ? 'Buy Lifetime' : 'Start Plus';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -207,16 +303,23 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                         ),
                       ),
                       const SizedBox(height: 14),
+                      // Plus removes the stored-file cap. That is the whole
+                      // product difference, and this list must not claim
+                      // otherwise: auto-sync, the editor, the recycle bin,
+                      // multiple accounts, password-protected shares and
+                      // custom expiry are ALL free, and not one of them has an
+                      // isPlus gate anywhere in the codebase. Advertising them
+                      // as paid would be selling what is already given away.
+                      const _FeatureRow('Unlimited uploads, no 1,000 cap'),
                       const _FeatureRow(
-                          'Auto-sync every album in the background'),
-                      const _FeatureRow('In-app photo editor'),
+                          'Everything else in CipherNest is free, and stays '
+                          'free'),
                       const _FeatureRow(
-                          'Password-protected shares, custom expiry'),
-                      const _FeatureRow('30-day recycle bin'),
-                      const _FeatureRow('Multiple cloud accounts'),
+                          'Your files stay in your own cloud, encrypted '
+                          'before they leave the phone'),
                       const SizedBox(height: 16),
                       FilledButton(
-                        onPressed: _purchase,
+                        onPressed: _canBuy ? _purchase : null,
                         style: FilledButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 14),
                         ),
@@ -246,7 +349,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                 ),
                 Center(
                   child: TextButton(
-                    onPressed: _restorePurchase,
+                    onPressed: _busy ? null : _restorePurchase,
                     child: Text(
                       'Restore purchase',
                       style: TextStyle(
