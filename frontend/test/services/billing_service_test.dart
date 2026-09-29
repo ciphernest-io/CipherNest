@@ -12,13 +12,16 @@ import 'package:ciphernest/src/config/billing.dart';
 /// touched before the key and lock checks, these fail loudly instead of
 /// silently shipping a build that phones home at the wrong moment.
 void main() {
-  test('the shipped public key is a PUBLIC RevenueCat key, never a secret', () {
-    // goog_ is the public Android SDK key prefix. RevenueCat secret keys use
-    // different prefixes (sk_, and the v2 secret forms). This test exists to
-    // catch a paste of the wrong key into a file that ships in a public repo.
-    expect(kRevenueCatPublicKey, startsWith('goog_'));
+  test('the shipped key is either absent or a PUBLIC key, never a secret', () {
+    // Two legitimate states: empty before the products exist, and a goog_
+    // public Android SDK key after. A secret key here would ship a credential
+    // in a public repo, so that is the case worth failing on.
+    if (kRevenueCatPublicKey.isNotEmpty) {
+      expect(kRevenueCatPublicKey, startsWith('goog_'));
+      expect(kRevenueCatPublicKey.length, greaterThan(20));
+    }
     expect(kRevenueCatPublicKey, isNot(startsWith('sk_')));
-    expect(kRevenueCatPublicKey.length, greaterThan(20));
+    expect(kRevenueCatPublicKey.toLowerCase(), isNot(contains('secret')));
   });
 
   test('entitlement id matches the RevenueCat dashboard', () {
