@@ -80,7 +80,7 @@ dependencies:
   pro_image_editor: ^7.6.0
   # RevenueCat. Contacted ONLY on paywall open, purchase, restore, or a
   # 1,000-file cap hit — never at app start. See docs/REVENUECAT_PLAN.md.
-  purchases_flutter: ^8.0.0
+  purchases_flutter: ^10.13.2
   material_symbols_icons: ^4.2719.3
   # Pinned: emoji_picker_flutter 4.4.0 added a required positional parameter
   # to EmojiViewState that pro_image_editor 7.6.5 doesn't pass, so the build

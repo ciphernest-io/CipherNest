@@ -136,9 +136,13 @@ class BillingService {
   /// user cancellation apart from a real failure.
   Future<bool> purchase(Package package) async {
     if (!await ensureConfigured()) return false;
-    final info = await Purchases.purchasePackage(package);
-    await _writeThrough(info);
-    return _isActive(info);
+    // purchases_flutter 10: purchasePackage is deprecated in favour of
+    // purchase(PurchaseParams), and returns PurchaseResult rather than
+    // CustomerInfo. Using the current API deliberately — this is the one code
+    // path where a removed method costs real money.
+    final result = await Purchases.purchase(PurchaseParams.package(package));
+    await _writeThrough(result.customerInfo);
+    return _isActive(result.customerInfo);
   }
 
   /// Restores purchases already attached to this App User ID. Because the ID
