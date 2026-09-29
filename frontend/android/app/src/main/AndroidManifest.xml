@@ -166,6 +166,18 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- purchases_flutter bundles Amazon Appstore support, which merges an
+             EXPORTED broadcast receiver into the manifest. CipherNest ships to
+             Google Play only, so that code path never executes, and an
+             exported third-party receiver is attack surface for nothing. This
+             took the app's exported-component count from 9 to 10; removing it
+             puts it back. If Amazon distribution is ever wanted, delete this
+             block rather than working around it. -->
+        <receiver
+            android:name="com.amazon.device.iap.ResponseReceiver"
+            tools:node="remove" />
+
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
