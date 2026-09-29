@@ -63,6 +63,11 @@ class KeyManagerService {
   // --- Frozen derivation labels. NEVER change these. ---
   static const String infoX25519 = 'ciphernest/x25519/v1';
   static const String infoLocal = 'ciphernest/local/v1';
+  /// RevenueCat App User ID material. Frozen forever from the moment the
+  /// first purchase is bound to it: changing this string derives a different
+  /// ID, which orphans that subscription permanently, and there is no
+  /// server-side record we control to repair it with.
+  static const String infoBilling = 'ciphernest/billing/v1';
 
   // --- Secure storage (Keystore-wrapped). ---
   static const _kVaultPub = 'vault_pub_v1';
@@ -110,6 +115,19 @@ class KeyManagerService {
 
   /// Local secret for on-device blobs. Present only while unlocked.
   SecretKey? _kLocal;
+
+  /// Raw billing-ID material. Present only while unlocked, like the private
+  /// key — the seed is never retained, so this cannot be recomputed later.
+  Uint8List? _billingIdBytes;
+
+  /// The RevenueCat App User ID, or null while the vault is locked.
+  ///
+  /// base64url without padding: 43 characters from `A-Za-z0-9-_`, which
+  /// RevenueCat accepts and which can never be mistaken for an email
+  /// address. One-way — this is HKDF output, not the seed.
+  String? get billingId => _billingIdBytes == null
+      ? null
+      : base64Url.encode(_billingIdBytes!).replaceAll('=', '');
 
   /// True when the private key is in memory (decryption is possible).
   bool get isUnlocked => _vaultKeyPair != null;
@@ -221,6 +239,7 @@ class KeyManagerService {
     _vaultKeyPair = keys.keyPair;
     _vaultPublicKey = keys.publicKey;
     _kLocal = keys.kLocal;
+    _billingIdBytes = keys.billingId;
     _stagedSeed = seed;
     _stagedPassword = newPassword;
     _stagedMnemonic = mnemonic;
@@ -313,6 +332,7 @@ class KeyManagerService {
     _vaultKeyPair = keys.keyPair;
     _vaultPublicKey = keys.publicKey;
     _kLocal = keys.kLocal;
+    _billingIdBytes = keys.billingId;
 
     await _storage.write(
       key: _kVaultPub,
@@ -344,6 +364,7 @@ class KeyManagerService {
     _vaultKeyPair = keys.keyPair;
     _vaultPublicKey = keys.publicKey;
     _kLocal = keys.kLocal;
+    _billingIdBytes = keys.billingId;
     return true;
   }
 
@@ -390,6 +411,7 @@ class KeyManagerService {
   void lock() {
     _vaultKeyPair = null;
     _kLocal = null;
+    _billingIdBytes = null;
     _signupPassword = null;
   }
 
@@ -443,6 +465,7 @@ class KeyManagerService {
       _vaultKeyPair = keys.keyPair;
       _vaultPublicKey = keys.publicKey;
       _kLocal = keys.kLocal;
+      _billingIdBytes = keys.billingId;
       return true;
     } finally {
       seed.fillRange(0, seed.length, 0);
@@ -463,12 +486,14 @@ class KeyManagerService {
   static Future<_DerivedKeys> _deriveKeys(Uint8List seed) async {
     final x25519Seed = await _hkdf(seed, infoX25519, 32);
     final kLocalBytes = await _hkdf(seed, infoLocal, 32);
+    final billingBytes = await _hkdf(seed, infoBilling, 32);
     final keyPair = await X25519().newKeyPairFromSeed(x25519Seed);
     final publicKey = await keyPair.extractPublicKey();
     return _DerivedKeys(
       keyPair: keyPair,
       publicKey: publicKey,
       kLocal: SecretKey(kLocalBytes),
+      billingId: billingBytes,
     );
   }
 
@@ -485,15 +510,16 @@ class KeyManagerService {
   }
 
   /// Pure derivation for the frozen-mnemonic test — no storage, no state.
-  /// Returns the vault public key and k_local so the test can pin them and
-  /// catch any drift in the frozen info strings.
+  /// Returns the vault public key, k_local and the billing ID so the test can
+  /// pin them and catch any drift in the frozen info strings.
   @visibleForTesting
-  static Future<({Uint8List publicKey, Uint8List kLocal})>
+  static Future<({Uint8List publicKey, Uint8List kLocal, Uint8List billingId})>
       deriveVaultKeysForTest(Uint8List seed) async {
     final keys = await _deriveKeys(seed);
     return (
       publicKey: Uint8List.fromList(keys.publicKey.bytes),
       kLocal: Uint8List.fromList(await keys.kLocal.extractBytes()),
+      billingId: keys.billingId,
     );
   }
 
@@ -703,10 +729,12 @@ class _DerivedKeys {
   final SimpleKeyPair keyPair;
   final SimplePublicKey publicKey;
   final SecretKey kLocal;
+  final Uint8List billingId;
   const _DerivedKeys({
     required this.keyPair,
     required this.publicKey,
     required this.kLocal,
+    required this.billingId,
   });
 }
 
