@@ -13,7 +13,6 @@ import 'cloud/account_registry.dart';
 import 'cloud/cloud_service.dart';
 import 'database_service.dart';
 import 'encryption_service.dart';
-import 'subscription_service.dart';
 
 /// Share-blob header version that carries the expiry deadline in-band.
 ///
@@ -55,17 +54,12 @@ class ShareService {
     final account = AccountRegistry().activeAccount;
     if (account == null) throw Exception('No active cloud account');
 
-    // Plus gate — the dialog enforces this in UI; this is the backstop so no
-    // other call path can mint gated shares. Free tier: links expire in at
-    // most 7 days, no password protection. Passwords must never be silently
-    // dropped (the sender would believe the link is protected), so throw.
-    if (!SubscriptionService().isPlus) {
-      if (password != null && password.isNotEmpty) {
-        throw Exception('Password-protected links require CipherNest Plus');
-      }
-      const freeCap = Duration(days: 7);
-      if (expiry == null || expiry > freeCap) expiry = freeCap;
-    }
+    // No entitlement gate on sharing. Every expiry option and password
+    // protection are available on the free tier; the only paid limit in the
+    // product is the stored-file cap (FreeTierGuard). Deliberate: the sharing
+    // feature is the product's central usability argument, and putting the
+    // password behind a paywall would mean the least protected links are the
+    // ones the most casual users send.
 
     // 1. Download original encrypted blob (we need to swap its header).
     final originalBytes = await CloudService().downloadFile(file.cloudId!);

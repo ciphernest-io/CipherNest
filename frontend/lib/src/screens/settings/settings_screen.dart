@@ -1543,7 +1543,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _aboutLink(_brandSvg('linkedin', cs), 'LinkedIn',
                     'https://www.linkedin.com/in/usmanshafs'),
                 _aboutLink(_brandSvg('github', cs), 'GitHub',
-                    'https://github.com/ciphernest-io/CipherNest'),
+                    'https://ciphernest.io/source'),
               ],
             ),
           ],

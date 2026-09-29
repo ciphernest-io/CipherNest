@@ -3,8 +3,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../src/config/flags.dart';
 import 'database_service.dart';
 
-/// Entitlement gate for Plus features (custom share expiry, password shares,
-/// auto-sync, in-app editor, recycle bin, multi-cloud, extra viewer actions).
+/// Entitlement gate for Plus.
+///
+/// Plus unlocks exactly ONE thing: the stored-file cap in [FreeTierGuard].
+/// Everything else is free, including every share expiry option and
+/// password-protected links. The earlier list here (share expiry, password
+/// shares, auto-sync, in-app editor, recycle bin, multi-cloud, viewer
+/// actions) was stale: only the two share gates were ever implemented, and
+/// both were removed on 2026-09-29. Reading, decrypting, sharing and
+/// deleting are never gated.
 ///
 /// v1.0 pre-billing stub: `isPlus` reads a locally cached entitlement flag.
 /// The RevenueCat integration replaces the write path with real entitlement
