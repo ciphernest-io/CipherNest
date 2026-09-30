@@ -154,9 +154,15 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     }
   }
 
-  /// Live price when the offering loaded, otherwise the indicative figure.
-  /// The fallback exists so the screen is never blank; the buy button is
-  /// disabled in that state, so nobody is quoted a price they cannot pay.
+  /// The price, and ONLY ever the store's own price string.
+  ///
+  /// There is deliberately no hardcoded fallback. Play carries regional
+  /// overrides in twelve countries (Pakistan PKR 299/month, India INR 129, and
+  /// so on), so any compiled-in figure is wrong for those users: showing
+  /// "$1.99" to someone who will be charged PKR 299 is a misquote, not a
+  /// rough guide. When the offering cannot be read we say so and the buy
+  /// button stays disabled, which is honest and unsellable rather than cheap
+  /// and wrong.
   String get _priceLine {
     final store = _selectedPackage?.storeProduct;
     if (store != null) {
@@ -168,16 +174,26 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
       };
     }
     if (_loadingPrices) return 'Loading prices...';
-    return switch (_plan) {
-      _Plan.monthly => r'$1.99 / month',
-      _Plan.annual => r'$19.99 / year',
-      _Plan.lifetime => r'$39 one-time',
-    };
+    return 'See prices when you upgrade';
+  }
+
+  /// Annual saving computed from the LIVE prices of the two packages, for the
+  /// same reason: the regional overrides are set per country, so a compiled-in
+  /// percentage would drift the moment any one of them changes. Omitted
+  /// entirely when either price is unavailable, rather than guessed.
+  String? get _annualSaving {
+    final m = _offering?.monthly?.storeProduct.price;
+    final a = _offering?.annual?.storeProduct.price;
+    if (m == null || a == null || m <= 0) return null;
+    final pct = (1 - (a / (m * 12))) * 100;
+    if (pct < 1) return null;
+    return 'Save ${pct.round()}% vs monthly.';
   }
 
   String get _priceSub => switch (_plan) {
         _Plan.monthly => 'Cancel anytime.',
-        _Plan.annual => 'Save 16% vs monthly.',
+        _Plan.annual =>
+          _annualSaving ?? 'Billed once a year instead of monthly.',
         _Plan.lifetime =>
           "Founder's Edition. Limited to the first 1,000 supporters.",
       };

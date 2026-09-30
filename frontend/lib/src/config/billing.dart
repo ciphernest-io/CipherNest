@@ -5,25 +5,20 @@
 // purchases for this app. The SECRET key must never appear here, in the app,
 // or in the repo.
 //
-// DELIBERATELY EMPTY for the first closed-track upload.
+// The PRODUCTION Google Play SDK key, installed 2026-09-30 once the Play
+// products, entitlement and offering existed (plan step 4 complete).
 //
-// The real key is goog_fTENYRWNmITgJjbpqkeXLYBUHXW (plan step 4A). It is NOT
-// installed yet, and the ordering is the reason:
+// This must be the `goog_` PUBLIC Play key and nothing else. RevenueCat's
+// Test Store key is for local development only and a release build that
+// carries one CRASHES on configure, by RevenueCat's design. There is a test
+// in test/services/billing_service_test.dart that fails the build if this
+// value is ever not a goog_ key.
 //
-//   * Play will not let you create in-app products until a build exists on a
-//     track, so the first upload necessarily precedes the products.
-//   * With the key live, Purchases.configure() fires the moment the paywall
-//     opens, which every new user does during onboarding. That sends the
-//     billing ID to a third party.
-//   * So a build carrying the key would have to declare "Device or other IDs"
-//     on the Play Data Safety form, for a billing feature that cannot even
-//     function because the offering is empty. Declaring collection for a
-//     dead feature is a worse answer than not collecting.
-//
-// Install the key in the build that ships AFTER step 4B to 4E, and update the
-// Data Safety form in that same release. While it is empty, BillingService
-// refuses to configure the SDK and nothing contacts RevenueCat at all.
-const String kRevenueCatPublicKey = '';
+// Installing this key means the app now contacts RevenueCat when the paywall
+// opens, so the Play Data Safety form must be updated in the same release
+// (see BILLING_LAUNCH_CHECKLIST.md). It answered "No" only while this was
+// empty.
+const String kRevenueCatPublicKey = 'goog_fTENYRWNmITgJjbpqkeXLYBUHXW';
 
 /// The entitlement identifier configured in the RevenueCat dashboard. Must
 /// match exactly, or every user reads as Free.
