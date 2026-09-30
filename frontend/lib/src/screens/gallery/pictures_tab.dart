@@ -2202,6 +2202,9 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
       if (targetCloudId == null) {
         final stillPropagating =
             widget.file.contentHash != null || widget.file.sizeBytes > 0;
+        debugPrint('[thumb] no blob id: row=${widget.file.id} '
+            'hash=${widget.file.contentHash != null} '
+            'size=${widget.file.sizeBytes} propagating=$stillPropagating');
         if (mounted) {
           setState(() {
             _syncing = stillPropagating;
@@ -2237,6 +2240,7 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
         await atomicWriteBytes(cacheFile, decryptedBytes);
       }
 
+      debugPrint('[thumb] rung 3 ok: row=${widget.file.id}');
       ThumbStore.instance.putDiskPath(widget.file.id, cacheFile.path);
       if (mounted) {
         setState(() {
@@ -2248,6 +2252,8 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
     } catch (e) {
       // Download/decrypt failed (often eventual-consistency on a just-synced
       // blob). Calm "Syncing…", retried next sync — nothing was cached.
+      debugPrint('[thumb] rung 3 FAILED: row=${widget.file.id} '
+          'isThumbBlob=${widget.file.thumbnailCloudId != null} err=$e');
       if (mounted) {
         setState(() {
           _syncing = true;

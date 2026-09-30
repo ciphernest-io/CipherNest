@@ -3451,7 +3451,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
         setState(() => _thumbImage = decryptedBytes);
       }
     } catch (e) {
-      // debugPrint("Parallel thumbnail fetch failed: $e");
+      debugPrint('[viewer] thumb fetch failed: row=${widget.file.id} err=$e');
     }
   }
 
@@ -3587,6 +3587,9 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
     } catch (e) {
       // Download/decrypt failed — usually the blob is still propagating to
       // this device. Calm "Syncing…", retried on the next sync/open.
+      debugPrint('[viewer] full load FAILED: row=${widget.file.id} '
+          'cloudId=${widget.file.cloudId != null} '
+          'thumbCloudId=${widget.file.thumbnailCloudId != null} err=$e');
       if (mounted) {
         setState(() {
           _isLoadingFull = false;
