@@ -2024,21 +2024,45 @@ class _GalleryGridItemState extends State<GalleryGridItem> {
   // that auto-retries on the next sync — never a broken/error tile.
   bool _syncing = false;
 
-  /// A corrupt cached thumb (partial write, interrupted decrypt) would
-  /// otherwise error-paint forever. Delete it once and re-fetch; if the
-  /// re-fetch is corrupt too, we settle for the plain placeholder.
+  /// Any source that error-paints gets ONE retry from the top of the ladder,
+  /// with the offending source dropped first.
+  ///
+  /// Two distinct cases land here:
+  ///
+  ///  * a corrupt cached thumb (partial write, interrupted decrypt), which is
+  ///    deleted so the re-run re-fetches it, and
+  ///  * an unreadable or undecodable LOCAL original, which is merely evicted
+  ///    so the re-run falls through to the cloud rung.
+  ///
+  /// The second case used to be handled by nothing at all: this method
+  /// returned immediately unless `_diskThumbPath` was set, so a `localPath`
+  /// the app could not read painted a dark tile forever even though the cloud
+  /// copy was available and working. A local original is a convenience, never
+  /// the authority, so failing to read one must cost a round trip and not the
+  /// photo.
   void _handleCorruptDiskThumb() {
-    if (_wipedCorruptThumb || _diskThumbPath == null) return;
+    if (_wipedCorruptThumb) return;
+    final path = _diskThumbPath;
+    final hadLocal = _localVerified || _assetThumbBytes != null;
+    if (path == null && !hadLocal) return;
     _wipedCorruptThumb = true;
+    debugPrint('[thumb] source failed to paint, retrying from rung 1: '
+        'row=${widget.file.id} wasDiskThumb=${path != null} '
+        'wasLocal=$hadLocal');
     ThumbStore.instance.evict(widget.file.id);
-    final path = _diskThumbPath!;
     Future.microtask(() async {
-      try {
-        await File(path).delete();
-      } catch (_) {}
+      if (path != null) {
+        try {
+          await File(path).delete();
+        } catch (_) {}
+      }
       if (mounted) {
         setState(() {
           _diskThumbPath = null;
+          // Drop the local rungs so the re-run cannot re-pick the source that
+          // just failed. The cloud rung is the one that always works.
+          _localVerified = false;
+          _assetThumbBytes = null;
           _loading = true;
         });
         _loadThumbnail();

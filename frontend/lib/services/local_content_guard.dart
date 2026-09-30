@@ -59,8 +59,35 @@ class LocalContentGuard {
 
       final len = await f.length();
       // Size gate. sizeBytes == 0 means we don't know it yet (a just-synced
-      // peer row before its size propagated) — don't reject on that.
+      // peer row before its size propagated), so don't reject on that.
       if (file.sizeBytes > 0 && len != file.sizeBytes) return false;
+
+      // READABILITY PROBE. exists() and length() are satisfied by a stat
+      // through the media FUSE layer even when this app has no permission to
+      // OPEN the file. That is precisely the state a fresh install is in after
+      // a recovery-phrase restore: runtime permissions reset, restoring never
+      // asks for media access, and every restored row's local_path points at a
+      // real file on disk that the app cannot read a byte of.
+      //
+      // Without this probe the guard returned true (see the hash-exempt
+      // early return below, which legacy rows with no content_hash take), the
+      // ladder committed to the local original, Flutter failed to decode it,
+      // and the tile stayed permanently dark with a working cloud copy sitting
+      // right there. One open and one byte is cheap; being wrong here is not.
+      if (len > 0) {
+        RandomAccessFile? handle;
+        try {
+          handle = await f.open();
+          final probe = await handle.read(1);
+          if (probe.isEmpty) return false;
+        } on FileSystemException {
+          return false;
+        } finally {
+          try {
+            await handle?.close();
+          } catch (_) {}
+        }
+      }
 
       // Legacy row (pre-hash) or an oversized/video file: size gate is all we
       // can safely do without risking an on-thread hash of a huge file.
