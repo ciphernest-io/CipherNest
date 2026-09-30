@@ -140,7 +140,7 @@ class _FolderBinDetailScreenState extends State<FolderBinDetailScreen> {
                             fontSize: 13),
                         const SizedBox(height: 4),
                         Text(
-                          'Deleted folder — contents are read-only until '
+                          'Deleted folder. Contents are read-only until '
                           'restored.',
                           style: TextStyle(
                               color: cs.onSurface.withAlpha(140),

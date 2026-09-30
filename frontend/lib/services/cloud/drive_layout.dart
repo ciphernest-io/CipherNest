@@ -30,16 +30,16 @@ class DriveLayout {
   /// Plaintext README dropped into the vault root so anyone browsing their
   /// Drive understands what these opaque files are and why not to touch them.
   static const String readmeContents = '''
-CipherNest Vault — please do not delete, move, or rename anything in this folder.
+CipherNest Vault. Please do not delete, move, or rename anything in this folder.
 
 This folder holds your photos, videos, documents, and music, encrypted on your
 device before they were uploaded. CipherNest cannot read them, and neither can
-Google or Microsoft — only your recovery phrase can. The random filenames and
+Google or Microsoft. Only your recovery phrase can. The random filenames and
 unreadable contents are normal and by design.
 
 Deleting, moving, or renaming files here permanently loses that data. No one,
 including us, can recover it. To remove files, use the CipherNest app's Recycle
-Bin — not your cloud storage's web interface.
+Bin, not your cloud storage's web interface.
 
   vault/   your encrypted files
   backup/  an encrypted copy of your vault index (for multi-device / recovery)

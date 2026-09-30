@@ -768,7 +768,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     try {
       tree = await SafFolderImport.pickTree();
     } on PlatformException {
-      Notify.error('Couldn\'t read that folder — try "Upload files" instead.');
+      Notify.error('Couldn\'t read that folder. Try "Upload files" instead.');
       return;
     }
     if (tree == null || !mounted) return; // cancelled

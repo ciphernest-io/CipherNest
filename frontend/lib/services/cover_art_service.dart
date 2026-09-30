@@ -51,7 +51,7 @@ class CoverArtService {
     required Uint8List imageBytes,
   }) async {
     if (track.cloudId == null) {
-      throw Exception('This track is still syncing — try again in a moment.');
+      throw Exception('This track is still syncing. Try again in a moment.');
     }
     // Cover-sized JPEG: this same blob is shown everywhere the track art
     // appears, up to the full-screen player, so keep it larger than a list

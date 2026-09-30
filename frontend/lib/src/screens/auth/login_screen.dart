@@ -87,10 +87,10 @@ class _LoginScreenState extends State<LoginScreen> {
         case BiometricUnlockError.lockout:
         case BiometricUnlockError.lockoutPermanent:
           setState(() =>
-              _bioNotice = 'Too many attempts — use your password.');
+              _bioNotice = 'Too many attempts. Use your password.');
         default:
           setState(() =>
-              _bioNotice = 'Fingerprint unavailable — use your password.');
+              _bioNotice = 'Fingerprint unavailable. Use your password.');
       }
     } catch (e) {
       // Whatever goes wrong, the user must never be stranded on a silent
@@ -100,7 +100,7 @@ class _LoginScreenState extends State<LoginScreen> {
       debugPrint('Biometric unlock failed unexpectedly: $e');
       if (mounted) {
         setState(() =>
-            _bioNotice = 'Fingerprint unavailable — use your password.');
+            _bioNotice = 'Fingerprint unavailable. Use your password.');
       }
     } finally {
       if (mounted) setState(() => _bioPromptInFlight = false);

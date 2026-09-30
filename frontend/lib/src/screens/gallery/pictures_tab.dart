@@ -1441,7 +1441,7 @@ class PicturesTabState extends State<PicturesTab>
     // toasting them here would double-report. Only the states the pill
     // stays silent on (offline, nothing-to-do) get a toast.
     if (SyncService().lastCycleOffline) {
-      Notify.info("You're offline — sync will pick up when you're back");
+      Notify.info("You're offline. Sync will pick up when you're back");
       return;
     }
     final r = SyncService().lastAutoSyncResult;

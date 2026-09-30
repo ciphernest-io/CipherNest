@@ -95,12 +95,12 @@ class SyncCoordinator {
         messages.add(c.purged
             ? 'Folder "${c.fileName}" was permanently deleted on $who.'
             : 'You edited folder "${c.fileName}", but it was deleted on '
-                '$who — it\'s in the Recycle Bin.');
+                '$who. It\'s in the Recycle Bin.');
       } else {
         messages.add(c.purged
             ? '"${c.fileName}" was permanently deleted on $who.'
-            : 'You edited "${c.fileName}", but it was deleted on $who — '
-                'it\'s in the Recycle Bin.');
+            : 'You edited "${c.fileName}", but it was deleted on $who. '
+                'It\'s in the Recycle Bin.');
       }
     }
 
@@ -121,8 +121,8 @@ class SyncCoordinator {
               ? 'another device'
               : await DeviceRegistryService()
                   .nameFor(u.otherDeviceId!, accountId: accountId);
-          messages.add('Your move of folder "${u.folderName}" was undone — '
-              'it conflicted with a folder move on $who.');
+          messages.add('Your move of folder "${u.folderName}" was undone. '
+              'It conflicted with a folder move on $who.');
         }
         if (changed) {
           // Bounded: keep the most recent entries only.

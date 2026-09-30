@@ -781,7 +781,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       // The row purge didn't land (db closed mid-purge, disk full) — the
       // file still exists, so it must not vanish from the pager or claim
       // success.
-      Notify.error('Couldn\'t delete — please try again');
+      Notify.error('Couldn\'t delete. Please try again');
       return;
     }
     _removeCurrentFromList();

@@ -183,7 +183,7 @@ final class StorageFullError extends CnestError {
   final String provider;
   @override String get title => '$provider is full.';
   @override String get message =>
-      "You've hit your cloud storage quota. Free up some space, or upgrade your Google One or Microsoft 365 plan, then try again. CipherNest can't fix this for you — the limit is on your cloud account.";
+      "You've hit your cloud storage quota. Free up some space, or upgrade your Google One or Microsoft 365 plan, then try again. CipherNest can't fix this for you. The limit is on your cloud account.";
   @override String? get primaryActionLabel => 'Try again';
   @override String get iconName => 'cloudSlash';
 }
@@ -195,7 +195,7 @@ final class UploadInterruptedError extends CnestError {
   const UploadInterruptedError();
   @override String get title => 'Upload interrupted.';
   @override String get message =>
-      "The connection dropped mid-transfer. Nothing was saved — try again "
+      "The connection dropped mid-transfer. Nothing was saved. Try again "
       "once you're on a stable connection.";
   @override String? get primaryActionLabel => 'Try again';
   @override String get iconName => 'wifiSlash';

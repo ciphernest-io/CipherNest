@@ -212,7 +212,7 @@ class OneDriveProvider implements CloudProvider {
       return current.accessToken!;
     }
     if (current.refreshToken == null) {
-      throw Exception('No refresh token available — please sign in again');
+      throw Exception('No refresh token available. Please sign in again');
     }
 
     final resp = await http.post(
@@ -789,7 +789,7 @@ class OneDriveProvider implements CloudProvider {
     );
     final fileId = main['id'] as String?;
     if (fileId == null) {
-      throw Exception('First cloud file has no id — Graph response malformed');
+      throw Exception('First cloud file has no id, Graph response malformed');
     }
 
     final bytes = await downloadFile(fileId);

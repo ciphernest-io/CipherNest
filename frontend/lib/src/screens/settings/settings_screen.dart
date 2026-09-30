@@ -202,7 +202,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (armed != BiometricArmedState.armed) {
         await KeyManagerService().disableBiometric();
         enabled = false;
-        notice = 'Device security settings changed — re-enable to continue '
+        notice = 'Device security settings changed. Re-enable to continue '
             'using fingerprint unlock.';
       }
     }
@@ -715,7 +715,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (result.failed > 0) {
         final base = '${result.synced} backed up · ${result.failed} failed';
         msg = result.allFailuresOffline
-            ? '$base — you appear to be offline'
+            ? '$base, you appear to be offline'
             : base;
       } else if (result.synced > 0) {
         msg = '${result.synced} photo${result.synced == 1 ? '' : 's'} secured';
@@ -1973,7 +1973,7 @@ class _VaultHealthSheet extends StatelessWidget {
               _row(cs, 'file', '${report.orphanBlobIds.length} orphaned file'
                   '${report.orphanBlobIds.length == 1 ? '' : 's'}',
                   'Encrypted data in your cloud that the app no longer '
-                  'references. Nothing is deleted automatically — a future '
+                  'references. Nothing is deleted automatically. A future '
                   'update will let you recover or remove these.'),
             ],
             if (report.missingBlobFileIds.isNotEmpty) ...[
@@ -1981,7 +1981,7 @@ class _VaultHealthSheet extends StatelessWidget {
                   '${report.missingBlobFileIds.length} missing file'
                   '${report.missingBlobFileIds.length == 1 ? '' : 's'}',
                   'Files the app expects but whose encrypted data is gone '
-                  'from your cloud — likely deleted in the cloud\'s own web '
+                  'from your cloud, likely deleted in the cloud\'s own web '
                   'interface. Their entries remain so you know what was lost.'),
             ],
             if (report.unreadableSegments > 0) ...[

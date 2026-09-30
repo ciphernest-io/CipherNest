@@ -92,7 +92,7 @@ class FileExportService {
 
     final plain = await materializePlaintext(file);
     if (plain == null) {
-      throw Exception('File is not downloadable yet — sync and retry');
+      throw Exception('File is not downloadable yet. Sync and retry');
     }
 
     if (isMedia) {

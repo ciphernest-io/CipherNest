@@ -77,7 +77,7 @@ class MetadataMigrationService {
 
           final sealed = await SealedMetadata.seal(name: name, type: type);
           if (sealed == null) {
-            throw StateError('No vault public key — cannot seal');
+            throw StateError('No vault public key, cannot seal');
           }
           await CloudService().sealLegacyMetadata(
             cloudId: f['id'] as String,

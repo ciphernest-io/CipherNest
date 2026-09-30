@@ -235,7 +235,7 @@ class SyncEngine {
       if (!alreadyUploaded) {
         final sealed = await SegmentCodec.seal(ops);
         if (sealed == null) {
-          debugPrint('SyncEngine: no vault public key — push deferred');
+          debugPrint('SyncEngine: no vault public key, push deferred');
           return;
         }
         await transport.uploadLogObject(name: segName, bytes: sealed);
@@ -405,7 +405,7 @@ class SyncEngine {
           ? (await SegmentCodec.tryOpenSnapshot(bytes))?.ops
           : await SegmentCodec.tryOpen(bytes);
       if (ops == null) {
-        debugPrint('SyncEngine.compact: $name unreadable — aborting');
+        debugPrint('SyncEngine.compact: $name unreadable, aborting');
         return;
       }
       foldedNames.add(name);
@@ -432,7 +432,7 @@ class SyncEngine {
     if (verify == null ||
         verify.ops.length != snapshotOps.length ||
         verify.folded.length != foldedNames.length) {
-      debugPrint('SyncEngine.compact: read-back verification failed — '
+      debugPrint('SyncEngine.compact: read-back verification failed, '
           'folded objects NOT deleted');
       return;
     }

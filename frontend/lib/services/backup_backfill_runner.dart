@@ -154,7 +154,7 @@ class BackupBackfillRunner {
               task.complete('${album.name} backup stopped');
             } else {
               task.fail(
-                  '${album.name}: ${result.failed} failed — will retry');
+                  '${album.name}: ${result.failed} failed, will retry');
             }
           } catch (e) {
             debugPrint('Backfill failed for ${album.name}: $e');

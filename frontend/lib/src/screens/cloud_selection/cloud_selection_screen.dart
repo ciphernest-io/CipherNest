@@ -683,12 +683,13 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         scrollable: true,
-        title: const Text('Vault used on multiple devices'),
+        title: const Text('This vault syncs across installs'),
         content: const Text(
-          'This vault is connected on another device too. Changes you make — '
-          'organizing into folders, deleting, renaming — now sync across your '
-          'devices automatically.\n\n'
-          'If the same file is changed on two devices at once, deletions win '
+          'This vault has been set up more than once, either on another '
+          'device or after reinstalling here. Changes you make, such as '
+          'organizing into folders, deleting or renaming, now sync '
+          'automatically wherever it is set up.\n\n'
+          'If the same file is changed in two places at once, deletions win '
           'and the other change is kept safe in the Recycle Bin. Nothing is '
           'ever silently lost.',
         ),

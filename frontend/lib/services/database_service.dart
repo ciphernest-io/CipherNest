@@ -638,7 +638,7 @@ class DatabaseService extends ChangeNotifier {
     // createFile op for a row that no longer exists would ship a dangling
     // reference to every peer — never record one.
     if (updated == 0) {
-      debugPrint('markAsUploaded: row $id gone — createFile op NOT recorded');
+      debugPrint('markAsUploaded: row $id gone, createFile op NOT recorded');
       notifyListeners();
       return;
     }
@@ -1126,7 +1126,7 @@ class DatabaseService extends ChangeNotifier {
   Future<bool> moveFileToFolder(String fileId, String? folderId) async {
     final backed = await opBackedFileIds([fileId]);
     if (backed.isEmpty) {
-      Notify.info('File is still syncing — try moving it in a moment');
+      Notify.info('File is still syncing. Try moving it in a moment');
       return false;
     }
     final db = await database;
@@ -2080,8 +2080,8 @@ class DatabaseService extends ChangeNotifier {
     final skipped = fileIds.length - backed.length;
     if (skipped > 0) {
       Notify.info(skipped == 1
-          ? '1 file is still syncing — not added yet'
-          : '$skipped files are still syncing — not added yet');
+          ? '1 file is still syncing, not added yet'
+          : '$skipped files are still syncing, not added yet');
     }
   }
 

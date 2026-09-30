@@ -43,12 +43,12 @@ Future<void> sendFilesPlain(BuildContext context, List<CnestFile> files) async {
   final missing = files.length - out.length;
   if (out.isEmpty) {
     task.fail('File${files.length == 1 ? ' isn\'t' : 's aren\'t'} '
-        'downloadable yet — sync and try again.');
+        'downloadable yet. Sync and try again.');
     return;
   }
   task.complete(missing > 0
       ? '$missing file${missing == 1 ? ' isn\'t' : 's aren\'t'} '
-          'downloadable yet — sharing the rest'
+          'downloadable yet, sharing the rest'
       : null);
   // Context-free on Android (sharePositionOrigin is an iPad concern) — the
   // sheet opens over whatever screen the user is on now.
@@ -167,7 +167,7 @@ Future<void> showShareChoiceSheet(
               leading: ThemeIcon('link', color: cs.primary),
               title: Text('Share secure link',
                   style: TextStyle(color: cs.onSurface)),
-              subtitle: Text('Stays encrypted — the key never leaves the link',
+              subtitle: Text('Stays encrypted. The key never leaves the link',
                   style: TextStyle(
                       color: cs.onSurface.withAlpha(140), fontSize: 11)),
               onTap: () {
