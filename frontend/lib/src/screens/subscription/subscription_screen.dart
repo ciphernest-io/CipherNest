@@ -170,14 +170,14 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     if (_loadingPrices) return 'Loading prices...';
     return switch (_plan) {
       _Plan.monthly => r'$1.99 / month',
-      _Plan.annual => r'$14.99 / year',
-      _Plan.lifetime => r'$39.99 one-time',
+      _Plan.annual => r'$19.99 / year',
+      _Plan.lifetime => r'$39 one-time',
     };
   }
 
   String get _priceSub => switch (_plan) {
         _Plan.monthly => 'Cancel anytime.',
-        _Plan.annual => 'Save 17% vs monthly.',
+        _Plan.annual => 'Save 16% vs monthly.',
         _Plan.lifetime =>
           "Founder's Edition. Limited to the first 1,000 supporters.",
       };
