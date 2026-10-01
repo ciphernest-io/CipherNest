@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../services/activity_center.dart';
 import '../../../services/audio_player_service.dart';
 import '../../../services/cnest_errors.dart';
+import '../../config/routes.dart';
 import '../../../services/notify.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/database_service.dart';
@@ -938,8 +939,17 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   Future<void> _reportUploadOutcomes(List<UploadOutcome> outcomes) async {
     final failures = outcomes.where((o) => !o.ok).toList();
     if (failures.isNotEmpty && mounted) {
+      final err = UploadPipeline.mapUploadError(failures.first.error!);
       await showCnestError(
-          context, UploadPipeline.mapUploadError(failures.first.error!));
+        context,
+        err,
+        // The free-limit sheet's primary action is the only purchase entry
+        // point a user who finished onboarding can reach. Without this the
+        // button exists and does nothing.
+        onPrimaryAction: err is FreeLimitReachedError
+            ? () => Navigator.pushNamed(context, AppRoutes.subscription)
+            : null,
+      );
     }
   }
 

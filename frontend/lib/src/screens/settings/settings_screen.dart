@@ -9,6 +9,7 @@ import '../../widgets/activity_sheet.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart'; // ENABLED
+import '../../../services/subscription_service.dart';
 import '../../config/routes.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/cloud/account_registry.dart';
@@ -1102,6 +1103,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
               style: TextStyle(color: cs.onSurface.withAlpha(140)),
             ),
             onTap: _pickSizeUnits,
+          ),
+      // The ONLY purchase and restore entry point for a user who has
+      // finished onboarding. Before this, the paywall was reachable from the
+      // three setup screens and nowhere else, so an existing subscriber who
+      // reinstalled had no way to reach Restore purchases at all.
+      ListTile(
+            leading: ThemeIcon('workspace_premium', color: cs.primary),
+            title: Text(
+                SubscriptionService().isPlus
+                    ? 'CipherNest Plus'
+                    : 'Upgrade to Plus',
+                style: TextStyle(color: cs.onSurface)),
+            subtitle: Text(
+                SubscriptionService().isPlus
+                    ? 'Active. Unlimited uploads.'
+                    : 'Free stores 1,000 files. Plus removes the limit.',
+                style: TextStyle(color: cs.onSurface.withAlpha(140))),
+            trailing: ThemeIcon('caretRight',
+                size: 16, color: cs.onSurface.withAlpha(140)),
+            onTap: () async {
+              await Navigator.pushNamed(context, AppRoutes.subscription);
+              // Entitlement may have changed while the paywall was open.
+              if (mounted) setState(() {});
+            },
           ),
       ListTile(
             leading: ThemeIcon('trash', color: cs.primary),

@@ -278,8 +278,12 @@ final class FreeLimitReachedError extends CnestError {
       'Free stores up to 1,000 files, and this vault just reached it. '
       'Upgrade to Plus for unlimited uploads, or delete files you no '
       'longer need.';
+  // This message says "Upgrade to Plus" and for a long time offered no way
+  // to do it: the paywall was reachable from the three onboarding screens
+  // and nowhere else. A user blocked at the cap is at the highest-intent
+  // moment in the product, so the button belongs here.
   @override
-  String? get primaryActionLabel => null;
+  String? get primaryActionLabel => 'See Plus';
   @override
   String get iconName => 'lockKey';
 }

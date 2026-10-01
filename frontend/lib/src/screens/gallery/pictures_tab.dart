@@ -327,7 +327,56 @@ class PicturesTabState extends State<PicturesTab>
     DatabaseService().addListener(_onDatabaseChanged);
     _refresh();
     _loadZoomLevel();
+    _offerMediaAccessOnce();
   }
+
+  /// Ask for media access ONCE, and only when it would actually change what
+  /// the user sees.
+  ///
+  /// After a recovery-phrase restore, runtime permissions are reset and the
+  /// restore flow never needs to pick a photo, so nothing asks. Every restored
+  /// row then points at a local original the app cannot read, the ladder falls
+  /// through to the cloud for all of them, and the user waits minutes while
+  /// whole photos are downloaded to draw 300px tiles. Granting access makes it
+  /// instant, so the prompt pays for itself.
+  ///
+  /// Conditions are deliberately narrow, because an unexplained permission
+  /// dialog on first launch is worse than no dialog:
+  ///   * at least one row claims a local original, i.e. there is something to
+  ///     gain. A fresh vault with nothing in it is never asked.
+  ///   * access is not already granted.
+  ///   * we have not asked before on this install. The system dialog is
+  ///     one-shot anyway; this stops us re-prompting on every gallery open
+  ///     after a deliberate refusal.
+  Future<void> _offerMediaAccessOnce() async {
+    try {
+      // _refresh() in initState already kicked this off; wait on the same
+      // future rather than loading the list a second time.
+      final files = await _filesFuture;
+      if (!mounted) return;
+      if (!files.any((f) => f.localPath != null)) return;
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(_mediaPromptPrefKey) ?? false) return;
+      final current = await PhotoManager.getPermissionState(
+        requestOption: const PermissionRequestOption(),
+      );
+      if (current.hasAccess) return;
+      await prefs.setBool(_mediaPromptPrefKey, true);
+      final granted = await PhotoManager.requestPermissionExtend();
+      debugPrint('[gallery] media access prompt shown, granted='
+          '${granted.hasAccess}');
+      // Re-run the ladders: rung 2 can now verify originals that were
+      // unreadable a moment ago.
+      if (granted.hasAccess && mounted) {
+        ThumbStore.instance.clear();
+        setState(() {});
+      }
+    } catch (e) {
+      debugPrint('[gallery] media access prompt skipped: $e');
+    }
+  }
+
+  static const String _mediaPromptPrefKey = 'media_access_prompted_v1';
 
   Future<void> _loadZoomLevel() async {
     final prefs = await SharedPreferences.getInstance();

@@ -4,6 +4,7 @@ import 'package:purchases_flutter/purchases_flutter.dart';
 
 import '../../../services/billing_service.dart';
 import '../../../services/notify.dart';
+import '../../../services/subscription_service.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
@@ -53,15 +54,37 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   bool _loadingPrices = true;
   bool _busy = false;
 
+  /// Set when RevenueCat reports an active entitlement on open. The screen
+  /// then confirms ownership instead of advertising a purchase.
+  bool _alreadyPlus = false;
+
   @override
   void initState() {
     super.initState();
-    _loadOffering();
+    _open();
   }
 
-  /// Trigger 1 of the contact rule. Failure is not an error state: the screen
-  /// still works, it just cannot sell anything.
-  Future<void> _loadOffering() async {
+  /// Trigger 1 of the contact rule: one round trip that does BOTH jobs.
+  ///
+  /// Entitlement first. The billing ID is derived from the vault seed, so
+  /// RevenueCat already knows whether this phrase owns Plus, and asking costs
+  /// nothing on a call we are making anyway. Without this the screen offered
+  /// to sell a subscription the user already had, Play answered "you already
+  /// own this", and the only way through was to find Restore purchases by
+  /// hand. Nobody should have to do that.
+  ///
+  /// Failure is not an error state: the screen still works, it just cannot
+  /// sell anything.
+  Future<void> _open() async {
+    await BillingService().refreshEntitlement();
+    if (!mounted) return;
+    if (SubscriptionService().isPlus) {
+      setState(() {
+        _alreadyPlus = true;
+        _loadingPrices = false;
+      });
+      return;
+    }
     final offerings = await BillingService().offerings();
     if (!mounted) return;
     setState(() {
@@ -78,7 +101,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
         _Plan.lifetime => _offering?.lifetime,
       };
 
-  bool get _canBuy => !_busy && _selectedPackage != null;
+  bool get _canBuy => !_busy && !_alreadyPlus && _selectedPackage != null;
 
   /// Every exit converges here: flow steps advance to [SubscriptionScreenArgs.nextRoute]
   /// (stack cleared — the phrase screens must not survive beneath), upsell
@@ -164,6 +187,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   /// button stays disabled, which is honest and unsellable rather than cheap
   /// and wrong.
   String get _priceLine {
+    if (_alreadyPlus) return 'You have Plus';
     final store = _selectedPackage?.storeProduct;
     if (store != null) {
       final p = store.priceString;
@@ -190,7 +214,9 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     return 'Save ${pct.round()}% vs monthly.';
   }
 
-  String get _priceSub => switch (_plan) {
+  String get _priceSub => _alreadyPlus
+      ? 'Unlimited uploads are unlocked on this recovery phrase.'
+      : switch (_plan) {
         _Plan.monthly => 'Cancel anytime.',
         _Plan.annual =>
           _annualSaving ?? 'Billed once a year instead of monthly.',
@@ -199,6 +225,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
       };
 
   String get _ctaLabel {
+    if (_alreadyPlus) return 'Plus is active';
     if (_busy) return 'Working...';
     if (_loadingPrices) return 'Loading...';
     if (_selectedPackage == null) return 'Unavailable right now';

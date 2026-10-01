@@ -5,6 +5,7 @@ import '../../widgets/theme_icon.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../services/cnest_errors.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/account_switcher.dart';
@@ -199,8 +200,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _reportUploadOutcomes(List<UploadOutcome> outcomes) async {
     final failures = outcomes.where((o) => !o.ok).toList();
     if (failures.isNotEmpty && mounted) {
+      final err = UploadPipeline.mapUploadError(failures.first.error!);
       await showCnestError(
-          context, UploadPipeline.mapUploadError(failures.first.error!));
+        context,
+        err,
+        // The free-limit sheet's primary action is the only purchase entry
+        // point a user who finished onboarding can reach. Without this the
+        // button exists and does nothing.
+        onPrimaryAction: err is FreeLimitReachedError
+            ? () => Navigator.pushNamed(context, AppRoutes.subscription)
+            : null,
+      );
     }
   }
 
