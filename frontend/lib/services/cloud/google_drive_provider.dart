@@ -436,12 +436,41 @@ class GoogleDriveProvider implements CloudProvider {
       fileId,
       downloadOptions: drive.DownloadOptions.fullMedia,
     ) as drive.Media;
-    final chunk = await media.stream.first;
+
+    // Accumulate at least a full header before judging anything.
+    //
+    // This used to be `await media.stream.first`, which takes the first chunk
+    // the NETWORK happened to deliver, not the first N bytes of the file.
+    // Drive chunks arbitrarily, so a short first event (slow start, small
+    // initial window) yielded fewer than headerSize bytes,
+    // decryptFileKeyFromHeader threw "Header bytes too short", the catch below
+    // read that as a crypto failure, and the user was told "That phrase
+    // doesn't match this vault."
+    //
+    // A correct recovery phrase was rejected because of TCP framing. It
+    // reproduced once on a real restore and succeeded on an immediate retry
+    // with the identical phrase, which is the signature of exactly this.
+    final need = EncryptionService.headerSize;
+    final buf = BytesBuilder(copy: false);
+    await for (final c in media.stream) {
+      buf.add(c);
+      if (buf.length >= need) break;
+    }
+    final probe = buf.takeBytes();
+
+    // Too few bytes is NOT a key verdict. Throwing lets canaryWithRetry treat
+    // it as transient and retry, instead of accusing the user's phrase.
+    if (probe.length < need) {
+      throw Exception(
+          'Canary probe truncated: ${probe.length} of $need header bytes');
+    }
 
     try {
-      await EncryptionService.verifyKey(Uint8List.fromList(chunk));
+      await EncryptionService.verifyKey(probe);
       return true;
     } catch (e) {
+      // Reached only with a full header in hand, so this really is the wrong
+      // key for this vault.
       debugPrint('Canary crypto fail (wrong key for this vault): $e');
       return false;
     }
