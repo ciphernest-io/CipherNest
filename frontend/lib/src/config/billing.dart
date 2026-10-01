@@ -23,3 +23,23 @@ const String kRevenueCatPublicKey = 'goog_fTENYRWNmITgJjbpqkeXLYBUHXW';
 /// The entitlement identifier configured in the RevenueCat dashboard. Must
 /// match exactly, or every user reads as Free.
 const String kPlusEntitlementId = 'plus';
+
+/// How long a cached entitlement is honoured past its expiry when a
+/// verification was ATTEMPTED and failed.
+///
+/// This exists for one case only: a subscriber whose renewal almost certainly
+/// went through, who happens to have no signal at the moment the old period
+/// ends. It is NOT a grace period for payment failure — Play's own 3-day
+/// grace already extends `expirationDate` for that, so RevenueCat reports the
+/// entitlement as still active and this never comes into play.
+///
+/// If RevenueCat answers and says inactive, the user is Free immediately and
+/// this window is not consulted.
+const Duration kOfflineTolerance = Duration(hours: 48);
+
+/// Minimum gap between entitlement verifications on app RESUME.
+///
+/// Resume fires every time the user switches away and back, so verifying
+/// unconditionally would mean dozens of requests an hour. Cold start always
+/// verifies, and a resume past expiry verifies regardless of this gap.
+const Duration kResumeMinGap = Duration(minutes: 15);

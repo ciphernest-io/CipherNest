@@ -4,6 +4,7 @@ import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 
 import '../services/activity_center.dart';
+import '../services/billing_service.dart';
 import '../services/app_lock_service.dart';
 import '../services/audio_player_service.dart';
 import '../services/recycle_bin_service.dart';
@@ -59,6 +60,13 @@ class _AppState extends State<App> with WidgetsBindingObserver {
           AudioPlayerService().playing ||
           VideoStreamingServer().isStreamingActive,
     );
+    // Entitlement verification on cold start. This is the only thing that
+    // catches a FIRST entitlement arriving while the app was closed: a promo
+    // code redeemed in the Play Store, or a pending cash or carrier payment
+    // completing hours later. It also catches refunds, chargebacks and
+    // payment-failure holds, which revoke before the expiry date and so are
+    // invisible to the local expiry check.
+    unawaited(BillingService().verifyNow(coldStart: true));
   }
 
   @override
@@ -73,6 +81,10 @@ class _AppState extends State<App> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       AppLockService().onResumed();
+      // Throttled inside verifyNow: resume fires on every app switch, so an
+      // unthrottled check would mean dozens of requests an hour. An
+      // entitlement past its expiry bypasses the throttle.
+      unawaited(BillingService().verifyNow(coldStart: false));
     }
   }
 

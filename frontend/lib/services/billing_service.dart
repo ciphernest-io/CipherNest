@@ -7,61 +7,69 @@ import '../src/config/flags.dart';
 import 'key_manager_service.dart';
 import 'subscription_service.dart';
 
-/// RevenueCat client, deliberately lazy.
+/// RevenueCat client.
 ///
-/// ## The contact rule
-/// RevenueCat is contacted on exactly four occasions:
+/// ## When RevenueCat is contacted
 ///
-///   1. the paywall screen opens (to read live prices),
-///   2. a purchase,
-///   3. a restore,
-///   4. a [FreeTierGuard] cap hit by a user the local cache thinks is Free.
+///   1. **cold start** — always,
+///   2. **resume** — only past [kResumeMinGap], or if the entitlement is past
+///      its expiry,
+///   3. paywall open,
+///   4. purchase,
+///   5. restore,
+///   6. a [FreeTierGuard] cap hit, or a cap check by someone past expiry.
 ///
-/// **Never at app start, and never on a launch that touches none of those.**
-/// The App User ID is derived from the vault seed, so an app-start call would
-/// report a stable, seed-derived identifier to a third party on every single
-/// launch, which for a vault app leaks a log of when the vault is opened.
+/// ## Why app start is on that list
+/// An earlier revision of this file promised RevenueCat was "never contacted
+/// at app start", on the grounds that the App User ID is derived from the
+/// vault seed, so contact reports when someone opens their vault.
+///
+/// That rule was **withdrawn on 2026-10-01**, deliberately. Two reasons.
+/// Onboarding already routes every user through the paywall, so RevenueCat
+/// holds every user's ID and first-seen timestamp before they reach the
+/// gallery; the rule was protecting app-open timing only. And it left real
+/// purchase routes undetected: a promo code redeemed in the Play Store, or a
+/// pending cash or carrier payment completing hours later, are both a user's
+/// FIRST entitlement arriving while the app is closed. Nothing short of a
+/// startup check sees those.
+///
+/// The Play Data Safety declaration says so: the pseudonymous ID is sent at
+/// every app start, for every user.
 ///
 /// ## Configure once, with the ID
 /// [Purchases.configure] is called with `appUserID` already set. Configuring
-/// without it mints an anonymous `$RCAnonymousID`, calls home as that identity,
-/// and a later [Purchases.logIn] creates a server-side alias linking the two —
-/// two identities per install and an extra network request. So: configure with
-/// the real ID, or do not configure.
+/// without it mints an anonymous `$RCAnonymousID`, calls home as that, and a
+/// later [Purchases.logIn] creates a server-side alias linking the two — two
+/// identities per install and an extra request.
 ///
 /// ## Locked vaults never configure
-/// [KeyManagerService.billingId] is null while locked because the seed is never
-/// retained. Background auto-sync and migration run in that state, so they fall
-/// back to the locally cached entitlement and make no request. This is load
-/// bearing, not an edge case.
+/// [KeyManagerService.billingId] is null while locked, because the seed is
+/// never retained. Background auto-sync and migration run in that state and
+/// fall back to the cached entitlement, which is now a local expiry check and
+/// so is still correct. This is load bearing, not an edge case.
 ///
 /// ## collectDeviceIdentifiers is never called
-/// Calling it acquires the advertising ID, which requires the `AD_ID`
-/// permission and changes the Play Data Safety declaration's category. The
-/// shipped APK has no such permission and must keep it that way.
+/// It would acquire the advertising ID, which requires the `AD_ID` permission
+/// and changes the Data Safety declaration's category. The shipped APK has no
+/// such permission and must keep it that way.
 class BillingService {
   static final BillingService _instance = BillingService._internal();
   factory BillingService() => _instance;
   BillingService._internal();
 
   bool _configured = false;
+  bool _listenerAttached = false;
 
-  /// Shared in-flight refresh. Concurrent callers await this one request
+  /// Shared in-flight verification. Concurrent callers await this one request
   /// rather than each firing their own.
   Future<void>? _inFlight;
 
-  /// When the last successful refresh completed. Throttles the cap-hit path,
-  /// which is reached per-asset by auto-sync and migration.
-  DateTime? _lastRefresh;
-  static const Duration _minRefreshGap = Duration(minutes: 5);
-
-  /// True once the SDK holds a real key and a real App User ID.
   bool get isConfigured => _configured;
 
   /// Configures the SDK exactly once, or reports why it cannot.
   ///
-  /// Returns false, without any network activity, when the paywall is off,
-  /// the public key has not been set yet, or the vault is locked.
+  /// Returns false, with no network activity, when the paywall is off, the
+  /// public key has not been set, or the vault is locked.
   Future<bool> ensureConfigured() async {
     if (_configured) return true;
     if (!kPaywallEnabled) return false;
@@ -75,17 +83,60 @@ class BillingService {
       PurchasesConfiguration(kRevenueCatPublicKey)..appUserID = appUserId,
     );
     _configured = true;
+
+    // In-session push updates: a renewal landing, or a purchase completing on
+    // another surface, reaches the cache without another explicit call. This
+    // is what makes the resume throttle safe to have.
+    if (!_listenerAttached) {
+      Purchases.addCustomerInfoUpdateListener(_onCustomerInfo);
+      _listenerAttached = true;
+    }
     return true;
   }
 
-  /// Reads entitlement state and writes it through to the local cache.
+  void _onCustomerInfo(CustomerInfo info) {
+    // Fire and forget: the listener signature is synchronous.
+    unawaited(_writeThrough(info));
+  }
+
+  /// Verifies entitlement against RevenueCat.
   ///
-  /// Silent on failure: a network error must never present as "your
-  /// subscription expired". The cached value stands until a call succeeds.
-  Future<void> refreshEntitlement() async {
+  /// [coldStart] true always verifies. On resume it honours [kResumeMinGap],
+  /// unless the entitlement is past its expiry, in which case the answer
+  /// matters more than the saved request.
+  Future<void> verifyNow({required bool coldStart}) async {
+    final sub = SubscriptionService();
+    await sub.init();
+
+    if (!coldStart && !sub.isPastExpiry) {
+      final last = sub.lastVerifiedAt;
+      if (last != null &&
+          DateTime.now().millisecondsSinceEpoch - last <
+              kResumeMinGap.inMilliseconds) {
+        return;
+      }
+    }
+    await _verify(authoritative: true);
+  }
+
+  /// Verifies when it is worth a request: not entitled, or entitled but past
+  /// expiry. Used by the cap path, which auto-sync and migration reach once
+  /// per asset, so the shared in-flight future matters here.
+  Future<void> refreshIfStale() async {
+    final sub = SubscriptionService();
+    await sub.init();
+    if (sub.isPlus && !sub.isPastExpiry) return;
+    if (KeyManagerService().billingId == null) return;
+    await _verify(authoritative: sub.isPastExpiry);
+  }
+
+  /// Plain refresh, for the paywall, purchase and restore paths.
+  Future<void> refreshEntitlement() => _verify(authoritative: false);
+
+  Future<void> _verify({required bool authoritative}) async {
     final existing = _inFlight;
     if (existing != null) return existing;
-    final run = _refresh();
+    final run = _verifyImpl(authoritative: authoritative);
     _inFlight = run;
     try {
       await run;
@@ -94,34 +145,30 @@ class BillingService {
     }
   }
 
-  Future<void> _refresh() async {
-    if (!await ensureConfigured()) return;
+  Future<void> _verifyImpl({required bool authoritative}) async {
+    if (!await ensureConfigured()) {
+      // Not a failure to record when the vault is simply locked or billing is
+      // switched off: there was nothing to verify against.
+      return;
+    }
     try {
+      if (authoritative) {
+        // The SDK will otherwise answer from its own cache, which is exactly
+        // what we are trying to look past at app start and at expiry.
+        await Purchases.invalidateCustomerInfoCache();
+      }
       final info = await Purchases.getCustomerInfo();
       await _writeThrough(info);
     } catch (_) {
-      // Keep the cached entitlement. Never downgrade a paying user because
-      // their train went into a tunnel.
+      // Keep the cached entitlement. A tunnel must never present as "your
+      // subscription expired".
+      SubscriptionService().recordVerificationFailed();
     }
   }
 
-  /// Refresh, but only if it is worth a request. Used by the cap-hit path.
-  ///
-  /// Skips when the cache already says Plus, when a refresh happened recently,
-  /// or when the SDK cannot be configured at all.
-  Future<void> refreshIfStale() async {
-    if (SubscriptionService().isPlus) return;
-    final last = _lastRefresh;
-    if (last != null && DateTime.now().difference(last) < _minRefreshGap) {
-      return;
-    }
-    if (KeyManagerService().billingId == null) return;
-    await refreshEntitlement();
-  }
-
-  /// Live offerings for the paywall, so prices are editable from the dashboard
-  /// without an app update. Null when the SDK is not configured; the caller
-  /// shows its fallback copy rather than an error.
+  /// Live offerings for the paywall, so prices are editable from the
+  /// dashboard without an app update. Null when the SDK is not configured;
+  /// the caller shows its fallback rather than an error.
   Future<Offerings?> offerings() async {
     if (!await ensureConfigured()) return null;
     try {
@@ -131,47 +178,55 @@ class BillingService {
     }
   }
 
-  /// Buys [package]. Returns true when the Plus entitlement is active
-  /// afterwards. Throws [PlatformException] upward so the caller can tell a
-  /// user cancellation apart from a real failure.
+  /// Buys [package]. Returns true when Plus is active afterwards. Throws
+  /// [PlatformException] upward so the caller can tell a user cancellation
+  /// apart from a real failure.
   Future<bool> purchase(Package package) async {
     if (!await ensureConfigured()) return false;
-    // purchases_flutter 10: purchasePackage is deprecated in favour of
-    // purchase(PurchaseParams), and returns PurchaseResult rather than
-    // CustomerInfo. Using the current API deliberately — this is the one code
-    // path where a removed method costs real money.
     final result = await Purchases.purchase(PurchaseParams.package(package));
     await _writeThrough(result.customerInfo);
-    return _isActive(result.customerInfo);
+    return SubscriptionService().isPlus;
   }
 
-  /// Restores purchases already attached to this App User ID. Because the ID
-  /// is derived from the recovery phrase, this is what makes a subscription
-  /// follow the phrase onto a new device.
+  /// Restores purchases attached to this App User ID, and reconciles Play's
+  /// on-device purchase list. Because the ID derives from the recovery
+  /// phrase, this is what carries a subscription onto a new device. It is
+  /// also the backstop if a Real-Time Developer Notification is ever missed.
   Future<bool> restore() async {
     if (!await ensureConfigured()) return false;
     final info = await Purchases.restorePurchases();
     await _writeThrough(info);
-    return _isActive(info);
+    return SubscriptionService().isPlus;
   }
 
   /// Forget-vault teardown.
   ///
   /// Deliberately does NOT call [Purchases.logOut]: that makes a network
-  /// request and mints a fresh anonymous identity, which would be a fifth
-  /// contact point outside the four allowed above. The SDK identity dies with
+  /// request and mints a fresh anonymous identity. The SDK identity dies with
   /// the process, and the next vault configures with its own derived ID.
   Future<void> forgetVault() async {
     _configured = false;
-    _lastRefresh = null;
-    await SubscriptionService().setPlusEntitlement(false);
+    await SubscriptionService().clear();
   }
 
-  bool _isActive(CustomerInfo info) =>
-      info.entitlements.active.containsKey(kPlusEntitlementId);
-
+  /// Translates a [CustomerInfo] into the cached deadline.
+  ///
+  /// `expirationDate` is null for the non-subscription lifetime product, so
+  /// "active with no expiry" means lifetime. An absent entitlement is a
+  /// definitive Free, recorded as a successful verification so no tolerance
+  /// window applies.
   Future<void> _writeThrough(CustomerInfo info) async {
-    _lastRefresh = DateTime.now();
-    await SubscriptionService().setPlusEntitlement(_isActive(info));
+    final ent = info.entitlements.active[kPlusEntitlementId];
+    if (ent == null) {
+      await SubscriptionService()
+          .recordVerified(expiresAt: null, isLifetime: false);
+      return;
+    }
+    final raw = ent.expirationDate;
+    final expires = raw == null ? null : DateTime.tryParse(raw);
+    await SubscriptionService().recordVerified(
+      expiresAt: expires,
+      isLifetime: raw == null,
+    );
   }
 }
