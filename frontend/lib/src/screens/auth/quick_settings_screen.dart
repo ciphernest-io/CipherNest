@@ -234,16 +234,26 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
                       SizedBox(
                         width: double.infinity,
                         child: SegmentedButton<AppThemeMode>(
+                            // The selected-check icon costs ~24dp inside a third of a
+                            // 360dp row. At the 1.3x font ceiling that pushed "System"
+                            // onto a second line, broken mid-word as "Syste / m", and the
+                            // extra line made the column taller than IntrinsicHeight had
+                            // measured, overflowing the screen by 11px. The filled
+                            // background already shows which segment is selected.
+                            showSelectedIcon: false,
                           segments: const [
                             ButtonSegment(
                                 value: AppThemeMode.system,
-                                label: Text('System')),
+                                label: Text('System',
+                                    maxLines: 1, overflow: TextOverflow.ellipsis)),
                             ButtonSegment(
                                 value: AppThemeMode.light,
-                                label: Text('Light')),
+                                label: Text('Light',
+                                    maxLines: 1, overflow: TextOverflow.ellipsis)),
                             ButtonSegment(
                                 value: AppThemeMode.dark,
-                                label: Text('Dark')),
+                                label: Text('Dark',
+                                    maxLines: 1, overflow: TextOverflow.ellipsis)),
                           ],
                           selected: {ThemeController().mode},
                           onSelectionChanged: (s) =>

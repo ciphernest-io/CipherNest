@@ -161,11 +161,20 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
           icon: const ThemeIcon('arrowLeft'),
           onPressed: _isLoading ? null : _back,
         ),
-        title: Text(
-          heading,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: textTheme.titleLarge,
+        // Fixed copy, not user content, so it must never lose characters.
+        // At 360dp with the OS font slider at 1.3x, "Create your master
+        // password" ellipsised to "Create your master passwo...". scaleDown
+        // shrinks only when it would otherwise be cut, so the default scale
+        // is untouched. Album and file titles elsewhere keep plain ellipsis,
+        // which is the right behaviour for names the user chose.
+        title: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            heading,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: textTheme.titleLarge,
+          ),
         ),
       ),
       body: SafeArea(

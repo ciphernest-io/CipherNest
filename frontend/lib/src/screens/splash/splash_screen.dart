@@ -156,13 +156,26 @@ class _SplashScreenState extends State<SplashScreen>
               ),
             ),
             const SizedBox(height: 120),
-            _StaggeredWordmark(
-              controller: _anim,
-              fontSize: 36,
-              start: 0.22,
-              stagger: 0.055,
-              letterSpan: 0.28,
-            ),
+              // The wordmark is a brand lockup, not reading text, so it must not
+              // follow the OS font slider: at 1.3x these ten fixed 36px letters
+              // grow to 46.8px and the Row overflows a 360dp screen. Reported on
+              // a 720p Vivo and reproduced here. scaleDown then guarantees it
+              // fits any width. The tagline below is real text and still scales.
+              MediaQuery.withNoTextScaling(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: _StaggeredWordmark(
+                      controller: _anim,
+                      fontSize: 36,
+                      start: 0.22,
+                      stagger: 0.055,
+                      letterSpan: 0.28,
+                    ),
+                  ),
+                ),
+              ),
             const SizedBox(height: 8),
             SlideTransition(
               position: _taglineRise,
