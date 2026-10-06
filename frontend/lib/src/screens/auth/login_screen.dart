@@ -32,7 +32,31 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void initState() {
     super.initState();
-    _initBiometric();
+    _openPasswordlessOrArmBiometric();
+  }
+
+  /// A vault created with "Continue without password" has nothing to ask for,
+  /// so this screen must not sit in the way. Open it and move straight on
+  /// through the SAME post-unlock routing the password path uses, so the
+  /// reconnect case still behaves. Biometric is never offered in this mode:
+  /// there is no password to fall back to when the key dies on an enrollment
+  /// change, so arming one would be a trap.
+  Future<void> _openPasswordlessOrArmBiometric() async {
+    if (await KeyManagerService().isPasswordless()) {
+      final ok = await KeyManagerService().unlockWithoutPassword();
+      if (!mounted) return;
+      if (ok) {
+        await _routeAfterUnlock();
+        return;
+      }
+      // Secure storage lost the seed (restored backup, OEM wipe). The phrase
+      // is the only way back, and saying so beats an unexplained dead screen.
+      setState(() => _bioNotice =
+          'This vault could not be opened on this device. Restore it with '
+          'your recovery phrase.');
+      return;
+    }
+    await _initBiometric();
   }
 
   /// Probes the wrap BEFORE offering the prompt so an invalidated key is a

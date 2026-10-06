@@ -89,6 +89,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _autoLockMinutes = AppLockService.defaultMinutes;
   bool _keepPlayingOnClose = false;
   BiometricCapability _bioCapability = BiometricCapability.unavailable;
+  // True for vaults created with "Continue without password". There is no
+  // password to fall back on, so fingerprint unlock is never offered.
+  bool _passwordlessVault = false;
   bool _bioEnabled = false;
   String? _bioSubtitleOverride; // invalidation notice, shown once detected
 
@@ -207,9 +210,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             'using fingerprint unlock.';
       }
     }
+    final passwordless = await KeyManagerService().isPasswordless();
     if (!mounted) return;
     _setState(() {
       _bioCapability = capability;
+      _passwordlessVault = passwordless;
       _bioEnabled = enabled;
       _bioSubtitleOverride = notice;
     });
@@ -1381,7 +1386,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
       // Hidden outright when the device can never support it (no sensor /
           // no lock screen) — an impossible toggle is worse than none.
-          if (_bioCapability != BiometricCapability.noHardware &&
+          if (!_passwordlessVault &&
+                _bioCapability != BiometricCapability.noHardware &&
               _bioCapability != BiometricCapability.noLockScreen)
             SwitchListTile(
               secondary: ThemeIcon('fingerprint', color: cs.primary),

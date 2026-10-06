@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../services/secure_window_service.dart';
 import 'package:flutter/services.dart';
 
 import '../../config/theme_controller.dart';
@@ -16,7 +17,7 @@ class ViewPhraseScreen extends StatefulWidget {
   State<ViewPhraseScreen> createState() => _ViewPhraseScreenState();
 }
 
-class _ViewPhraseScreenState extends State<ViewPhraseScreen> {
+class _ViewPhraseScreenState extends State<ViewPhraseScreen>with SecureScreenMixin {
   final _passCtrl = TextEditingController();
   bool _obscure = true;
   bool _busy = false;

@@ -1,5 +1,6 @@
 import 'package:bip39/bip39.dart' as bip39;
 import 'package:flutter/material.dart';
+import '../../../services/secure_window_service.dart';
 import 'package:flutter/services.dart';
 
 import '../../../services/key_manager_service.dart';
@@ -28,7 +29,7 @@ class RestorePhraseScreen extends StatefulWidget {
   State<RestorePhraseScreen> createState() => _RestorePhraseScreenState();
 }
 
-class _RestorePhraseScreenState extends State<RestorePhraseScreen> {
+class _RestorePhraseScreenState extends State<RestorePhraseScreen>with SecureScreenMixin {
   static const _slotCount = 12;
 
   late final List<TextEditingController> _slots;

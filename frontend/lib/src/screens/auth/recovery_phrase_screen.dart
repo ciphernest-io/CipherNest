@@ -1,14 +1,14 @@
-import 'dart:math';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../../../services/secure_window_service.dart';
 import 'package:flutter/services.dart';
 
+import '../../../services/billing_service.dart';
 import '../../../services/key_manager_service.dart';
 import '../../config/flags.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
-import '../../utils/wordlists.dart';
-import '../../widgets/bip39_autocomplete_row.dart';
 import '../../widgets/theme_icon.dart';
 import '../subscription/subscription_screen.dart'
     show SubscriptionScreenArgs;
@@ -29,68 +29,60 @@ class RecoveryPhraseScreen extends StatefulWidget {
   State<RecoveryPhraseScreen> createState() => _RecoveryPhraseScreenState();
 }
 
-class _RecoveryPhraseScreenState extends State<RecoveryPhraseScreen> {
-  int _stage = 1;
+class _RecoveryPhraseScreenState extends State<RecoveryPhraseScreen>with SecureScreenMixin {
   late final List<String> _words = widget.mnemonic.trim().split(RegExp(r'\s+'));
+
+  @override
+  void initState() {
+    super.initState();
+    // Warm the RevenueCat offering while the user reads their phrase. The
+    // paywall is the very next screen and used to show a visible gap waiting
+    // on the live prices; by the time it opens the cache is populated.
+    if (kPaywallEnabled) {
+      unawaited(BillingService().offerings());
+    }
+  }
+
+  Future<void> _continue() async {
+    // Wipes the encrypted-mnemonic blob + clears the signup-in-progress flag.
+    // Must run before we hand off to cloud selection.
+    await KeyManagerService().markRecoveryShown();
+    if (!mounted) return;
+    if (kPaywallEnabled) {
+      Navigator.pushReplacementNamed(
+        context,
+        AppRoutes.subscription,
+        arguments: const SubscriptionScreenArgs(
+          nextRoute: AppRoutes.cloudSelection,
+        ),
+      );
+      return;
+    }
+    Navigator.pushReplacementNamed(context, AppRoutes.cloudSelection);
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // Forward-only: the password is committed and the phrase is being
-      // shown, so there is nothing to go back to. Stage 2 returns to
-      // stage 1 only via "Show phrase again".
+      // Forward-only: the password step is committed and the phrase is being
+      // shown, so there is nothing to go back to.
       appBar: AppBar(
         automaticallyImplyLeading: false,
         backgroundColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
         actions: [
-          // F1 escape (stage 1 only): restoring an existing vault stays
-          // reachable until the phrase is proven. Pushed, not replaced, so
-          // the restore screen's back arrow returns here with this vault
-          // intact; the signup vault is abandoned only when the user
-          // actually continues with a phrase over there.
-          if (_stage == 1)
-            TextButton(
-              onPressed: () => Navigator.pushNamed(context, AppRoutes.restore),
-              child: const Text('Have a phrase?'),
-            ),
+          // Restoring an existing vault stays reachable from here. Pushed, not
+          // replaced, so the restore screen's back arrow returns with this
+          // vault intact.
+          TextButton(
+            onPressed: () => Navigator.pushNamed(context, AppRoutes.restore),
+            child: const Text('Have a phrase?'),
+          ),
         ],
       ),
       body: SafeArea(
-        child: _stage == 1
-            ? _DisplayStage(
-                words: _words,
-                onContinue: () => setState(() => _stage = 2),
-              )
-            : _TypeBackStage(
-                words: _words,
-                onSuccess: () async {
-                  // Wipes the encrypted-mnemonic blob + clears the
-                  // signup-in-progress flag. Must run before we hand off
-                  // to cloud selection — the recovery obligation is met.
-                  await KeyManagerService().markRecoveryShown();
-                  if (!context.mounted) return;
-                  // Paywall slot (Aug 31 ruling): right after the phrase
-                  // is proven, before the cloud picker. Skippable; every
-                  // exit lands on the same next step.
-                  if (kPaywallEnabled) {
-                    Navigator.pushReplacementNamed(
-                      context,
-                      AppRoutes.subscription,
-                      arguments: const SubscriptionScreenArgs(
-                        nextRoute: AppRoutes.cloudSelection,
-                      ),
-                    );
-                  } else {
-                    Navigator.pushReplacementNamed(
-                      context,
-                      AppRoutes.cloudSelection,
-                    );
-                  }
-                },
-                onShowAgain: () => setState(() => _stage = 1),
-              ),
+        child: _DisplayStage(words: _words, onContinue: _continue),
       ),
     );
   }
@@ -130,7 +122,10 @@ class _DisplayStage extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'These twelve words are the only key to your vault. Store them somewhere safe and offline. There is no reset: if they are lost, the files cannot be recovered.',
+                  'Write these twelve words down now, on paper, in order. '
+                    'They are the only way back into your vault. Nobody can '
+                    'reset them for you, not CipherNest and not Google. Lose '
+                    'them and every photo in your vault is gone for good.',
                   textAlign: TextAlign.center,
                   style: text.bodyMedium?.copyWith(
                     color: cs.onSurface.withValues(alpha: 0.72),
@@ -180,7 +175,7 @@ class _DisplayStage extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(vertical: 16),
               ),
               child: const Text(
-                "I saved it. Test me.",
+                "I have written it down",
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
               ),
             ),
@@ -324,257 +319,3 @@ class _AdviceRow extends StatelessWidget {
     );
   }
 }
-
-// ---------------------------------------------------------------------------
-// Stage 2 — Type-back challenge
-// ---------------------------------------------------------------------------
-
-class _TypeBackStage extends StatefulWidget {
-  const _TypeBackStage({
-    required this.words,
-    required this.onSuccess,
-    required this.onShowAgain,
-  });
-
-  final List<String> words;
-  final Future<void> Function() onSuccess;
-  final VoidCallback onShowAgain;
-
-  @override
-  State<_TypeBackStage> createState() => _TypeBackStageState();
-}
-
-class _TypeBackStageState extends State<_TypeBackStage> {
-  late final List<int> _positions;
-  late final List<TextEditingController> _controllers;
-  Set<String>? _bipSet;
-
-  @override
-  void initState() {
-    super.initState();
-    final rand = Random.secure();
-    final pool = List<int>.generate(widget.words.length, (i) => i)
-      ..shuffle(rand);
-    _positions = pool.take(3).toList()..sort();
-    _controllers = List.generate(3, (_) => TextEditingController());
-    for (final c in _controllers) {
-      c.addListener(() => setState(() {}));
-    }
-    Bip39Wordlist.loadSet().then((s) {
-      if (!mounted) return;
-      setState(() => _bipSet = s);
-    });
-  }
-
-  @override
-  void dispose() {
-    for (final c in _controllers) {
-      c.dispose();
-    }
-    super.dispose();
-  }
-
-  bool _isMatch(int slot) {
-    final entered = _controllers[slot].text.trim().toLowerCase();
-    final expected = widget.words[_positions[slot]].toLowerCase();
-    return entered == expected;
-  }
-
-  bool _isWrong(int slot) {
-    final entered = _controllers[slot].text.trim().toLowerCase();
-    if (entered.isEmpty) return false;
-    // Wrong once entered word is in the wordlist but not the expected one,
-    // OR once it's long enough that autocomplete can't rescue it.
-    final inList = _bipSet?.contains(entered) ?? false;
-    if (inList && entered != widget.words[_positions[slot]].toLowerCase()) {
-      return true;
-    }
-    return false;
-  }
-
-  bool get _allCorrect =>
-      _isMatch(0) && _isMatch(1) && _isMatch(2);
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Prove you saved it.',
-            textAlign: TextAlign.center,
-            style: text.headlineMedium?.copyWith(fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Type words #${_positions[0] + 1}, #${_positions[1] + 1}, and #${_positions[2] + 1} from your recovery phrase.',
-            textAlign: TextAlign.center,
-            style: text.bodyMedium?.copyWith(
-              color: cs.onSurface.withValues(alpha: 0.72),
-              height: 1.4,
-            ),
-          ),
-          const SizedBox(height: 24),
-          for (int i = 0; i < 3; i++) ...[
-            _TypeBackSlot(
-              position: _positions[i] + 1,
-              controller: _controllers[i],
-              status: _isMatch(i)
-                  ? _SlotStatus.correct
-                  : _isWrong(i)
-                      ? _SlotStatus.wrong
-                      : _SlotStatus.neutral,
-            ),
-            const SizedBox(height: 12),
-          ],
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _allCorrect
-                  ? () => _handleSuccess(context)
-                  : null,
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-              ),
-              child: const Text(
-                'Enter CipherNest.',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextButton(
-            onPressed: widget.onShowAgain,
-            child: Text(
-              'Show phrase again',
-              style: TextStyle(
-                color: cs.onSurface.withValues(alpha: 0.7),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _handleSuccess(BuildContext context) async {
-    // Defensive: shouldn't be reachable with disabled CTA, but if the state
-    // race ever slips through, catch it.
-    if (!_allCorrect) {
-      await showModalBottomSheet<void>(
-        context: context,
-        builder: (ctx) => Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                "See? That's why we made you do this. Go save it properly. We'll wait.",
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(ctx);
-                  widget.onShowAgain();
-                },
-                child: const Text('Show phrase again'),
-              ),
-            ],
-          ),
-        ),
-      );
-      return;
-    }
-    await widget.onSuccess();
-  }
-}
-
-enum _SlotStatus { neutral, correct, wrong }
-
-class _TypeBackSlot extends StatelessWidget {
-  const _TypeBackSlot({
-    required this.position,
-    required this.controller,
-    required this.status,
-  });
-
-  final int position;
-  final TextEditingController controller;
-  final _SlotStatus status;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = ThemeController().tokens;
-    Widget? suffix;
-    Color? borderColor;
-    switch (status) {
-      case _SlotStatus.correct:
-        suffix = Padding(
-          padding: const EdgeInsets.all(12),
-          child: ThemeIcon(
-            'checkCircle',
-            selected: true,
-            size: 20,
-            color: t.success,
-          ),
-        );
-        borderColor = t.success;
-      case _SlotStatus.wrong:
-        suffix = Padding(
-          padding: const EdgeInsets.all(12),
-          child: ThemeIcon(
-            'xCircle',
-            selected: true,
-            size: 20,
-            color: t.danger,
-          ),
-        );
-        borderColor = t.danger;
-      case _SlotStatus.neutral:
-        suffix = null;
-        borderColor = null;
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        TextField(
-          controller: controller,
-          // All three matter, and all three must stay. autocorrect stops the
-          // IME rewriting a word; enableSuggestions stops it LEARNING one.
-          // Without the second, the keyboard's personal dictionary can retain
-          // seed words and later offer them as completions in other apps, and
-          // some keyboards sync that dictionary to their vendor's cloud.
-          // restore_phrase_screen.dart already sets both; this screen did not,
-          // and that asymmetry was MASVS finding F-09.
-          autocorrect: false,
-          enableSuggestions: false,
-          textCapitalization: TextCapitalization.none,
-          decoration: InputDecoration(
-            labelText: 'Word #$position',
-            border: const OutlineInputBorder(),
-            enabledBorder: borderColor != null
-                ? OutlineInputBorder(
-                    borderSide: BorderSide(color: borderColor, width: 1.5),
-                  )
-                : null,
-            focusedBorder: borderColor != null
-                ? OutlineInputBorder(
-                    borderSide: BorderSide(color: borderColor, width: 1.8),
-                  )
-                : null,
-            suffixIcon: suffix,
-          ),
-        ),
-        Bip39AutocompleteRow(controller: controller),
-      ],
-    );
-  }
-}
-

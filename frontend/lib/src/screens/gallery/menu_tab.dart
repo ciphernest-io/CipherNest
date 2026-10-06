@@ -35,7 +35,7 @@ class MenuTab extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 14),
-        const Center(child: CiphernestLogo(fontSize: 34)),
+        const Center(child: CiphernestLogo(fontSize: 34, showPlus: true)),
         const SizedBox(height: 40),
         _tile(
           cs,

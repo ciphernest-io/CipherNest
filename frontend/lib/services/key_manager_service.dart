@@ -72,6 +72,25 @@ class KeyManagerService {
   // --- Secure storage (Keystore-wrapped). ---
   static const _kVaultPub = 'vault_pub_v1';
 
+  // --- Passwordless vault (no app password chosen at setup). ---
+  // The seed and mnemonic live in FlutterSecureStorage, which on Android is
+  // EncryptedSharedPreferences under an AndroidKeyStore master key: hardware
+  // backed, non-exportable, and readable by this app with NO user
+  // authentication. That is exactly the intended posture — "anyone holding the
+  // unlocked phone has the vault" — while a dump of the flash still yields
+  // nothing, because the key cannot leave the Keystore.
+  //
+  // Deliberately NOT the biometric key: that one carries
+  // setUserAuthenticationRequired(true) and dies on enrollment changes, which
+  // would turn "I added a fingerprint" into total vault loss for a user who
+  // never chose a password. This key survives enrollment changes and is
+  // destroyed only by uninstall or clear-data.
+  static const _kSeedNoAuth = 'seed_noauth_v1';
+  static const _kMnemonicNoAuth = 'mnemonic_noauth_v1';
+  // Mode flag. Absent reads as password mode, so every existing install
+  // migrates as a no-op.
+  static const _kPasswordless = 'passwordless_v1';
+
   // --- Password-wrapped seed blob (SharedPreferences). ---
   static const _kSeedBlob = 'seed_blob_v1';
   static const _kSeedNonce = 'seed_blob_nonce_v1';
@@ -153,7 +172,18 @@ class KeyManagerService {
 
   Future<bool> hasAccount() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.containsKey(_kSeedBlob);
+    if (prefs.containsKey(_kSeedBlob)) return true;
+    // A passwordless vault never writes the password-wrapped blob.
+    return prefs.getBool(_kPasswordless) ?? false;
+  }
+
+  /// True when the vault was created with "Continue without password".
+  /// Drives both the unlock route and whether biometric unlock is offered
+  /// at all: there is no password to fall back to, so arming a key that
+  /// dies on enrollment change would be a trap.
+  Future<bool> isPasswordless() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_kPasswordless) ?? false;
   }
 
   // ---------------------------------------------------------------------------
@@ -175,6 +205,71 @@ class KeyManagerService {
     _signupPassword = password;
     return mnemonic;
   }
+
+  /// Generates a new vault with NO app password. The seed is held only by the
+  /// Keystore-backed secure store, so the app can open it unattended. The
+  /// mnemonic is kept beside it so Settings can still reveal the phrase.
+  ///
+  /// The recovery phrase remains the sole root of trust, exactly as in
+  /// password mode. Nothing about restore, a second device or the billing
+  /// identity changes.
+  Future<String> createAccountWithoutPassword() async {
+    final mnemonic = bip39.generateMnemonic();
+    final seed = bip39.mnemonicToSeed(mnemonic); // 64 bytes
+    await _installSeedNoPassword(seed, mnemonic);
+    await _encryptAndSaveMnemonicBlob(mnemonic);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kSignupInProgress, true);
+    await prefs.setBool(_kRecoveryShown, false);
+    return mnemonic;
+  }
+
+  /// Derives the vault keys from [seed] and parks the seed in secure storage
+  /// instead of password-wrapping it. Writes the mode flag LAST, so a crash
+  /// mid-install leaves a vault that still reads as password mode and simply
+  /// has no usable blob, rather than one that claims to be passwordless with
+  /// nothing behind it.
+  Future<void> _installSeedNoPassword(Uint8List seed, String mnemonic) async {
+    final keys = await _deriveKeys(seed);
+    _vaultKeyPair = keys.keyPair;
+    _vaultPublicKey = keys.publicKey;
+    _kLocal = keys.kLocal;
+    _billingIdBytes = keys.billingId;
+
+    await _storage.write(
+      key: _kVaultPub,
+      value: base64Encode(keys.publicKey.bytes),
+    );
+    await _storage.write(key: _kSeedNoAuth, value: base64Encode(seed));
+    await _storage.write(key: _kMnemonicNoAuth, value: mnemonic);
+
+    // Same rule as _installSeed: a fresh vault never inherits a stale wrap.
+    await disableBiometric();
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kPasswordless, true);
+  }
+
+  /// Opens a passwordless vault. Runs the identical derive-and-verify sequence
+  /// as [unlock], so the anti-tamper public-key check applies equally.
+  Future<bool> unlockWithoutPassword() async {
+    final raw = await _storage.read(key: _kSeedNoAuth);
+    if (raw == null) return false;
+    final seed = base64Decode(raw);
+
+    final keys = await _deriveKeys(seed);
+    await _verifyStoredPublicKey(keys.publicKey);
+
+    _vaultKeyPair = keys.keyPair;
+    _vaultPublicKey = keys.publicKey;
+    _kLocal = keys.kLocal;
+    _billingIdBytes = keys.billingId;
+    return true;
+  }
+
+  /// The stored phrase for a passwordless vault. Null in password mode, where
+  /// the password-wrapped blob is used instead.
+  Future<String?> revealMnemonicNoAuth() => _storage.read(key: _kMnemonicNoAuth);
 
   /// The password the user chose at signup, held in memory for the length
   /// of the signup session so that "I already have a phrase" on the phrase
@@ -305,12 +400,15 @@ class KeyManagerService {
     _kLocal = null;
     await disableBiometric();
     await _storage.delete(key: _kVaultPub);
+    await _storage.delete(key: _kSeedNoAuth);
+    await _storage.delete(key: _kMnemonicNoAuth);
     final prefs = await SharedPreferences.getInstance();
     for (final key in [
       _kSeedBlob,
       _kSeedNonce,
       _kSeedMac,
       _kSeedSalt,
+      _kPasswordless,
       _kSignupInProgress,
       _kRecoveryShown,
       _kEncryptedMnemonic,

@@ -32,7 +32,8 @@ class MainActivity : AudioServiceFragmentActivity() {
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
-        applySecureWindow()
+        // Screenshots are allowed by default (2026-10-06 ruling). Only the
+        // screens that display credentials block them, via secureWindow below.
         // Must be running before the task can be swiped away, otherwise there
         // is nothing in the task to receive onTaskRemoved.
         TaskExitService.start(this)
@@ -62,14 +63,34 @@ class MainActivity : AudioServiceFragmentActivity() {
     // installed APK actually is. A debuggable build already offers an
     // attacker far more than a screenshot, so exempting it costs nothing,
     // and a release APK can never carry the flag.
-    private fun applySecureWindow() {
+    /// Screenshots, screen recording and casting are ALLOWED by default.
+    /// Users are trusted with their own gallery, matching what comparable
+    /// vault apps do.
+    ///
+    /// FLAG_SECURE is instead applied per screen, by the screens that display
+    /// a credential: the recovery phrase, "view phrase", phrase entry, and any
+    /// share link or share password. A screenshot of one of those is a
+    /// credential written to DCIM/Screenshots, where photo backup syncs it off
+    /// the device. That is MASVS F-05 and it stays closed for those screens
+    /// regardless of any user setting.
+    ///
+    /// NOTE: one flag governs screenshots, recording, casting AND the recents
+    /// snapshot, so allowing screenshots necessarily lets the task switcher
+    /// show the last screen again. That is the accepted trade of this ruling.
+    ///
+    /// Debuggable builds never carry the flag, so UI review still works.
+    private fun setSecureWindow(on: Boolean) {
         val debuggable =
             (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (debuggable) return
-        window.setFlags(
-            WindowManager.LayoutParams.FLAG_SECURE,
-            WindowManager.LayoutParams.FLAG_SECURE,
-        )
+        if (on) {
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_SECURE,
+                WindowManager.LayoutParams.FLAG_SECURE,
+            )
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -108,6 +129,19 @@ class MainActivity : AudioServiceFragmentActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "ciphernest/secure_window",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "set" -> {
+                    setSecureWindow(call.argument<Boolean>("on") ?: true)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
         val vault = BiometricSeedVault(this)
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,

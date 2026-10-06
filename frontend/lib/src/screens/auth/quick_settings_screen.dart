@@ -47,9 +47,14 @@ class _QuickSettingsScreenState extends State<QuickSettingsScreen> {
 
   Future<void> _probeBiometric() async {
     final capability = await BiometricUnlockService().capability();
+    // A passwordless vault has no password to fall back on, so a wrap that
+    // dies on an enrollment change would be a one-way trip to the recovery
+    // phrase. Do not offer it at all.
+    final passwordless = await KeyManagerService().isPasswordless();
     if (!mounted) return;
     setState(() =>
-        _bioOfferable = capability == BiometricCapability.available);
+        _bioOfferable = capability == BiometricCapability.available &&
+            !passwordless);
   }
 
   /// Same invariant as Settings: the seed exists in memory only during a

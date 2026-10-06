@@ -60,6 +60,33 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
 
   MasterPasswordMode get _mode => widget.args.mode;
 
+  /// Creates the vault with no app password. Offered only when creating a new
+  /// vault, never on the restore path, where the password is what re-wraps a
+  /// recovered seed.
+  ///
+  /// The recovery phrase is still the root of trust and is shown next, exactly
+  /// as in password mode, so restore and second devices are unaffected.
+  Future<void> _continueWithoutPassword() async {
+    if (_isLoading) return;
+    setState(() => _isLoading = true);
+    try {
+      final mnemonic =
+          await KeyManagerService().createAccountWithoutPassword();
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(
+        context,
+        AppRoutes.recoveryPhrase,
+        arguments: mnemonic,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not create the vault.')),
+      );
+    }
+  }
+
   Future<void> _submit() async {
     if (!_isValid || _isLoading) return;
     setState(() => _isLoading = true);
@@ -223,6 +250,45 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
                           ),
                   ),
                 ),
+              if (!isRestore) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  // Outline-only against the filled primary above: same shape
+                  // and weight so it reads as a real choice rather than a
+                  // disabled button, while the filled one stays recommended.
+                  child: OutlinedButton(
+                    onPressed: _isLoading ? null : _continueWithoutPassword,
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      side: BorderSide(
+                        width: 2,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                      foregroundColor:
+                          Theme.of(context).colorScheme.onSurface,
+                    ),
+                    child: const Text(
+                      'Continue without password',
+                      style:
+                          TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'CipherNest will open without asking for anything. Your '
+                  'files stay encrypted in the cloud, but anyone holding your '
+                  'unlocked phone can see them.',
+                  textAlign: TextAlign.center,
+                  style: textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .onSurface
+                        .withValues(alpha: 0.6),
+                  ),
+                ),
+              ],
               ],
             ),
           ),
