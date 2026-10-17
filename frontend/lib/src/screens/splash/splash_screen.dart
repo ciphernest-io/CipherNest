@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../config/post_unlock_route.dart';
 import '../../config/routes.dart';
 import '../../config/theme.dart';
 import '../../../services/key_manager_service.dart';
@@ -77,13 +78,14 @@ class _SplashScreenState extends State<SplashScreen>
     if (!mounted) return;
     // Cross-fade, not the platform slide: the wordmark has just finished
     // settling and a slide reads as a jolt.
+    final target = results[1]! as PostUnlockRoute;
     Navigator.pushReplacement(
       context,
-      AppRoutes.fadeRoute(results[1]! as String),
+      AppRoutes.fadeRoute(target.name, arguments: target.arguments),
     );
   }
 
-  Future<String> _resolveTarget() async {
+  Future<PostUnlockRoute> _resolveTarget() async {
     // Restore the cloud account registry from secure storage.
     await AccountRegistry().load();
 
@@ -94,7 +96,7 @@ class _SplashScreenState extends State<SplashScreen>
     // selection still resumes there after unlock.
     if (await KeyManagerService().hasSignupInProgress()) {
       await KeyManagerService().wipeVault();
-      return AppRoutes.onboarding;
+      return const PostUnlockRoute(AppRoutes.onboarding);
     }
 
     // Read the three signals that gate the initial route.
@@ -116,9 +118,20 @@ class _SplashScreenState extends State<SplashScreen>
     //                                               a full setup before)
     //   !hasKey && !setupCompleted    -> onboarding (never finished setup
     //                                               yet — start over)
-    if (hasKey) return AppRoutes.login;
-    if (setupCompleted) return AppRoutes.restore;
-    return AppRoutes.onboarding;
+    if (hasKey) {
+      // A vault made with "Continue without password" has nothing to ask
+      // for. Open it here, during the splash hold, and land directly. The
+      // login screen used to do this and flashed for a frame on the way.
+      // If the unattended seed is gone (restored backup, OEM wipe) fall
+      // through to login, which explains that the phrase is the way back.
+      if (await KeyManagerService().isPasswordless() &&
+          await KeyManagerService().unlockWithoutPassword()) {
+        return PostUnlockRoute.resolve();
+      }
+      return const PostUnlockRoute(AppRoutes.login);
+    }
+    if (setupCompleted) return const PostUnlockRoute(AppRoutes.restore);
+    return const PostUnlockRoute(AppRoutes.onboarding);
   }
 
   @override

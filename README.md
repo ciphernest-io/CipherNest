@@ -79,7 +79,7 @@ Requirements:
 | Flutter | 3.38.5 stable (Dart SDK ^3.10.4) |
 | JDK | 17 |
 | Android compile SDK | 36 |
-| Minimum supported Android | 7.0, API 24 |
+| Minimum supported Android | 9.0, API 28 |
 | Target SDK | 36 |
 
 A release build requires `frontend/android/key.properties` pointing at a signing keystore and fails without one; it never falls back to the debug key. To build for yourself, create your own keystore and properties file, or build a debug variant. A build signed with your key is not interchangeable with a published artifact.

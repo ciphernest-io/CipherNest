@@ -5,7 +5,6 @@ import 'dart:typed_data';
 import 'package:bip39/bip39.dart' as bip39;
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'biometric_unlock_service.dart';
@@ -196,7 +195,36 @@ class KeyManagerService {
   /// dies on enrollment change would be a trap.
   Future<bool> isPasswordless() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_kPasswordless) ?? false;
+    _passwordlessCached = prefs.getBool(_kPasswordless) ?? false;
+    return _passwordlessCached;
+  }
+
+  /// Last value read or written for the mode flag, for callers that cannot
+  /// await (the auto-lock timer). Warm by the time anything can lock: the
+  /// splash reads the flag before it opens the vault.
+  bool get passwordlessCached => _passwordlessCached;
+  bool _passwordlessCached = false;
+
+  /// Gives a vault created without a password one. The seed and the recovery
+  /// phrase do not change; from the next open the vault asks for [password],
+  /// and fingerprint unlock can be armed against it. The password material
+  /// is written first and the unattended copy removed last, so a crash in
+  /// between leaves a vault that still opens by itself and can simply retry.
+  /// Throws [StateError] when the vault is not in passwordless mode.
+  Future<void> addPassword(String password) async {
+    final raw = await _storage.read(key: _kSeedNoAuth);
+    if (raw == null) throw StateError('Vault is not passwordless.');
+    final seed = base64Decode(raw);
+    try {
+      await _encryptAndSaveSeedBlob(password, seed);
+      final mnemonic = await _storage.read(key: _kMnemonicNoAuth);
+      if (mnemonic != null) {
+        await _encryptAndSaveMnemonicPwBlob(password, mnemonic);
+      }
+      await _clearPasswordlessMaterial();
+    } finally {
+      seed.fillRange(0, seed.length, 0);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -264,6 +292,7 @@ class KeyManagerService {
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kPasswordless, true);
+    _passwordlessCached = true;
   }
 
   /// Opens a passwordless vault. Runs the identical derive-and-verify sequence
@@ -399,6 +428,7 @@ class KeyManagerService {
       await _clearPasswordBlob();
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool(_kPasswordless, true);
+      _passwordlessCached = true;
     }
     // Same rule as _installSeed: a new seed never inherits a biometric wrap.
     await disableBiometric();
@@ -417,6 +447,7 @@ class KeyManagerService {
     await _storage.delete(key: _kMnemonicNoAuth);
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kPasswordless);
+    _passwordlessCached = false;
   }
 
   Future<void> _clearPasswordBlob() async {
@@ -462,6 +493,7 @@ class KeyManagerService {
   /// and prefs cleanup live in VaultResetService.
   Future<void> wipeVault() async {
     discardStagedRecovery();
+    _passwordlessCached = false;
     _signupPassword = null;
     _signupPasswordless = false;
     _vaultKeyPair = null;

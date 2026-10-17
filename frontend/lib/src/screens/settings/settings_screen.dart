@@ -1350,6 +1350,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // the inactivity timer, which playback could defer indefinitely. A
       // privacy product has to let you shut the door before handing someone
       // your phone (MASVS F-32).
+      // A passwordless vault has no lock screen, so neither tile applies:
+      // locking it would only bounce through login and straight back.
+      if (!_passwordlessVault)
       ListTile(
             leading: ThemeIcon('lock', color: cs.primary),
             title: Text('Lock vault now', style: TextStyle(color: cs.onSurface)),
@@ -1359,6 +1362,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             onTap: () => AppLockService().lockNow(),
           ),
+      if (!_passwordlessVault)
       ListTile(
             leading: ThemeIcon('lock', color: cs.primary),
             title: Text('Auto-lock', style: TextStyle(color: cs.onSurface)),
@@ -1377,10 +1381,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: Text('Keep playing after closing',
                 style: TextStyle(color: cs.onSurface)),
             subtitle: Text(
-              _keepPlayingOnClose
-                  ? 'Music survives closing the app and auto-lock. Lock vault '
-                      'now always stops it'
-                  : 'Closing the app or clearing it from recents locks the vault',
+              _passwordlessVault
+                  ? (_keepPlayingOnClose
+                      ? 'Music keeps playing after you close the app'
+                      : 'Closing the app stops the music')
+                  : _keepPlayingOnClose
+                      ? 'Music survives closing the app and auto-lock. Lock '
+                          'vault now always stops it'
+                      : 'Closing the app or clearing it from recents locks '
+                          'the vault',
               style: TextStyle(color: cs.onSurface.withAlpha(140)),
             ),
             value: _keepPlayingOnClose,
@@ -1431,6 +1440,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
               );
             },
           ),
+      if (_passwordlessVault)
+        ListTile(
+          leading: ThemeIcon('password', color: cs.primary),
+          title: Text('Add password', style: TextStyle(color: cs.onSurface)),
+          subtitle: Text(
+              'Ask for a password every time the vault opens',
+              style: TextStyle(color: cs.onSurface.withAlpha(140))),
+          trailing: ThemeIcon('caretRight',
+              size: 16, color: cs.onSurface.withAlpha(140)),
+          onTap: () => Navigator.pushNamed(context, AppRoutes.addPassword)
+              .then((_) => _loadBiometricState()),
+        )
+      else
       ListTile(
             leading: ThemeIcon('password', color: cs.primary),
             title:

@@ -1,15 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../widgets/theme_icon.dart';
-import '../../config/routes.dart';
-import '../cloud_selection/cloud_selection_screen.dart' show CloudSelectionArgs;
-import '../subscription/subscription_screen.dart' show SubscriptionScreenArgs;
-import '../../config/billing.dart';
-import '../../config/flags.dart';
-import '../../../services/app_lock_service.dart';
+import '../../config/post_unlock_route.dart';
 import '../../../services/biometric_unlock_service.dart';
-import '../../../services/cloud/account_registry.dart';
 import '../../../services/key_manager_service.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -164,55 +157,12 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  /// After a successful unlock, decide where to land: home if an active
-  /// cloud account is registered, reconnect if one was ever registered,
-  /// else the signup's cloud selection. (A kill between the password and
-  /// the phrase test never reaches here: the splash wipes that vault and
-  /// restarts onboarding.)
+  /// After a successful unlock, land wherever [PostUnlockRoute] says.
   Future<void> _routeAfterUnlock() async {
-    // Vault is unlocked — start the inactivity countdown.
-    AppLockService().recordActivity();
-
+    final target = await PostUnlockRoute.resolve();
     if (!mounted) return;
-    final hasActive = AccountRegistry().activeAccount != null;
-    // Resume-by-progress. Reconnect is for a vault that HAD a cloud and
-    // lost the session. If no account was EVER registered, this is a signup
-    // interrupted at the cloud picker (e.g. killed while deciding) —
-    // reconnect is a dead end there, resume the signup's cloud selection.
-    // An active account with the quick-settings step unfinished (a lock or
-    // kill on that screen) resumes THERE — the step used to be silently
-    // lost forever.
-    final prefs = await SharedPreferences.getInstance();
-    if (!mounted) return;
-    if (hasActive) {
-      final settled = prefs.getBool('quick_settings_shown_v1') ?? false;
-      Navigator.pushReplacementNamed(
-          context, settled ? AppRoutes.home : AppRoutes.quickSettings);
-      return;
-    }
-    // A kill on the signup paywall comes back to the paywall. Before this,
-    // the step was skipped and the user landed on the provider picker.
-    if (kPaywallEnabled &&
-        !AccountRegistry().hasAnyAccount &&
-        prefs.getString(kPaywallPendingPrefKey) == 'signup') {
-      Navigator.pushReplacementNamed(
-        context,
-        AppRoutes.subscription,
-        arguments: const SubscriptionScreenArgs(
-          nextRoute: AppRoutes.cloudSelection,
-        ),
-      );
-      return;
-    }
-    // Both cases are the provider picker. "Reconnect" was a separate
-    // interstitial that only renamed the same choice.
-    Navigator.pushReplacementNamed(
-      context,
-      AppRoutes.cloudSelection,
-      arguments: AccountRegistry().hasAnyAccount
-          ? CloudSelectionArgs.reconnect
-          : CloudSelectionArgs.signup,
-    );
+    Navigator.pushReplacementNamed(context, target.name,
+        arguments: target.arguments);
   }
 
   @override

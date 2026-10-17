@@ -1,7 +1,10 @@
 /// v21 migration: the guard_verdicts table (persisted LocalContentGuard
-/// results). v20 -> v21 is purely additive — no files/albums/folders
-/// changes — so the "old" snapshot is the current schema minus the new
-/// table. Also covers the verdict accessors' round-trip semantics.
+/// results). Everything from v20 onward is purely additive, so the "old"
+/// snapshot is the current schema minus the v21 table and minus every
+/// column a later migration adds (v22: the audio tag overrides). Add to the
+/// list below when a new additive migration lands, or the upgrade path
+/// re-adds a column that already exists and the test fails for no reason.
+/// Also covers the verdict accessors' round-trip semantics.
 library;
 
 import 'package:flutter_test/flutter_test.dart';
@@ -34,7 +37,7 @@ void main() {
         options: OpenDatabaseOptions(singleInstance: false),
       );
 
-  test('v20 -> v21 upgrade matches fresh create', () async {
+  test('v20 -> current upgrade matches fresh create', () async {
     final fresh = await newDb();
     await DatabaseService.createSchemaForTest(fresh);
     await DatabaseService.createSyncSchemaForTest(fresh);
@@ -45,6 +48,14 @@ void main() {
     await DatabaseService.createSchemaForTest(old);
     await DatabaseService.createSyncSchemaForTest(old);
     await old.execute('DROP TABLE guard_verdicts');
+    for (final column in [
+      'tag_artist',
+      'tag_album',
+      'tag_album_artist',
+      'tag_genre',
+    ]) {
+      await old.execute('ALTER TABLE files DROP COLUMN $column');
+    }
     await DatabaseService.migrateForTest(old, 20);
 
     expect(await _tableExists(old, 'guard_verdicts'), isTrue);

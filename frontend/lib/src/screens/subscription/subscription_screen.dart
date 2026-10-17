@@ -102,6 +102,30 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
 
   bool get _canBuy => !_busy && !_alreadyPlus && _selectedPackage != null;
 
+  /// Plain words for the common Play refusals. The SDK's own descriptions
+  /// are written for developers ("The device or user is not allowed to make
+  /// the purchase") and read as an accusation on a declined card.
+  static String _purchaseErrorText(PlatformException e) {
+    switch (PurchasesErrorHelper.getErrorCode(e)) {
+      case PurchasesErrorCode.purchaseNotAllowedError:
+        return 'Google Play declined the payment. Nothing was charged.';
+      case PurchasesErrorCode.paymentPendingError:
+        return 'Google Play is still processing the payment. Plus turns on '
+            'when it completes.';
+      case PurchasesErrorCode.productAlreadyPurchasedError:
+        return 'This vault already owns Plus. Try Restore purchase.';
+      case PurchasesErrorCode.networkError:
+      case PurchasesErrorCode.offlineConnectionError:
+        return 'No connection to Google Play. Check your network and try '
+            'again.';
+      case PurchasesErrorCode.storeProblemError:
+        return 'Google Play could not complete the purchase. Try again in a '
+            'moment.';
+      default:
+        return e.message ?? 'Could not complete the purchase.';
+    }
+  }
+
   /// Every exit converges here: flow steps advance to [SubscriptionScreenArgs.nextRoute]
   /// (stack cleared, the phrase screens must not survive beneath), upsell
   /// pushes pop, and a bare stack falls back to home.
@@ -152,7 +176,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
           PurchasesErrorCode.purchaseCancelledError) {
         return;
       }
-      Notify.error(e.message ?? 'Could not complete the purchase.');
+      Notify.error(_purchaseErrorText(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -249,8 +273,19 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
       },
       child: Scaffold(
         body: SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
+          // The card takes whatever height the phone has left after the
+          // header and the two text links, so the CTA sits near the bottom
+          // instead of the lower half of the screen sitting empty. The
+          // scroll view only engages when the column genuinely does not fit
+          // (landscape, very large font sizes).
+          child: LayoutBuilder(builder: (context, viewport) {
+            const pad = EdgeInsets.fromLTRB(20, 28, 20, 24);
+            return SingleChildScrollView(
+            padding: pad,
+            child: ConstrainedBox(
+            constraints: BoxConstraints(
+                minHeight: viewport.maxHeight - pad.vertical),
+            child: IntrinsicHeight(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -270,7 +305,8 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                   ),
                 ),
                 const SizedBox(height: 24),
-                Container(
+                Expanded(
+                child: Container(
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
                     color: cardBg,
@@ -320,6 +356,8 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                           offText: muted,
                         ),
                       ],
+                      // Features and the CTA anchor to the card's bottom.
+                      const Spacer(),
                       const SizedBox(height: 20),
                       _Feature('Everything in Free', ink: cardFg, tick: muted),
                       const SizedBox(height: 10),
@@ -328,6 +366,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                       const SizedBox(height: 24),
                       SizedBox(
                         height: 48,
+                        width: double.infinity,
                         // Rectangular, in the card's own ink with the card's
                         // colour for the label: the website's swapped CTA.
                         // No ripple and no overlay; it is a plain fill.
@@ -363,6 +402,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                     ],
                   ),
                 ),
+                ),
                 const SizedBox(height: 16),
                 Center(
                   child: TextButton(
@@ -390,7 +430,10 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                 ),
               ],
             ),
-          ),
+            ),
+            ),
+            );
+          }),
         ),
       ),
     );

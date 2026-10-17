@@ -16,6 +16,7 @@ import '../screens/documents/documents_screen.dart';
 import '../screens/settings/settings_screen.dart';
 import '../screens/settings/key_management_screen.dart';
 import '../screens/settings/recycle_bin_screen.dart';
+import '../screens/settings/add_password_screen.dart';
 import '../screens/settings/change_password_screen.dart';
 import '../screens/settings/view_phrase_screen.dart';
 import '../screens/folders/folder_browser_screen.dart';
@@ -42,6 +43,7 @@ class AppRoutes {
   static const String settings = '/settings'; 
   static const String keyManagement = '/key-management';
   static const String changePassword = '/change-password';
+  static const String addPassword = '/add-password';
   static const String viewPhrase = '/view-phrase';
   static const String albumDetail = '/album-detail';
   static const String audio = '/audio';
@@ -152,6 +154,9 @@ class AppRoutes {
 
       case changePassword:
         return MaterialPageRoute(builder: (_) => const ChangePasswordScreen());
+
+      case addPassword:
+        return MaterialPageRoute(builder: (_) => const AddPasswordScreen());
 
       case viewPhrase:
         return MaterialPageRoute(builder: (_) => const ViewPhraseScreen());

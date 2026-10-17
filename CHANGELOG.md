@@ -12,5 +12,7 @@ First public release.
 - Encrypted metadata index synced across devices through the cloud account.
 - Zero-knowledge share links: the file key stays in the URL fragment and decryption happens in the recipient's browser.
 - Free tier up to 1,000 files. CipherNest Plus (monthly, yearly or lifetime) lifts the upload cap and nothing else.
+- Requires Android 9 or later. Older releases have had no security patches since 2021 and lack the Keystore protections the app relies on.
+- A vault created without a password opens straight from the splash, hides the lock settings that do not apply to it, and can add a password later from Settings.
 - Recovery phrase and share-key screens are excluded from screenshots and the recents snapshot. Other screens are not.
 - Hardening from the OWASP MASVS v2.1.0 self-assessment, published in `docs/MASVS_REPORT.md`: Keystore-backed encrypted preferences for the secure store, clipboard copies of the phrase and share links flagged sensitive so Android 13+ hides them from the clipboard preview, lockout after repeated wrong passwords, connection timeouts on every network call, release builds that refuse to sign with the debug key, per-account data removal on disconnect, hashed deletion tracker, and a share viewer that scrubs the key from the address bar.

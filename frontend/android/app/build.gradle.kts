@@ -38,7 +38,11 @@ android {
         applicationId = "io.ciphernest.vault"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // Android 9 (MASVS F-24, decided 2026-10-18). Android 8.1 and
+        // below had their last security patch in 2021, and API 28 is where
+        // setUnlockedDeviceRequired and StrongBox exist, so the Keystore
+        // path is uniform across every supported device.
+        minSdk = 28
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

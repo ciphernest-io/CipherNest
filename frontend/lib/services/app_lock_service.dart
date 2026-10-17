@@ -124,6 +124,9 @@ class AppLockService {
     if (_timeout.inMinutes <= 0) return; // disabled
     if (!KeyManagerService().isUnlocked) return; // nothing to lock
     if (_onboardingInProgress) return; // no auto-lock mid-signup
+    // A passwordless vault reopens itself, so a lock would only bounce the
+    // user through the login screen and back. Nothing to time out.
+    if (KeyManagerService().passwordlessCached) return;
     _timer = Timer(_timeout, _onTimeout);
   }
 
@@ -133,6 +136,7 @@ class AppLockService {
   void onResumed() {
     if (_timeout.inMinutes <= 0 || !KeyManagerService().isUnlocked) return;
     if (_onboardingInProgress) return;
+    if (KeyManagerService().passwordlessCached) return;
     final elapsed = DateTime.now().difference(_lastActivity);
     if (elapsed >= _timeout && !(_isPlaybackActive?.call() ?? false)) {
       lockNow(stopPlayback: !_keepPlayingOnClose);
@@ -164,6 +168,7 @@ class AppLockService {
     }
     _deferringSince = null;
     if (_onboardingInProgress) return;
+    if (KeyManagerService().passwordlessCached) return;
     lockNow(stopPlayback: !_keepPlayingOnClose);
   }
 

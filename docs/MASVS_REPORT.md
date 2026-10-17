@@ -802,7 +802,7 @@ This is not only a patch-level concern. `setUnlockedDeviceRequired` and StrongBo
 
 **Fix.** Raise `minSdk` to 26, or to 28 to make the Keystore path uniform. Measure the install-base cost first.
 
-**Status: OPEN.**
+**Status: FIXED 2026-10-18.** `minSdk` is 28. Android 8.1 and below had their last security patch in 2021, and API 28 makes the Keystore path uniform: every supported device gets `setUnlockedDeviceRequired` and can offer StrongBox. The pre-28 branches in `BiometricSeedVault.kt` are now unreachable and stay only until the next tidy-up. The install-base cost was accepted by the developer as low single digits of active devices.**
 
 ---
 
@@ -1357,11 +1357,11 @@ Suggested order, by impact per unit of work rather than by severity alone.
 
 Every finding has a stated outcome. Nothing is left as an open question without a decision attached.
 
-Counts at this revision: 22 fixed in code, 4 partly fixed with the remainder listed, 1 reopened and accepted (F-06), 5 accepted with reason, 4 deferred with the plan recorded, 2 that need a product decision, 5 web findings of which 4 are fixed and 1 is resolved by evidence.
+Counts at this revision: 23 fixed in code, 4 partly fixed with the remainder listed, 1 reopened and accepted (F-06), 5 accepted with reason, 6 deferred with the plan recorded, 5 web findings of which 4 are fixed and 1 is resolved by evidence.
 
 ### Fixed in code
 
-F-01, F-02, F-03, F-05, F-08, F-09, F-10, F-12, F-14, F-16, F-18, F-19, F-20, F-21, F-27, F-30, F-31, F-32, F-33, F-34, W-02, W-03, W-04 and W-05. Of these only F-05 and F-34 have been re-verified on the device against the finding they close; the 2026-10-17 batch has unit tests where the behaviour is testable off-device (F-07, F-15) and is otherwise pending the re-verification pass. F-05 is closed for the credential screens only; see its status line. F-14 needs an upgrade-in-place check from the previous build before the public release.
+F-01, F-02, F-03, F-05, F-08, F-09, F-10, F-12, F-14, F-16, F-18, F-19, F-20, F-21, F-24, F-27, F-30, F-31, F-32, F-33, F-34, W-02, W-03, W-04 and W-05. Of these only F-05 and F-34 have been re-verified on the device against the finding they close; the 2026-10-17 batch has unit tests where the behaviour is testable off-device (F-07, F-15) and is otherwise pending the re-verification pass. F-05 is closed for the credential screens only; see its status line. F-14 needs an upgrade-in-place check from the previous build before the public release.
 
 ### Partly fixed, remainder stated
 
@@ -1403,9 +1403,9 @@ All four need a storage-format change and a migration on every device holding th
 | F-23 | Medium | Cloud-side delete and bulk export. A feature, not a fix; it goes in the first feature release and the privacy policy says so until then |
 | F-22 | Medium | Privacy policy and Data Safety answers are re-checked against each shipped build as part of the release checklist. Partly outside this repository |
 
-### Requires a product decision, not a fix
+### Decided by the developer
 
-**F-24, minimum platform version.** Raising `minSdk` from 24 to 26 or 28 would drop devices that no longer receive security patches and would make the Keystore path uniform, at the cost of some install base. That trade is the developer's to make, and it is recorded here rather than silently deferred.
+**F-24, minimum platform version.** Raised to API 28 (Android 9) on 2026-10-18. The trade was the developer's to make and is recorded in the finding.
 
 ### Cannot be verified with the equipment available
 
@@ -1462,3 +1462,4 @@ One deliberate difference is worth recording. Ente declares `ACCESS_MEDIA_LOCATI
 | 2026-10-17 | 1.4 | Revised F-05 and F-06 for the 2026-10-06 ruling that allows screenshots outside the credential screens: F-05 is fixed per screen, F-06 is reopened and accepted. Added the active-shares screen to the secured set. Noted the passwordless vault option against F-13. Re-checked every open finding against the code at `e58ea8c`: none has changed. |
 | 2026-09-23 | 1.3 | Corrected the claim that security headers were on every response. They were on static responses only; thirteen return sites, including all proxy errors, were bare. Fixed in the Worker and re-verified. |
 | 2026-09-22 | 1.2 | Closed the StrongBox item on a Samsung SM-S938B: the app takes the StrongBox branch, corroborated against the platform's own HAL registration. Recorded the `noneEnrolled` UI path, observed on the same device. Corrected the OneDrive browser claim, which was stated as settled and was wrong. Replaced the StrongBox entry in verification debt with the biometric enrolment-change path, which is what actually remains unproven. |
+| 2026-10-18 | 1.6 | F-10: timed clipboard clear removed by product decision, sensitive flag kept. F-24 closed: `minSdk` 28. Manifest INTERNET declaration deduplicated. |
