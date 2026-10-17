@@ -1392,6 +1392,8 @@ The sequence is therefore F-11 first. Once the vault has a key wired into storag
 
 ### Deferred, with the plan recorded
 
+Schedule agreed with the developer on 2026-10-18: **1.0.1**, within two weeks of launch, carries the F-07 remainder, F-04 and the F-15 remainder, all device-local. **1.1** carries F-11, after a decision on what the background sync worker may read while the vault is locked (see the F-11 plan), and the thumbnail cache with it. F-23 goes in the first feature release. F-29 waits for the next format revision. Dart obfuscation (F-17) stays off by decision.
+
 All four need a storage-format change and a migration on every device holding the phrase, so they ship together in the first post-launch release rather than in the last days before it. Each is reachable only by an attacker who already has app-private storage, which is the compromised-device case the threat model excludes.
 
 | Finding | Severity | Plan |

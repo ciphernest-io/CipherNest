@@ -54,6 +54,8 @@ class VaultResetService {
     'plus_is_lifetime_v1',
     'plus_last_verified_at_v1',
     'plus_ever_held_v1',
+    'plus_product_v1',
+    'plus_plan_v1',
     'unlock_failures_v1',
     'unlock_locked_until_v1',
   ];

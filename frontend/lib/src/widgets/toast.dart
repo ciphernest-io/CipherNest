@@ -30,7 +30,7 @@ class ToastPill extends StatelessWidget {
                   child: Container(
                     constraints: const BoxConstraints(maxWidth: 320),
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 9),
+                        horizontal: 16, vertical: 11),
                     decoration: BoxDecoration(
                       color: cs.surfaceContainerHigh,
                       borderRadius: BorderRadius.circular(t.rPill),
@@ -42,20 +42,21 @@ class ToastPill extends StatelessWidget {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        // A cross or a tick, nothing to decode. Messages are
+                        // kept to a few words so the pill stays one line.
                         ThemeIcon(
-                          event.isError ? 'warningCircle' : 'info',
-                          size: 18,
-                          color: event.isError
-                              ? t.danger
-                              : cs.onSurface.withAlpha(160),
+                          event.isError ? 'x' : 'check',
+                          size: 20,
+                          color: event.isError ? t.danger : cs.primary,
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 10),
                         Flexible(
                           child: Text(
                             event.message,
                             style: TextStyle(
                               color: cs.onSurface,
-                              fontSize: 12.5,
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
                         ),

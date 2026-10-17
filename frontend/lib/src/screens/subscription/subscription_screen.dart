@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:purchases_flutter/purchases_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../services/billing_service.dart';
 import '../../../services/notify.dart';
@@ -56,8 +57,32 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   bool _busy = false;
 
   /// Set when RevenueCat reports an active entitlement on an UPSELL open. In a
-  /// flow the screen leaves instead, so this only drives the pop-back copy.
+  /// flow the screen leaves instead. Here the card turns into the plan
+  /// changer: a monthly subscriber is offered Yearly and Lifetime, a yearly
+  /// one Lifetime, and a lifetime owner just sees that Plus is active.
   bool _alreadyPlus = false;
+  PlusPlan _plan = PlusPlan.none;
+
+  /// The plans a subscriber can move UP to. Never shorter than the current
+  /// one: Play would prorate a downgrade and the product has no reason to
+  /// offer one.
+  List<_Term> get _upgradeTerms => switch (_plan) {
+        PlusPlan.monthly => const [_Term.yearly, _Term.lifetime],
+        PlusPlan.yearly => const [_Term.lifetime],
+        _ => const [],
+      };
+
+  bool get _changingPlan => _alreadyPlus && _upgradeTerms.isNotEmpty;
+
+  /// What the switch offers: every term on a fresh sale, only the longer
+  /// ones for a subscriber.
+  List<_Term> get _terms => _alreadyPlus ? _upgradeTerms : _Term.values;
+
+  static String _termLabel(_Term t) => switch (t) {
+        _Term.monthly => 'Monthly',
+        _Term.yearly => 'Yearly',
+        _Term.lifetime => 'Lifetime',
+      };
 
   @override
   void initState() {
@@ -80,11 +105,17 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
         _leave();
         return;
       }
+      final plan = SubscriptionService().plan;
       setState(() {
         _alreadyPlus = true;
-        _loadingPrices = false;
+        _plan = plan;
       });
-      return;
+      if (_upgradeTerms.isEmpty) {
+        setState(() => _loadingPrices = false);
+        return;
+      }
+      // Fall through: the longer plans need live prices like a fresh sale.
+      setState(() => _term = _upgradeTerms.first);
     }
     final offerings = await BillingService().offerings();
     if (!mounted) return;
@@ -100,30 +131,58 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
         _Term.lifetime => _offering?.lifetime,
       };
 
-  bool get _canBuy => !_busy && !_alreadyPlus && _selectedPackage != null;
+  bool get _canBuy =>
+      !_busy && (!_alreadyPlus || _changingPlan) && _selectedPackage != null;
 
   /// Plain words for the common Play refusals. The SDK's own descriptions
   /// are written for developers ("The device or user is not allowed to make
   /// the purchase") and read as an accusation on a declined card.
   static String _purchaseErrorText(PlatformException e) {
-    switch (PurchasesErrorHelper.getErrorCode(e)) {
+    final code = PurchasesErrorHelper.getErrorCode(e);
+    switch (code) {
       case PurchasesErrorCode.purchaseNotAllowedError:
-        return 'Google Play declined the payment. Nothing was charged.';
+        return 'Payment declined. Nothing charged';
       case PurchasesErrorCode.paymentPendingError:
-        return 'Google Play is still processing the payment. Plus turns on '
-            'when it completes.';
+        return 'Payment pending in Google Play';
       case PurchasesErrorCode.productAlreadyPurchasedError:
-        return 'This vault already owns Plus. Try Restore purchase.';
+        return 'Already purchased. Tap Restore';
       case PurchasesErrorCode.networkError:
       case PurchasesErrorCode.offlineConnectionError:
-        return 'No connection to Google Play. Check your network and try '
-            'again.';
+        return 'No connection to Google Play';
       case PurchasesErrorCode.storeProblemError:
-        return 'Google Play could not complete the purchase. Try again in a '
-            'moment.';
+        return 'Google Play error. Try again';
       default:
-        return e.message ?? 'Could not complete the purchase.';
+        return 'Purchase failed (${code.name})';
     }
+  }
+
+  /// After Lifetime is bought on top of a subscription. Play keeps renewing
+  /// the subscription until the user cancels it, and only Play can cancel
+  /// it, so say so and open the page.
+  Future<void> _promptCancelSubscription() async {
+    final plan = _plan == PlusPlan.yearly ? 'yearly' : 'monthly';
+    final open = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Lifetime is yours'),
+        content: Text(
+            'Your $plan subscription still renews until you cancel it in '
+            'Google Play. Cancel it now so you are not charged again.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Later')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Open Google Play')),
+        ],
+      ),
+    );
+    if (open != true) return;
+    final url = await BillingService().managementUrl() ??
+        'https://play.google.com/store/account/subscriptions'
+            '?sku=plus&package=io.ciphernest.vault';
+    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
   }
 
   /// Every exit converges here: flow steps advance to [SubscriptionScreenArgs.nextRoute]
@@ -159,15 +218,37 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     if (pkg == null || _busy) return;
     setState(() => _busy = true);
     try {
-      final ok = await BillingService().purchase(pkg);
+      // Monthly to Yearly is a change WITHIN the Play subscription, deferred
+      // so the paid month runs out first and the yearly charge lands on the
+      // existing renewal date. Lifetime is a separate one-time product, so
+      // it is bought outright and the subscription is cancelled by the user
+      // in Play (prompted below); Play has no "replace a subscription with a
+      // one-time purchase".
+      final oldProduct = SubscriptionService().currentProductId;
+      final deferredSwitch = _changingPlan &&
+          _term == _Term.yearly &&
+          oldProduct != null;
+      final ok = await BillingService().purchase(
+        pkg,
+        change: deferredSwitch
+            ? StoreProductChangeInfo(oldProduct,
+                replacementMode: StoreReplacementMode.deferred)
+            : null,
+      );
       if (!mounted) return;
       if (ok) {
-        Notify.info('Plus is active. Thank you.');
+        if (deferredSwitch) {
+          Notify.info('Yearly starts when this month ends');
+        } else if (_changingPlan) {
+          await _promptCancelSubscription();
+          if (!mounted) return;
+        } else {
+          Notify.info('Plus is active');
+        }
         _leave();
         return;
       }
-      Notify.error('The purchase went through but Plus is not active yet. '
-          'Try Restore purchase in a moment.');
+      Notify.error('Purchased, but not active yet. Try Restore');
     } on PlatformException catch (e) {
       if (!mounted) return;
       // A user backing out of the Play sheet is not a failure and must not be
@@ -192,14 +273,14 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
       final ok = await BillingService().restore();
       if (!mounted) return;
       if (ok) {
-        Notify.info('Plus restored.');
+        Notify.info('Plus restored');
         _leave();
         return;
       }
-      Notify.info('No active purchase found for this recovery phrase.');
+      Notify.info('No purchase found for this phrase');
     } on PlatformException catch (e) {
       if (!mounted) return;
-      Notify.error(e.message ?? 'Could not restore purchases.');
+      Notify.error('Restore failed (${PurchasesErrorHelper.getErrorCode(e).name})');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -211,7 +292,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   String? get _priceString => _selectedPackage?.storeProduct.priceString;
 
   String get _periodLabel {
-    if (_alreadyPlus) return 'You have Plus';
+    if (_alreadyPlus && !_changingPlan) return 'You have Plus';
     if (_priceString == null) {
       return _loadingPrices ? 'Loading prices...' : 'Unavailable right now';
     }
@@ -234,7 +315,15 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     return 'Save ${pct.round()}% vs monthly.';
   }
 
-  String get _note => _alreadyPlus
+  String get _note => _changingPlan
+      ? switch (_term) {
+          _Term.lifetime =>
+            'One payment. Then cancel your subscription in Google Play so '
+                'it stops renewing.',
+          _ => 'Starts when your current month ends. Nothing is charged '
+              'until then.',
+        }
+      : _alreadyPlus
       ? 'Unlimited uploads are unlocked on this recovery phrase.'
       : switch (_term) {
           _Term.monthly => 'Cancel anytime.',
@@ -243,12 +332,27 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
         };
 
   String get _ctaLabel {
-    if (_alreadyPlus) return 'Plus is active';
+    if (_alreadyPlus && !_changingPlan) return 'Plus is active';
     if (_busy) return 'Working...';
     if (_loadingPrices) return 'Loading...';
     if (_selectedPackage == null) return 'Unavailable right now';
+    if (_changingPlan) {
+      return _term == _Term.lifetime ? 'Buy Lifetime' : 'Switch to Yearly';
+    }
     return _term == _Term.lifetime ? 'Buy Lifetime' : 'Start Plus';
   }
+
+  String get _headline => _changingPlan
+      ? 'Change your plan'
+      : _alreadyPlus
+          ? 'You have Plus'
+          : 'Unlock unlimited uploads';
+
+  String get _subhead => _changingPlan
+      ? 'Longer plans cost less over time. Nothing else changes.'
+      : _alreadyPlus
+          ? 'Unlimited uploads on this recovery phrase.'
+          : 'Free up to 1,000 files. Plus only lifts the upload cap.';
 
   @override
   Widget build(BuildContext context) {
@@ -273,24 +377,16 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
       },
       child: Scaffold(
         body: SafeArea(
-          // The card takes whatever height the phone has left after the
-          // header and the two text links, so the CTA sits near the bottom
-          // instead of the lower half of the screen sitting empty. The
-          // scroll view only engages when the column genuinely does not fit
-          // (landscape, very large font sizes).
-          child: LayoutBuilder(builder: (context, viewport) {
-            const pad = EdgeInsets.fromLTRB(20, 28, 20, 24);
-            return SingleChildScrollView(
-            padding: pad,
-            child: ConstrainedBox(
-            constraints: BoxConstraints(
-                minHeight: viewport.maxHeight - pad.vertical),
-            child: IntrinsicHeight(
+          // Fixed composition, not a fill: the card is as tall as its
+          // content and nothing more. The scroll view is only for landscape
+          // and very large font sizes, where the column cannot fit.
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  'Unlock unlimited uploads',
+                  _headline,
                   textAlign: TextAlign.center,
                   style: text.headlineMedium?.copyWith(
                     fontWeight: FontWeight.w700,
@@ -298,16 +394,15 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Free up to 1,000 files. Plus only lifts the upload cap.',
+                  _subhead,
                   textAlign: TextAlign.center,
                   style: text.bodyMedium?.copyWith(
                     color: cs.onSurface.withValues(alpha: 0.64),
                   ),
                 ),
                 const SizedBox(height: 24),
-                Expanded(
-                child: Container(
-                  padding: const EdgeInsets.all(20),
+                Container(
+                  padding: const EdgeInsets.all(24),
                   decoration: BoxDecoration(
                     color: cardBg,
                     borderRadius: BorderRadius.circular(t.rCardLg),
@@ -317,13 +412,13 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Plus',
+                        _changingPlan ? 'Change plan' : 'Plus',
                         style: text.titleLarge?.copyWith(
                           color: cardFg,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                      const SizedBox(height: 18),
+                      const SizedBox(height: 24),
                       _PriceLine(
                         price: _alreadyPlus ? null : _priceString,
                         period: _periodLabel,
@@ -334,7 +429,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                       // Two lines reserved so the card does not jump between
                       // terms, as on the website.
                       ConstrainedBox(
-                        constraints: const BoxConstraints(minHeight: 38),
+                        constraints: const BoxConstraints(minHeight: 48),
                         child: Text(
                           _note,
                           style: text.bodySmall?.copyWith(
@@ -343,35 +438,33 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                           ),
                         ),
                       ),
-                      if (!_alreadyPlus) ...[
-                        const SizedBox(height: 14),
+                      if (_terms.length > 1) ...[
+                        const SizedBox(height: 18),
                         _TermSwitch(
-                          labels: const ['Monthly', 'Yearly', 'Lifetime'],
-                          index: _term.index,
+                          labels: _terms.map(_termLabel).toList(),
+                          index: _terms.indexOf(_term),
                           onChanged: (i) =>
-                              setState(() => _term = _Term.values[i]),
+                              setState(() => _term = _terms[i]),
                           track: cardFg.withValues(alpha: 0.12),
                           thumb: cardFg,
                           onThumb: cardBg,
                           offText: muted,
                         ),
                       ],
-                      // Features and the CTA anchor to the card's bottom.
-                      const Spacer(),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 32),
                       _Feature('Everything in Free', ink: cardFg, tick: muted),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 14),
                       _Feature('Unlimited file uploads',
                           ink: cardFg, tick: muted),
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 36),
                       SizedBox(
-                        height: 48,
+                        height: 52,
                         width: double.infinity,
                         // Rectangular, in the card's own ink with the card's
                         // colour for the label: the website's swapped CTA.
                         // No ripple and no overlay; it is a plain fill.
                         child: FilledButton(
-                          onPressed: _alreadyPlus
+                          onPressed: _alreadyPlus && !_changingPlan
                               ? _leave
                               : (_canBuy ? _purchase : null),
                           style: FilledButton.styleFrom(
@@ -402,13 +495,12 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                     ],
                   ),
                 ),
-                ),
                 const SizedBox(height: 16),
                 Center(
                   child: TextButton(
                     onPressed: _continueFree,
                     child: Text(
-                      'Continue on Free',
+                      _alreadyPlus ? 'Back' : 'Continue on Free',
                       style: TextStyle(
                         color: cs.onSurface.withValues(alpha: 0.72),
                         fontWeight: FontWeight.w500,
@@ -430,10 +522,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                 ),
               ],
             ),
-            ),
-            ),
-            );
-          }),
+          ),
         ),
       ),
     );

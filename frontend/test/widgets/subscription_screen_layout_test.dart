@@ -1,6 +1,6 @@
-/// Paywall layout (2026-10-18 device review of build 5): the Plus card
-/// fills the phone instead of leaving the lower half of the screen empty,
-/// and the CTA spans the card's full inner width.
+/// Paywall layout (2026-10-18 device review of build 5): the Plus card has
+/// room to breathe but is NOT stretched to the screen, and the CTA spans the
+/// card's full inner width.
 library;
 
 import 'package:flutter/material.dart';
@@ -21,21 +21,23 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
   }
 
-  // The card is the one Expanded child of the page column; its title is the
-  // bare word "Plus".
+  // The card is the decorated Container whose title is the bare word "Plus".
   Rect card(WidgetTester tester) => tester.getRect(find
-      .ancestor(of: find.text('Plus'), matching: find.byType(Expanded))
+      .ancestor(of: find.text('Plus'), matching: find.byType(Container))
       .first);
 
-  testWidgets('card reaches the bottom of a phone screen', (tester) async {
+  testWidgets('card is tall but leaves the page unscrolled on a phone',
+      (tester) async {
     const size = Size(360, 780);
     await pump(tester, size);
     final c = card(tester);
-    // Below the card: 16 gap, two text links, 24 bottom padding. Whatever is
-    // left belongs to the card, so its bottom lands in the last fifth.
-    expect(c.bottom, greaterThan(size.height * 0.8),
-        reason: 'card bottom ${c.bottom} of ${size.height}');
-    expect(c.height, greaterThan(size.height * 0.5));
+    expect(c.height, greaterThan(400), reason: 'card height ${c.height}');
+    expect(c.bottom, lessThan(size.height - 80),
+        reason: 'card must not be stretched to the screen (${c.bottom})');
+    // Everything, links included, fits without scrolling.
+    final restore = tester.getRect(find.text('Restore purchase'));
+    expect(restore.bottom, lessThan(size.height));
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('CTA spans the card width', (tester) async {
@@ -44,11 +46,12 @@ void main() {
     // Prices never load in a test (no store), so the CTA reads "Unavailable
     // right now"; it is the only FilledButton on the page either way.
     final cta = tester.getRect(find.byType(FilledButton));
-    // 20 padding + 2 border on each side.
-    expect(cta.width, closeTo(c.width - 44, 1));
+    // 24 padding + 2 border on each side.
+    expect(cta.width, closeTo(c.width - 52, 1));
   });
 
-  testWidgets('still scrolls instead of overflowing when short', (tester) async {
+  testWidgets('still scrolls instead of overflowing when short',
+      (tester) async {
     await pump(tester, const Size(360, 420));
     expect(tester.takeException(), isNull);
     expect(find.text('Restore purchase'), findsOneWidget);

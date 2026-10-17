@@ -181,9 +181,16 @@ class BillingService {
   /// Buys [package]. Returns true when Plus is active afterwards. Throws
   /// [PlatformException] upward so the caller can tell a user cancellation
   /// apart from a real failure.
-  Future<bool> purchase(Package package) async {
+  ///
+  /// [change] names the subscription being replaced and how, for a plan
+  /// change within the same Play subscription (monthly to yearly). Null for
+  /// a fresh purchase and for the lifetime product, which is a separate
+  /// one-time purchase that Play cannot "replace" a subscription with.
+  Future<bool> purchase(Package package,
+      {StoreProductChangeInfo? change}) async {
     if (!await ensureConfigured()) return false;
-    final result = await Purchases.purchase(PurchaseParams.package(package));
+    final result = await Purchases.purchase(
+        PurchaseParams.package(package, productChangeInfo: change));
     await _writeThrough(result.customerInfo);
     return SubscriptionService().isPlus;
   }
@@ -197,6 +204,18 @@ class BillingService {
     final info = await Purchases.restorePurchases();
     await _writeThrough(info);
     return SubscriptionService().isPlus;
+  }
+
+  /// Play's subscription-management page for this user, or null when the SDK
+  /// cannot say. Used after a lifetime purchase, so the subscription it
+  /// supersedes can be cancelled where Play keeps it.
+  Future<String?> managementUrl() async {
+    if (!await ensureConfigured()) return null;
+    try {
+      return (await Purchases.getCustomerInfo()).managementURL;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Forget-vault teardown.
@@ -227,6 +246,8 @@ class BillingService {
     await SubscriptionService().recordVerified(
       expiresAt: expires,
       isLifetime: raw == null,
+      productId: ent.productIdentifier,
+      planId: ent.productPlanIdentifier,
     );
   }
 }

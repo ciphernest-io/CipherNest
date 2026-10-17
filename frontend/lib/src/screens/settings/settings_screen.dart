@@ -1126,9 +1126,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     : 'Upgrade to Plus',
                 style: TextStyle(color: cs.onSurface)),
             subtitle: Text(
-                SubscriptionService().isPlus
-                    ? 'Active. Unlimited uploads.'
-                    : 'Free stores 1,000 files. Plus removes the limit.',
+                switch (SubscriptionService().plan) {
+                  PlusPlan.monthly =>
+                    'Monthly plan. Tap to switch to Yearly or Lifetime.',
+                  PlusPlan.yearly => 'Yearly plan. Tap to switch to Lifetime.',
+                  PlusPlan.lifetime => 'Lifetime. Unlimited uploads.',
+                  PlusPlan.unknown => 'Active. Unlimited uploads.',
+                  PlusPlan.none =>
+                    'Free stores 1,000 files. Plus removes the limit.',
+                },
                 style: TextStyle(color: cs.onSurface.withAlpha(140))),
             trailing: ThemeIcon('caretRight',
                 size: 16, color: cs.onSurface.withAlpha(140)),

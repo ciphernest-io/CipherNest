@@ -41,6 +41,12 @@ class SubscriptionService {
   static const _kIsLifetime = 'plus_is_lifetime_v1';
   static const _kLastVerifiedAt = 'plus_last_verified_at_v1';
   static const _kEverHeld = 'plus_ever_held_v1';
+  // Which product the entitlement rides on, so Settings can offer the longer
+  // plans and the paywall knows what it is replacing. For Play subscriptions
+  // the product is the subscription id ("plus") and the plan is the base
+  // plan id ("monthly" / "annual"); lifetime is a one-time product.
+  static const _kProductId = 'plus_product_v1';
+  static const _kPlanId = 'plus_plan_v1';
 
   /// Epoch ms. Entitlement is valid strictly before this. Null means either
   /// "never had one" or "had one but the expiry is not known yet" — the two
@@ -49,6 +55,8 @@ class SubscriptionService {
   bool _isLifetime = false;
   int? _lastVerifiedAt;
   bool _everHeld = false;
+  String? _productId;
+  String? _planId;
 
   /// True when the most recent verification ATTEMPT failed (network, auth,
   /// SDK not configurable). Session-only on purpose: a fresh process should
@@ -67,6 +75,8 @@ class SubscriptionService {
     _isLifetime = prefs.getBool(_kIsLifetime) ?? false;
     _lastVerifiedAt = prefs.getInt(_kLastVerifiedAt);
     _everHeld = prefs.getBool(_kEverHeld) ?? false;
+    _productId = prefs.getString(_kProductId);
+    _planId = prefs.getString(_kPlanId);
 
     // MIGRATION. An install from before this change holds `true` with no
     // expiry. Reading "no expiry" as "expired" would downgrade a paying
@@ -129,6 +139,28 @@ class SubscriptionService {
 
   int? get lastVerifiedAt => _lastVerifiedAt;
 
+  bool get isLifetime => _isLifetime;
+
+  /// The store product the entitlement rides on ("plus" for the Play
+  /// subscription), which a plan change must name as the product it
+  /// replaces. Null when unknown.
+  String? get currentProductId => _productId;
+
+  /// Which plan the user is on, from the last verified answer.
+  PlusPlan get plan {
+    if (!isPlus) return PlusPlan.none;
+    if (_isLifetime) return PlusPlan.lifetime;
+    final plan = _planId ?? '';
+    final product = _productId ?? '';
+    if (plan == 'monthly' || product.endsWith(':monthly')) {
+      return PlusPlan.monthly;
+    }
+    if (plan == 'annual' || product.endsWith(':annual')) {
+      return PlusPlan.yearly;
+    }
+    return PlusPlan.unknown;
+  }
+
   /// Records a SUCCESSFUL answer from RevenueCat.
   ///
   /// [expiresAt] null together with [isLifetime] false means no entitlement:
@@ -137,12 +169,26 @@ class SubscriptionService {
   Future<void> recordVerified({
     required DateTime? expiresAt,
     required bool isLifetime,
+    String? productId,
+    String? planId,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final now = DateTime.now().millisecondsSinceEpoch;
 
     _isLifetime = isLifetime;
     _expiresAt = expiresAt?.millisecondsSinceEpoch;
+    _productId = productId;
+    _planId = planId;
+    if (productId == null) {
+      await prefs.remove(_kProductId);
+    } else {
+      await prefs.setString(_kProductId, productId);
+    }
+    if (planId == null) {
+      await prefs.remove(_kPlanId);
+    } else {
+      await prefs.setString(_kPlanId, planId);
+    }
     _lastVerifiedAt = now;
     _lastAttemptFailed = false;
     if (isLifetime || expiresAt != null) _everHeld = true;
@@ -196,6 +242,8 @@ class SubscriptionService {
       _kIsLifetime,
       _kLastVerifiedAt,
       _kEverHeld,
+      _kProductId,
+      _kPlanId,
       _legacyEntitlementKey,
     ]) {
       await prefs.remove(k);
@@ -204,6 +252,8 @@ class SubscriptionService {
     _isLifetime = false;
     _lastVerifiedAt = null;
     _everHeld = false;
+    _productId = null;
+    _planId = null;
     _lastAttemptFailed = false;
     _loaded = true;
   }
@@ -254,3 +304,9 @@ class FreeTierGuard {
     return sub.isPlus;
   }
 }
+
+/// Which Plus plan is active. [unknown] is Plus without a recognised plan
+/// (an old cache, or a product renamed on the dashboard): still entitled,
+/// but offered no plan change because the app cannot say what it would be
+/// changing from.
+enum PlusPlan { none, monthly, yearly, lifetime, unknown }
