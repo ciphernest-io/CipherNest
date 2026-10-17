@@ -309,7 +309,7 @@ Combined with F-06, the recents thumbnail is the sharper problem, because it req
 
 **Fix.** Set `FLAG_SECURE` on the window, or per-route for the thirty-four screens. The two phrase screens and the two share screens should be unconditional, with no user toggle.
 
-**Status: FIXED in code on 2026-09-20, not yet re-verified on device.** `FLAG_SECURE` set on the window in `MainActivity.applySecureWindow()`, release builds only.
+**Status: FIXED for the credential screens, 2026-09-20, revised 2026-10-06.** `FLAG_SECURE` was first set on the whole window in `MainActivity.applySecureWindow()`. On 2026-10-06 that was replaced by a per-screen flag: `SecureScreenMixin` in `frontend/lib/services/secure_window_service.dart` raises the flag through `MainActivity.setSecureWindow()` while a screen that shows a credential is open, and lowers it when the screen closes. The recovery phrase screen, the phrase entry screen, the view-phrase screen, the share dialog and the active-shares screen use it, unconditionally. Every other screen, including the gallery and the viewer, can be screenshotted and recorded. That is a product ruling: users are trusted with their own gallery, which is also what comparable vault apps do. Debuggable builds never carry the flag.
 
 ---
 
@@ -335,7 +335,7 @@ The image-cache purge in `lockNow()` happens after resume, which is strictly aft
 
 **Fix.** Add a `paused`/`inactive` handler that covers the UI with an opaque surface and removes it on resume. This is needed in addition to F-05, because `FLAG_SECURE` and a pause cover solve overlapping but not identical problems.
 
-**Status: FIXED in code on 2026-09-20, not yet re-verified on device.** same window flag; Android also refuses to snapshot a secure window for recents.
+**Status: ACCEPTED RISK, revised 2026-10-06.** Fixed on 2026-09-20 by the whole-window flag, then deliberately reopened when screenshots were allowed (see F-05). One flag governs screenshots, recording, casting and the recents snapshot, so the task switcher again shows the last screen, gallery included. The credential screens stay excluded because they still carry the flag. The remaining exposure is decrypted gallery content visible to someone holding the unlocked device and opening the task switcher, which is a person who can open the app anyway. Blanking the recents card on its own, without blocking screenshots, is possible with a pause-time cover and may be revisited.
 
 ---
 
@@ -538,7 +538,7 @@ Sensitive operations were reviewed as a group:
 
 | Operation | Requirement |
 |---|---|
-| View recovery phrase | Master password |
+| View recovery phrase | Master password. In a vault created without a password (option added 2026-10-06), no requirement beyond the device lock |
 | Change password | Current password |
 | Enable biometric unlock | Master password |
 | Disable biometric unlock | None |
@@ -1351,11 +1351,11 @@ Suggested order, by impact per unit of work rather than by severity alone.
 
 Every finding has a stated outcome. Nothing is left as an open question without a decision attached.
 
-Counts at this revision: 14 fixed in code, 21 open, 5 web findings of which 2 are fixed or partly fixed.
+Counts at this revision: 13 fixed in code, 1 reopened and accepted (F-06), 21 open, 5 web findings of which 2 are fixed or partly fixed.
 
 ### Fixed in code
 
-F-01, F-02, F-03, F-05, F-06, F-08, F-09, F-12, F-27, F-30, F-32, F-33, F-34, and W-02. Of these only F-05, F-06 and F-34 have been re-verified on the device against the finding they close. The rest are pending the re-verification pass.
+F-01, F-02, F-03, F-05, F-08, F-09, F-12, F-27, F-30, F-32, F-33, F-34, and W-02. Of these only F-05 and F-34 have been re-verified on the device against the finding they close. The rest are pending the re-verification pass. F-05 is closed for the credential screens only; see its status line.
 
 ### To be fixed, in this order
 
@@ -1387,6 +1387,8 @@ F-01, F-02, F-03, F-05, F-06, F-08, F-09, F-12, F-27, F-30, F-32, F-33, F-34, an
 | W-05 | Info | Add a subresource integrity attribute to the bundled Argon2 module |
 
 ### Accepted, with the reason stated
+
+**F-06, the recents snapshot.** Reopened on 2026-10-06 when screenshots were allowed outside the credential screens. The reasoning is in the finding's status line: one flag covers both behaviours, the credential screens keep it, and the person who can see the task switcher can also open the app.
 
 **The thumbnail cache keeps decrypted imagery across a lock.** Large artifacts are purged; thumbnails are not, because rebuilding them costs a download and a decrypt each and the grid would be slow and data-hungry after every unlock.
 
@@ -1449,5 +1451,6 @@ One deliberate difference is worth recording. Ente declares `ACCESS_MEDIA_LOCATI
 |---|---|---|
 | 2026-09-20 | 1.0 | Initial assessment at commit `c43cd1a`, static and binary only. |
 | 2026-09-20 | 1.1 | Device pass on a Samsung SM-A556E, Android 16, against the installed shipped build. Eight tests complete, three partial, seven not run. Added F-32 and F-33, both found during testing. Corrected the F-05 claim about the Active Shares screen. Corrected F-17, which had reported R8 as disabled. Added evidence markers throughout and a statement that all five passing controls remain unverified at runtime. |
+| 2026-10-17 | 1.4 | Revised F-05 and F-06 for the 2026-10-06 ruling that allows screenshots outside the credential screens: F-05 is fixed per screen, F-06 is reopened and accepted. Added the active-shares screen to the secured set. Noted the passwordless vault option against F-13. Re-checked every open finding against the code at `e58ea8c`: none has changed. |
 | 2026-09-23 | 1.3 | Corrected the claim that security headers were on every response. They were on static responses only; thirteen return sites, including all proxy errors, were bare. Fixed in the Worker and re-verified. |
 | 2026-09-22 | 1.2 | Closed the StrongBox item on a Samsung SM-S938B: the app takes the StrongBox branch, corroborated against the platform's own HAL registration. Recorded the `noneEnrolled` UI path, observed on the same device. Corrected the OneDrive browser claim, which was stated as settled and was wrong. Replaced the StrongBox entry in verification debt with the biometric enrolment-change path, which is what actually remains unproven. |

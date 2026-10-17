@@ -41,7 +41,7 @@ class ShareDialog extends StatefulWidget {
   State<ShareDialog> createState() => _ShareDialogState();
 }
 
-class _ShareDialogState extends State<ShareDialog>with SecureScreenMixin {
+class _ShareDialogState extends State<ShareDialog> with SecureScreenMixin {
   String _expiryLabel = '7 days';
   bool _passwordEnabled = false;
   final _passwordController = TextEditingController();

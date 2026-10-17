@@ -6,6 +6,7 @@ import '../../widgets/theme_icon.dart';
 import '../../models/share_model.dart';
 import '../../../services/notify.dart';
 import '../../../services/share_service.dart';
+import '../../../services/secure_window_service.dart';
 
 class ActiveSharesScreen extends StatefulWidget {
   const ActiveSharesScreen({super.key});
@@ -14,7 +15,8 @@ class ActiveSharesScreen extends StatefulWidget {
   State<ActiveSharesScreen> createState() => _ActiveSharesScreenState();
 }
 
-class _ActiveSharesScreenState extends State<ActiveSharesScreen> {
+class _ActiveSharesScreenState extends State<ActiveSharesScreen>
+    with SecureScreenMixin {
   late Future<List<CnestShare>> _future;
 
   @override

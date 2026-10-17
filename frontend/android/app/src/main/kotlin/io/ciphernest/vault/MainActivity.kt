@@ -40,29 +40,6 @@ class MainActivity : AudioServiceFragmentActivity() {
         relayOAuthReturn(intent)
     }
 
-    // FLAG_SECURE for the whole window, not per screen.
-    //
-    // Set once here because 34 of the app's 49 screens render decrypted
-    // content or secrets, and a per-route approach fails open: any screen
-    // someone forgets is a screen that leaks. One flag cannot be forgotten.
-    //
-    // This closes two MASVS findings at once. F-05: every screen was
-    // screenshot-able, and on a real device the system screenshot key wrote
-    // the twelve-word recovery phrase into DCIM/Screenshots as an ordinary
-    // photo, where photo backup would sync it off the device. F-06: Android
-    // also refuses to snapshot a secure window for the task switcher, so the
-    // recents card stops showing the decrypted gallery grid and whatever
-    // photo was last open.
-    //
-    // Exempted for debuggable builds only, so store screenshots and UI review
-    // are still possible without weakening anything users install.
-    //
-    // Read from ApplicationInfo at runtime rather than BuildConfig. AGP 8 no
-    // longer generates BuildConfig unless the feature is opted into, and the
-    // runtime flag is the better signal regardless: it reflects what this
-    // installed APK actually is. A debuggable build already offers an
-    // attacker far more than a screenshot, so exempting it costs nothing,
-    // and a release APK can never carry the flag.
     /// Screenshots, screen recording and casting are ALLOWED by default.
     /// Users are trusted with their own gallery, matching what comparable
     /// vault apps do.
