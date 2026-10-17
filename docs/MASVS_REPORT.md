@@ -455,7 +455,7 @@ No clipboard write anywhere in the app sets `ClipDescription.EXTRA_IS_SENSITIVE`
 
 **Fix.** Add a platform channel that marks the mnemonic and share-URL clips sensitive, and a timed clear that only fires if the clipboard still holds the value written. Consider removing the phrase copy button entirely; the phrase is meant to be written down.
 
-**Status: FIXED 2026-10-17.** The four phrase and share-link copies go through `SensitiveClipboard` (`frontend/lib/services/sensitive_clipboard.dart`), a channel into `MainActivity.copySensitive()` that sets `ClipDescription.EXTRA_IS_SENSITIVE` on Android 13+ and clears the clipboard 60 seconds later. The copy button on the phrase screens stays. The image copy in the viewer (`Pasteboard.writeImage`) is unchanged: it is the user copying their own picture and the clipboard preview showing it is the expected behaviour.**
+**Status: FIXED 2026-10-17.** The four phrase and share-link copies go through `SensitiveClipboard` (`frontend/lib/services/sensitive_clipboard.dart`), a channel into `MainActivity.copySensitive()` that sets `ClipDescription.EXTRA_IS_SENSITIVE` on Android 13+. There is no timed clear, by product decision on 2026-10-18: a user who copies the phrase intends to paste it into a password manager, possibly much later, and a silent wipe turns that into a lost phrase. Android 13+ expires clipboard contents after an hour on its own; on older Android the copy is the user's explicit act and stays until replaced. The copy button on the phrase screens stays. The image copy in the viewer (`Pasteboard.writeImage`) is unchanged: it is the user copying their own picture and the clipboard preview showing it is the expected behaviour.**
 
 ---
 

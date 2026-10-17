@@ -168,7 +168,7 @@ class _ViewPhraseScreenState extends State<ViewPhraseScreen>with SecureScreenMix
           onPressed: () {
             SensitiveClipboard.copy(words.join(' '));
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text('Phrase copied. It clears itself in a minute')));
+                content: Text('Phrase copied')));
           },
           icon: ThemeIcon('copy', color: cs.primary),
           label: const Text('Copy to clipboard'),

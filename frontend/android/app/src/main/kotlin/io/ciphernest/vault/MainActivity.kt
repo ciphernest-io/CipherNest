@@ -8,8 +8,6 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
 import android.os.PersistableBundle
 import android.os.PowerManager
 import android.provider.Settings
@@ -66,10 +64,10 @@ class MainActivity : AudioServiceFragmentActivity() {
     /// Debuggable builds never carry the flag, so UI review still works.
     /// Copies a secret (recovery phrase, share link) marked sensitive, so
     /// Android 13+ keeps it out of the clipboard preview and OEM clipboard
-    /// history, and wipes it after [clearAfterMs] (MASVS F-10). The wipe is
-    /// unconditional: on Android 10+ an unfocused app cannot read the clip to
-    /// check it is still ours, and leaving a phrase behind is the worse error.
-    private fun copySensitive(text: String, clearAfterMs: Long) {
+    /// history (MASVS F-10). There is deliberately no timed clear: the user
+    /// copied it in order to paste it, and the platform expires clips on its
+    /// own after an hour on Android 13+.
+    private fun copySensitive(text: String) {
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clip = ClipData.newPlainText("", text)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -78,18 +76,6 @@ class MainActivity : AudioServiceFragmentActivity() {
             }
         }
         cm.setPrimaryClip(clip)
-        if (clearAfterMs <= 0) return
-        Handler(Looper.getMainLooper()).postDelayed({
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    cm.clearPrimaryClip()
-                } else {
-                    cm.setPrimaryClip(ClipData.newPlainText("", ""))
-                }
-            } catch (_: Exception) {
-                // Clipboard service unavailable; nothing to do.
-            }
-        }, clearAfterMs)
     }
 
     private fun setSecureWindow(on: Boolean) {
@@ -161,10 +147,7 @@ class MainActivity : AudioServiceFragmentActivity() {
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "copySensitive" -> {
-                    copySensitive(
-                        call.argument<String>("text") ?: "",
-                        (call.argument<Number>("clearAfterMs") ?: 0).toLong(),
-                    )
+                    copySensitive(call.argument<String>("text") ?: "")
                     result.success(null)
                 }
                 else -> result.notImplemented()
