@@ -2,7 +2,7 @@
 
 Zero-knowledge cloud storage for Android. Files are encrypted on your device before they are uploaded, so no server, including ours, can read them.
 
-[Website](https://ciphernest.io) · [Security policy](https://ciphernest.io/security) · [Security self-assessment](docs/MASVS_REPORT.md)
+[Website](https://ciphernest.io) · [Threat model](THREAT_MODEL.md) · [Security policy](SECURITY.md) · [Security self-assessment](docs/MASVS_REPORT.md) · [Changelog](CHANGELOG.md)
 
 ## Why
 
@@ -27,15 +27,17 @@ Stated plainly, because a vault that oversells itself is worse than one that doe
 - **A forgotten recovery phrase.** There is no password reset. That is the cost of the server holding no keys.
 - **Traffic analysis.** File sizes and upload timing are visible to the storage provider.
 
-The full assessment, including every open finding, is in [`docs/MASVS_REPORT.md`](docs/MASVS_REPORT.md). It is published unedited, including the findings that are not yet fixed.
+The full threat model is in [THREAT_MODEL.md](THREAT_MODEL.md). The OWASP MASVS self-assessment, including every open finding and its disposition, is in [`docs/MASVS_REPORT.md`](docs/MASVS_REPORT.md).
 
 ## Status
 
-Pre-release, preparing for a closed track on Google Play. Current version: **1.0.0**.
+Current version: **1.0.0**, on [Google Play](https://play.google.com/store/apps/details?id=io.ciphernest.vault). Release history is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Verifying a release
 
-Each entry on the [Releases](../../releases) page publishes a SHA-256 checksum beside its APK. After downloading, compute the checksum locally and compare it to the published value before installing:
+Every entry on the [Releases](../../releases) page lists the SHA-256 of its APK. Two checks, for two different questions.
+
+**Is the file I downloaded the one that was published?** Compute the checksum and compare it with the one on the release:
 
 ```
 sha256sum ciphernest-<version>.apk
@@ -43,7 +45,17 @@ sha256sum ciphernest-<version>.apk
 
 On Windows: `Get-FileHash ciphernest-<version>.apk -Algorithm SHA256`
 
-If the values do not match, do not install the file, and report it to security@ciphernest.io.
+**Was it signed by us, rather than copied intact from somewhere else?** A checksum next to the file it checks only proves the download was not corrupted. The signing certificate proves who built it, and it does not change between releases. Print it with `apksigner` from the Android SDK build tools:
+
+```
+apksigner verify --print-certs ciphernest-<version>.apk
+```
+
+Compare the `Signer #1 certificate SHA-256 digest` with the fingerprint published at https://ciphernest.io/security. It is published there, on a different host from the download, so that replacing the APK on GitHub is not enough to pass the check.
+
+That fingerprint belongs to the key we sign GitHub releases with. Builds installed from Google Play are re-signed by Play App Signing and carry a different certificate; verify those through Play itself.
+
+If either check fails, do not install the file, and report it to security@ciphernest.io.
 
 ## Building from source
 
@@ -74,12 +86,12 @@ Builds are signed with the upload key only when `frontend/android/key.properties
 
 ## Security
 
-Found a vulnerability? Please do not open a public issue. Email **security@ciphernest.io** or use the Report a vulnerability button on the Security tab. Full policy, including scope, response times, and safe harbour: https://ciphernest.io/security
+Found a vulnerability? Please do not open a public issue. Email **security@ciphernest.io** or use the Report a vulnerability button on the Security tab. Scope, response times and safe harbour are in [SECURITY.md](SECURITY.md). What the app does and does not protect against is in [THREAT_MODEL.md](THREAT_MODEL.md).
 
 ## Contributing
 
-Issues and pull requests are welcome. Contributions are accepted under GPL-3.0-or-later. Please read the security policy before reporting anything that touches cryptography or key handling, and open an issue before starting work on anything that changes a file format, a key derivation, or a stored blob layout: those are frozen once a real vault exists, and changing one orphans user data.
+Issues and pull requests are welcome. Contributions are accepted under GPL-3.0-or-later with a DCO sign-off; see [CONTRIBUTING.md](CONTRIBUTING.md). Open an issue before starting work on anything that changes a file format, a key derivation, or a stored blob layout: those are frozen once a real vault exists, and changing one orphans user data.
 
 ## Licence
 
-GPL-3.0-or-later; the CipherNest name and mark are not covered.
+[GPL-3.0-or-later](LICENSE). The CipherNest name and logo are not covered by the licence. Licences of the packages the app is built on are listed in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
