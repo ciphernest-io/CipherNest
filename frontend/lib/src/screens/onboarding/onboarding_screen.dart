@@ -20,9 +20,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final List<_OnboardingPageData> _pages = const [
     _OnboardingPageData(
       illustration: 'assets/images/illustrations/page_1.svg',
-      title: 'Your cloud is not private.',
+      title: "Your cloud isn't private.",
       description:
-          "Big tech can scan and index everything you store with them. Their promise not to misuse holds until it doesn't: a breach, a subpoena, a change of terms.",
+          "Everything you upload, your provider can read. It says it won't but that only holds until a breach, subpoena, or new policy says otherwise.",
     ),
     _OnboardingPageData(
       illustration: 'assets/images/illustrations/page_2.svg',
@@ -34,11 +34,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       illustration: 'assets/images/illustrations/page_3.svg',
       title: 'Keep your cloud.',
       description:
-          'CipherNest layers over your existing cloud. Nothing to migrate, no second storage bill. Set up in two minutes.',
+          'CipherNest layers over your existing cloud. Nothing to migrate, no second storage bill.\nSet up in two minutes.',
     ),
     _OnboardingPageData(
       illustration: 'assets/images/illustrations/page_4.svg',
-      title: "Don't trust us.\nRead the code.",
+      title: "Don't trust.\nRead the code.",
       description:
           'CipherNest is open source under GPLv3. The entire encryption pipeline is on GitHub, auditable by anyone.',
       anchorTitle: false,

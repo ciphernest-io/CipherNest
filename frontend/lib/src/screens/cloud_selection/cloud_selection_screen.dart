@@ -793,9 +793,9 @@ class _CloudSelectionScreenState extends State<CloudSelectionScreen> {
       case CloudSelectionMode.addAnother:
         return 'Add another account';
       case CloudSelectionMode.restore:
-        return 'Reconnect to your vault';
+        return 'Choose your provider';
       case CloudSelectionMode.reconnect:
-        return 'Reconnect your cloud';
+        return 'Choose your provider';
       case CloudSelectionMode.attach:
         return 'Connect a cloud to your vault';
       case CloudSelectionMode.signup:

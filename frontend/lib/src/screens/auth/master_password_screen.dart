@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../services/cnest_errors.dart';
+import '../../../services/billing_service.dart';
 import '../../../services/key_manager_service.dart';
+import '../../../services/subscription_service.dart';
 import '../../config/flags.dart';
 import '../../config/routes.dart';
 import '../../widgets/friendly_error_sheet.dart';
@@ -60,19 +64,96 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
 
   MasterPasswordMode get _mode => widget.args.mode;
 
-  /// Creates the vault with no app password. Offered only when creating a new
-  /// vault, never on the restore path, where the password is what re-wraps a
-  /// recovered seed.
-  ///
-  /// The recovery phrase is still the root of trust and is shown next, exactly
-  /// as in password mode, so restore and second devices are unaffected.
+  /// Set once this screen has handed off forward, so dispose does not drop
+  /// keys the next screen is about to use.
+  bool _movedForward = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_mode == MasterPasswordMode.restore) _stageEarly();
+  }
+
+  /// Restore stages the recovery the moment the screen opens, not on submit.
+  /// Staging persists nothing, but it derives the keys, and with them the
+  /// seed-derived billing ID. That lets the entitlement check and the
+  /// offering fetch run while the user is still typing: someone who already
+  /// owns Plus skips the paywall outright, and everyone else reaches it with
+  /// the prices already cached.
+  Future<void> _stageEarly() async {
+    final mnemonic = widget.args.mnemonic;
+    if (mnemonic == null || mnemonic.isEmpty) return;
+    try {
+      await KeyManagerService().stageRecovery(mnemonic);
+    } catch (_) {
+      return; // the submit path reports a bad phrase properly
+    }
+    if (!kPaywallEnabled) return;
+    unawaited(BillingService().refreshEntitlement());
+    unawaited(BillingService().offerings());
+  }
+
+  @override
+  void dispose() {
+    // Backing out of a restore must not leave keys for a vault that was
+    // never committed resident in memory.
+    if (_mode == MasterPasswordMode.restore && !_movedForward) {
+      KeyManagerService().discardStagedRecovery();
+    }
+    super.dispose();
+  }
+
+  /// Next step after a restore is staged, with or without a password. A
+  /// phrase that already owns Plus is never shown the paywall. The whole
+  /// stack clears either way; cloud selection runs the ownership canary and
+  /// commits.
+  void _advanceFromRestore() {
+    _movedForward = true;
+    final showPaywall = kPaywallEnabled && !SubscriptionService().isPlus;
+    if (showPaywall) {
+      Navigator.pushNamedAndRemoveUntil(
+        context,
+        AppRoutes.subscription,
+        (route) => false,
+        arguments: const SubscriptionScreenArgs(
+          nextRoute: AppRoutes.cloudSelection,
+          nextArguments: CloudSelectionArgs.restore,
+        ),
+      );
+      return;
+    }
+    Navigator.pushNamedAndRemoveUntil(
+      context,
+      AppRoutes.cloudSelection,
+      (route) => false,
+      arguments: CloudSelectionArgs.restore,
+    );
+  }
+
+  /// No app password, in either mode. On signup the seed goes to the
+  /// Keystore-backed secure store; on restore the staged recovery is
+  /// committed the same way once the canary passes. The recovery phrase is
+  /// still the root of trust, so nothing about a second device changes.
   Future<void> _continueWithoutPassword() async {
     if (_isLoading) return;
     setState(() => _isLoading = true);
     try {
+      if (_mode == MasterPasswordMode.restore) {
+        final mnemonic = widget.args.mnemonic;
+        if (mnemonic == null || mnemonic.isEmpty) {
+          throw StateError(
+            'MasterPasswordScreen entered restore mode without a mnemonic',
+          );
+        }
+        await KeyManagerService().stageRecovery(mnemonic);
+        if (!mounted) return;
+        _advanceFromRestore();
+        return;
+      }
       final mnemonic =
           await KeyManagerService().createAccountWithoutPassword();
       if (!mounted) return;
+      _movedForward = true;
       Navigator.pushReplacementNamed(
         context,
         AppRoutes.recoveryPhrase,
@@ -82,7 +163,7 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
       if (!mounted) return;
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not create the vault.')),
+        const SnackBar(content: Text('Could not continue.')),
       );
     }
   }
@@ -96,6 +177,7 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
           final mnemonic =
               await KeyManagerService().createAccount(_password);
           if (!mounted) return;
+          _movedForward = true;
           Navigator.pushReplacementNamed(
             context,
             AppRoutes.recoveryPhrase,
@@ -110,27 +192,7 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
           }
           await KeyManagerService().stageRecovery(mnemonic, _password);
           if (!mounted) return;
-          // Paywall slot (Aug 31 ruling): this password step follows the
-          // phrase entry, so moving ahead passes the paywall. The whole
-          // stack clears either way.
-          if (kPaywallEnabled) {
-            Navigator.pushNamedAndRemoveUntil(
-              context,
-              AppRoutes.subscription,
-              (route) => false,
-              arguments: const SubscriptionScreenArgs(
-                nextRoute: AppRoutes.cloudSelection,
-                nextArguments: CloudSelectionArgs.restore,
-              ),
-            );
-          } else {
-            Navigator.pushNamedAndRemoveUntil(
-              context,
-              AppRoutes.cloudSelection,
-              (route) => false,
-              arguments: CloudSelectionArgs.restore,
-            );
-          }
+          _advanceFromRestore();
       }
     } catch (e, s) {
       if (!mounted) return;
@@ -166,14 +228,12 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
     final cs = Theme.of(context).colorScheme;
 
     final isRestore = _mode == MasterPasswordMode.restore;
-    final heading = isRestore
-        ? 'Set a new master password'
-        : 'Create your master password';
+    const heading = 'Create your master password';
     final sub = isRestore
-        ? 'A new local password for this device. Next you connect your cloud, and we check the phrase against your vault before anything is saved.'
+        ? 'This password only locks CipherNest on this device. It is not your encryption key; that is the recovery phrase you just entered.'
         : 'This password only locks CipherNest on this device. It is not your encryption key; that is the recovery phrase you get next.';
     final ctaText =
-        isRestore ? 'Restore vault' : 'Continue to recovery phrase';
+        isRestore ? 'Continue to vault' : 'Continue to recovery phrase';
 
     return Scaffold(
       // Title lives in the AppBar so it stays put while the body scrolls
@@ -250,45 +310,18 @@ class _MasterPasswordScreenState extends State<MasterPasswordScreen> {
                           ),
                   ),
                 ),
-              if (!isRestore) ...[
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  // Outline-only against the filled primary above: same shape
-                  // and weight so it reads as a real choice rather than a
-                  // disabled button, while the filled one stays recommended.
-                  child: OutlinedButton(
-                    onPressed: _isLoading ? null : _continueWithoutPassword,
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      side: BorderSide(
-                        width: 2,
-                        color: Theme.of(context).colorScheme.onSurface,
-                      ),
-                      foregroundColor:
-                          Theme.of(context).colorScheme.onSurface,
-                    ),
-                    child: const Text(
-                      'Continue without password',
-                      style:
-                          TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-                    ),
-                  ),
+              const SizedBox(height: 6),
+              TextButton(
+                onPressed: _isLoading ? null : _continueWithoutPassword,
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(context).colorScheme.onSurface,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
-                const SizedBox(height: 10),
-                Text(
-                  'CipherNest will open without asking for anything. Your '
-                  'files stay encrypted in the cloud, but anyone holding your '
-                  'unlocked phone can see them.',
-                  textAlign: TextAlign.center,
-                  style: textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .onSurface
-                        .withValues(alpha: 0.6),
-                  ),
+                child: const Text(
+                  'Continue without password',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
                 ),
-              ],
+              ),
               ],
             ),
           ),

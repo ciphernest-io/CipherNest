@@ -3,6 +3,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../widgets/theme_icon.dart';
 import '../../config/routes.dart';
+import '../cloud_selection/cloud_selection_screen.dart' show CloudSelectionArgs;
+import '../subscription/subscription_screen.dart' show SubscriptionScreenArgs;
+import '../../config/billing.dart';
+import '../../config/flags.dart';
 import '../../../services/app_lock_service.dart';
 import '../../../services/biometric_unlock_service.dart';
 import '../../../services/cloud/account_registry.dart';
@@ -176,18 +180,37 @@ class _LoginScreenState extends State<LoginScreen> {
     // An active account with the quick-settings step unfinished (a lock or
     // kill on that screen) resumes THERE — the step used to be silently
     // lost forever.
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
     if (hasActive) {
-      final prefs = await SharedPreferences.getInstance();
       final settled = prefs.getBool('quick_settings_shown_v1') ?? false;
-      if (!mounted) return;
       Navigator.pushReplacementNamed(
           context, settled ? AppRoutes.home : AppRoutes.quickSettings);
       return;
     }
-    final route = AccountRegistry().hasAnyAccount
-        ? AppRoutes.reconnect
-        : AppRoutes.cloudSelection;
-    Navigator.pushReplacementNamed(context, route);
+    // A kill on the signup paywall comes back to the paywall. Before this,
+    // the step was skipped and the user landed on the provider picker.
+    if (kPaywallEnabled &&
+        !AccountRegistry().hasAnyAccount &&
+        prefs.getString(kPaywallPendingPrefKey) == 'signup') {
+      Navigator.pushReplacementNamed(
+        context,
+        AppRoutes.subscription,
+        arguments: const SubscriptionScreenArgs(
+          nextRoute: AppRoutes.cloudSelection,
+        ),
+      );
+      return;
+    }
+    // Both cases are the provider picker. "Reconnect" was a separate
+    // interstitial that only renamed the same choice.
+    Navigator.pushReplacementNamed(
+      context,
+      AppRoutes.cloudSelection,
+      arguments: AccountRegistry().hasAnyAccount
+          ? CloudSelectionArgs.reconnect
+          : CloudSelectionArgs.signup,
+    );
   }
 
   @override

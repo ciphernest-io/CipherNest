@@ -43,3 +43,9 @@ const Duration kOfflineTolerance = Duration(hours: 48);
 /// unconditionally would mean dozens of requests an hour. Cold start always
 /// verifies, and a resume past expiry verifies regardless of this gap.
 const Duration kResumeMinGap = Duration(minutes: 15);
+
+/// SharedPreferences key marking that the signup paywall was reached and not
+/// yet left. A kill on the paywall used to resume at cloud selection with the
+/// step silently skipped; the login router reads this and returns to the
+/// paywall instead. Cleared by every exit from the paywall.
+const String kPaywallPendingPrefKey = 'paywall_pending_v1';

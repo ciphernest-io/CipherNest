@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../services/secure_window_service.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../services/billing_service.dart';
 import '../../../services/key_manager_service.dart';
+import '../../config/billing.dart';
 import '../../config/flags.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
@@ -49,6 +51,10 @@ class _RecoveryPhraseScreenState extends State<RecoveryPhraseScreen>with SecureS
     await KeyManagerService().markRecoveryShown();
     if (!mounted) return;
     if (kPaywallEnabled) {
+      // Mark the step so a kill on the paywall resumes there, not past it.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(kPaywallPendingPrefKey, 'signup');
+      if (!mounted) return;
       Navigator.pushReplacementNamed(
         context,
         AppRoutes.subscription,
@@ -122,10 +128,9 @@ class _DisplayStage extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Write these twelve words down now, on paper, in order. '
-                    'They are the only way back into your vault. Nobody can '
-                    'reset them for you, not CipherNest and not Google. Lose '
-                    'them and every photo in your vault is gone for good.',
+                  'Save these twelve words down now, in order. They are the '
+                  'key to your vault. Lose them and every file in your vault '
+                  'is gone for good.',
                   textAlign: TextAlign.center,
                   style: text.bodyMedium?.copyWith(
                     color: cs.onSurface.withValues(alpha: 0.72),

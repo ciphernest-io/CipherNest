@@ -10,6 +10,7 @@ import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/account_switcher.dart';
 import '../../widgets/ciphernest_logo.dart';
+import '../cloud_selection/cloud_selection_screen.dart' show CloudSelectionArgs;
 
 import '../../utils/byte_format.dart';
 import '../../../services/app_lock_service.dart';
@@ -128,12 +129,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // Splash + login should have caught this and routed to reconnect,
         // but we defend against race conditions (token invalidated after
         // login success). Route rather than render an inline error.
-        Navigator.pushReplacementNamed(context, AppRoutes.reconnect);
+        Navigator.pushReplacementNamed(context, AppRoutes.cloudSelection,
+            arguments: CloudSelectionArgs.reconnect);
       }
     } catch (e, s) {
       debugPrint('Home _initSession failed: $e\n$s');
       if (!mounted) return;
-      Navigator.pushReplacementNamed(context, AppRoutes.reconnect);
+      Navigator.pushReplacementNamed(context, AppRoutes.cloudSelection,
+            arguments: CloudSelectionArgs.reconnect);
     }
   }
 
@@ -261,7 +264,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: false,
-        title: const CiphernestLogo(fontSize: 22),
+        title: const CiphernestLogo(fontSize: 22, showPlus: true),
         actions: [
           const AccountSwitcher(),
           IconButton(

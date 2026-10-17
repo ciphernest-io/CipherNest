@@ -203,6 +203,7 @@ class KeyManagerService {
     await prefs.setBool(_kSignupInProgress, true);
     await prefs.setBool(_kRecoveryShown, false);
     _signupPassword = password;
+    _signupPasswordless = false;
     return mnemonic;
   }
 
@@ -221,6 +222,7 @@ class KeyManagerService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kSignupInProgress, true);
     await prefs.setBool(_kRecoveryShown, false);
+    _signupPasswordless = true;
     return mnemonic;
   }
 
@@ -242,6 +244,7 @@ class KeyManagerService {
     );
     await _storage.write(key: _kSeedNoAuth, value: base64Encode(seed));
     await _storage.write(key: _kMnemonicNoAuth, value: mnemonic);
+    await _clearPasswordBlob();
 
     // Same rule as _installSeed: a fresh vault never inherits a stale wrap.
     await disableBiometric();
@@ -278,16 +281,28 @@ class KeyManagerService {
   /// logged.
   String? _signupPassword;
 
+  /// True while a signup made with "Continue without password" is in its
+  /// hand-off window. Distinguishes "chose no password" from "the password
+  /// was dropped on lock": only the first may stage a passwordless restore.
+  bool _signupPasswordless = false;
+
   /// True while [createAccount]'s password is still held for reuse.
-  bool get hasSignupPassword => _signupPassword != null;
+  /// True while the signup's choice, a password or none, is still held for
+  /// the "Have a phrase?" hand-off, so a restore can be staged the same way.
+  bool get hasSignupPassword =>
+      _signupPassword != null || _signupPasswordless;
 
   /// Abandons the in-progress signup vault (nothing has been uploaded yet)
   /// and stages [mnemonic] as a recovery candidate under the SAME password
   /// the user just chose. Persists nothing: the caller's cloud canary
   /// decides whether [commitStagedRecovery] runs.
   Future<void> abandonSignupForRestore(String mnemonic) async {
+    // Null for a signup that chose "Continue without password", in which
+    // case the restore is staged passwordless too and the choice carries
+    // over. Null because a lock dropped the password is a different thing
+    // and stays an error, as before.
     final password = _signupPassword;
-    if (password == null) {
+    if (password == null && !_signupPasswordless) {
       throw StateError('No signup password held to reuse.');
     }
     await wipeVault();
@@ -324,7 +339,7 @@ class KeyManagerService {
   /// [commitStagedRecovery]. Persists nothing: no seed blob, no public key,
   /// no biometric teardown. Call [discardStagedRecovery] on any exit that
   /// doesn't commit.
-  Future<void> stageRecovery(String mnemonic, String newPassword) async {
+  Future<void> stageRecovery(String mnemonic, [String? newPassword]) async {
     if (!bip39.validateMnemonic(mnemonic)) {
       throw Exception('Invalid recovery phrase');
     }
@@ -345,18 +360,32 @@ class KeyManagerService {
   /// keys stay resident (already derived from this seed).
   Future<void> commitStagedRecovery() async {
     final seed = _stagedSeed;
-    final password = _stagedPassword;
-    if (seed == null || password == null) {
+    if (seed == null) {
       throw StateError('No staged recovery to commit.');
     }
+    final password = _stagedPassword;
+    final mnemonic = _stagedMnemonic;
     await _storage.write(
       key: _kVaultPub,
       value: base64Encode(_vaultPublicKey!.bytes),
     );
-    await _encryptAndSaveSeedBlob(password, seed);
-    final mnemonic = _stagedMnemonic;
-    if (mnemonic != null) {
-      await _encryptAndSaveMnemonicPwBlob(password, mnemonic);
+    if (password != null) {
+      await _encryptAndSaveSeedBlob(password, seed);
+      if (mnemonic != null) {
+        await _encryptAndSaveMnemonicPwBlob(password, mnemonic);
+      }
+      await _clearPasswordlessMaterial();
+    } else {
+      // "Continue without password" on the restore path: the same posture
+      // as a passwordless signup. The mode flag is written last so a crash
+      // before it leaves a vault that still reads as password mode.
+      await _storage.write(key: _kSeedNoAuth, value: base64Encode(seed));
+      if (mnemonic != null) {
+        await _storage.write(key: _kMnemonicNoAuth, value: mnemonic);
+      }
+      await _clearPasswordBlob();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_kPasswordless, true);
     }
     // Same rule as _installSeed: a new seed never inherits a biometric wrap.
     await disableBiometric();
@@ -365,6 +394,32 @@ class KeyManagerService {
     _stagedPassword = null;
     _stagedMnemonic = null;
     _signupPassword = null;
+    _signupPasswordless = false;
+  }
+
+  /// A vault is in exactly one mode. Installing one mode removes the other's
+  /// material, so a stale blob can never be picked up by the wrong unlock path.
+  Future<void> _clearPasswordlessMaterial() async {
+    await _storage.delete(key: _kSeedNoAuth);
+    await _storage.delete(key: _kMnemonicNoAuth);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kPasswordless);
+  }
+
+  Future<void> _clearPasswordBlob() async {
+    final prefs = await SharedPreferences.getInstance();
+    for (final key in [
+      _kSeedBlob,
+      _kSeedNonce,
+      _kSeedMac,
+      _kSeedSalt,
+      _kMnemonicPwBlob,
+      _kMnemonicPwNonce,
+      _kMnemonicPwMac,
+      _kMnemonicPwSalt,
+    ]) {
+      await prefs.remove(key);
+    }
   }
 
   /// Drops a staged recovery and the in-memory keys derived from it.
@@ -395,6 +450,7 @@ class KeyManagerService {
   Future<void> wipeVault() async {
     discardStagedRecovery();
     _signupPassword = null;
+    _signupPasswordless = false;
     _vaultKeyPair = null;
     _vaultPublicKey = null;
     _kLocal = null;
@@ -437,6 +493,7 @@ class KeyManagerService {
       value: base64Encode(keys.publicKey.bytes),
     );
     await _encryptAndSaveSeedBlob(password, seed);
+    await _clearPasswordlessMaterial();
 
     // A fresh vault must never inherit a biometric wrap: a stale wrap from a
     // previous vault would biometric-unlock the OLD seed and detonate the
@@ -511,6 +568,7 @@ class KeyManagerService {
     _kLocal = null;
     _billingIdBytes = null;
     _signupPassword = null;
+    _signupPasswordless = false;
   }
 
   // ---------------------------------------------------------------------------

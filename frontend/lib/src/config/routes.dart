@@ -55,11 +55,21 @@ class AppRoutes {
   /// hand-off, where a slide reads as a jolt after the brand reveal.
   static Route<dynamic> fadeRoute(String name, {Object? arguments}) {
     final settings = RouteSettings(name: name, arguments: arguments);
-    final source = generateRoute(settings) as MaterialPageRoute<dynamic>;
+    final source = generateRoute(settings);
+    // Already a fade (home): nothing to wrap.
+    if (source is! MaterialPageRoute<dynamic>) return source;
+    return _fade(settings, source.builder);
+  }
+
+  /// A cross-fade route. Home is always entered this way: the first arrival
+  /// after setup, every relaunch after the splash, the return from a lock.
+  /// The platform slide belongs to drilling into a screen; arriving home is
+  /// not that.
+  static Route<dynamic> _fade(RouteSettings settings, WidgetBuilder builder) {
     return PageRouteBuilder<dynamic>(
       settings: settings,
       transitionDuration: const Duration(milliseconds: 450),
-      pageBuilder: (context, _, _) => source.builder(context),
+      pageBuilder: (context, _, _) => builder(context),
       transitionsBuilder: (_, animation, _, child) => FadeTransition(
         opacity: CurvedAnimation(parent: animation, curve: Curves.easeInOut),
         child: child,
@@ -124,7 +134,7 @@ class AppRoutes {
         );
 
       case home:
-        return MaterialPageRoute(builder: (_) => const HomeScreen());
+        return _fade(routeSettings, (_) => const HomeScreen());
 
       case gallery:
         return MaterialPageRoute(builder: (_) => const GalleryScreen());
