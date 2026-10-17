@@ -4,7 +4,7 @@ CipherNest is licensed under GPL-3.0-or-later. It is built on the packages below
 
 The Flutter framework and Dart SDK are BSD-3-Clause, copyright The Flutter Authors and The Dart project authors.
 
-Packages: 230. Generated for CipherNest 1.0.0.
+Packages: 229. Generated for CipherNest 1.0.0.
 
 | Package | Version | Dependency | Licence | Source |
 |---|---|---|---|---|
@@ -85,7 +85,6 @@ Packages: 230. Generated for CipherNest 1.0.0.
 | `flutter_web_auth_2_platform_interface` | 4.1.0 | transitive | MIT | [pub.dev](https://pub.dev/packages/flutter_web_auth_2_platform_interface/versions/4.1.0/license) |
 | `flutter_web_plugins` | 0.0.0 | transitive | BSD-3-Clause | Flutter SDK |
 | `glob` | 2.1.3 | transitive | BSD-3-Clause | [pub.dev](https://pub.dev/packages/glob/versions/2.1.3/license) |
-| `google_fonts` | 6.3.3 | direct | BSD-3-Clause | [pub.dev](https://pub.dev/packages/google_fonts/versions/6.3.3/license) |
 | `google_identity_services_web` | 0.3.3+1 | transitive | BSD-3-Clause | [pub.dev](https://pub.dev/packages/google_identity_services_web/versions/0.3.3+1/license) |
 | `google_sign_in` | 6.3.0 | direct | BSD-3-Clause | [pub.dev](https://pub.dev/packages/google_sign_in/versions/6.3.0/license) |
 | `google_sign_in_android` | 6.2.1 | transitive | BSD-3-Clause | [pub.dev](https://pub.dev/packages/google_sign_in_android/versions/6.2.1/license) |
@@ -938,7 +937,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### camera 0.11.4, camera_android_camerax 0.6.30, camera_avfoundation 0.9.23+2, camera_platform_interface 2.13.1, camera_web 0.3.5+5, cross_file 0.3.5+1, file_selector_linux 0.9.4, file_selector_macos 0.9.5, file_selector_platform_interface 2.7.0, file_selector_windows 0.9.3+5, flutter_plugin_android_lifecycle 2.0.33, google_fonts 6.3.3, image_picker_for_web 3.1.1, image_picker_macos 0.2.2+1, image_picker_platform_interface 2.11.1, path_provider_android 2.2.22, path_provider_foundation 2.5.1, shared_preferences 2.5.4, shared_preferences_android 2.4.18, shared_preferences_foundation 2.5.6, url_launcher_android 6.3.29, url_launcher_ios 6.4.1, url_launcher_linux 3.2.2, url_launcher_macos 3.2.5, url_launcher_web 2.4.3, url_launcher_windows 3.1.5, vector_graphics 1.2.3, vector_graphics_compiler 1.3.0, video_player 2.10.1, video_player_android 2.9.1, video_player_avfoundation 2.9.1, video_player_platform_interface 6.6.0
+### camera 0.11.4, camera_android_camerax 0.6.30, camera_avfoundation 0.9.23+2, camera_platform_interface 2.13.1, camera_web 0.3.5+5, cross_file 0.3.5+1, file_selector_linux 0.9.4, file_selector_macos 0.9.5, file_selector_platform_interface 2.7.0, file_selector_windows 0.9.3+5, flutter_plugin_android_lifecycle 2.0.33, image_picker_for_web 3.1.1, image_picker_macos 0.2.2+1, image_picker_platform_interface 2.11.1, path_provider_android 2.2.22, path_provider_foundation 2.5.1, shared_preferences 2.5.4, shared_preferences_android 2.4.18, shared_preferences_foundation 2.5.6, url_launcher_android 6.3.29, url_launcher_ios 6.4.1, url_launcher_linux 3.2.2, url_launcher_macos 3.2.5, url_launcher_web 2.4.3, url_launcher_windows 3.1.5, vector_graphics 1.2.3, vector_graphics_compiler 1.3.0, video_player 2.10.1, video_player_android 2.9.1, video_player_avfoundation 2.9.1, video_player_platform_interface 6.6.0
 
 ```text
 Copyright 2013 The Flutter Authors

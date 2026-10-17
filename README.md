@@ -82,7 +82,7 @@ Requirements:
 | Minimum supported Android | 7.0, API 24 |
 | Target SDK | 36 |
 
-Builds are signed with the upload key only when `frontend/android/key.properties` is present. Without it, Gradle falls back to the debug signing key, so a build you produce yourself will not carry the release signature and is not interchangeable with a published artifact.
+A release build requires `frontend/android/key.properties` pointing at a signing keystore and fails without one; it never falls back to the debug key. To build for yourself, create your own keystore and properties file, or build a debug variant. A build signed with your key is not interchangeable with a published artifact.
 
 ## Security
 

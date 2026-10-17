@@ -372,7 +372,9 @@ Two of the three call sites also join an unsanitized filename into a path. `File
 
 **Fix.** Delete the materialized plaintext when the share or open future returns. Override the `open_file` provider with an app-level declaration scoped to a single cache subdirectory. Reuse the existing `_sanitizeFilename` at the two vault call sites.
 
-**Status: OPEN.**
+**Status: PARTLY FIXED 2026-10-17.** Both open-file sites now pass the vault filename through `safeFilename()` (`frontend/lib/src/utils/safe_filename.dart`), so a name carrying path separators or `..` cannot escape the cache directory. Still open: the materialized plaintext handed to `open_file` and `share_plus` is not deleted when the handoff returns; it lives in the cache directory and is purged by the lock-time purge, not sooner.
+
+****
 
 ---
 
@@ -453,7 +455,7 @@ No clipboard write anywhere in the app sets `ClipDescription.EXTRA_IS_SENSITIVE`
 
 **Fix.** Add a platform channel that marks the mnemonic and share-URL clips sensitive, and a timed clear that only fires if the clipboard still holds the value written. Consider removing the phrase copy button entirely; the phrase is meant to be written down.
 
-**Status: OPEN.**
+**Status: FIXED 2026-10-17.** The four phrase and share-link copies go through `SensitiveClipboard` (`frontend/lib/services/sensitive_clipboard.dart`), a channel into `MainActivity.copySensitive()` that sets `ClipDescription.EXTRA_IS_SENSITIVE` on Android 13+ and clears the clipboard 60 seconds later. The copy button on the phrase screens stays. The image copy in the viewer (`Pasteboard.writeImage`) is unchanged: it is the user copying their own picture and the clipboard preview showing it is the expected behaviour.**
 
 ---
 
@@ -577,7 +579,7 @@ What is stored this way: the OAuth access and refresh tokens and the account ema
 
 **Fix.** Pass `aOptions: const AndroidOptions(encryptedSharedPreferences: true)` at all three sites, gated behind a one-way migration flag, or wrap the token blob under `k_local` with AES-GCM the way the seed blob already is.
 
-**Status: OPEN.**
+**Status: FIXED 2026-10-17, not yet re-verified on device.** Every `FlutterSecureStorage` is now the shared `kSecureStorage` (`frontend/lib/services/secure_storage_options.dart`) with `AndroidOptions(encryptedSharedPreferences: true)`. The plugin (9.2.4) migrates existing entries on first open and falls back to the previous store if EncryptedSharedPreferences cannot be initialised, so an upgrade cannot lose the seed. Upgrade-in-place from the previous closed-track build must be confirmed on a device before the public release.**
 
 ---
 
@@ -599,7 +601,7 @@ A second offline oracle exists: the recovery mnemonic is also stored permanently
 
 **Fix.** Add a Keystore-wrapped layer around the blob, using a non-authentication-bound key, so extraction alone is insufficient. Raise the password ceiling to at least 64 characters and add an entropy or breach check in place of composition rules. Add persisted exponential backoff on failed unlock attempts.
 
-**Status: OPEN.**
+**Status: PARTLY FIXED 2026-10-17.** The password ceiling is 64 characters. Wrong passwords are counted in preferences; from the fifth failure the next attempt waits 30 seconds, doubling per failure to a 15-minute cap, and the wait survives a kill and relaunch (`KeyManagerService.unlock`, `UnlockThrottledException`, covered by `test/crypto/unlock_throttle_test.dart`). Still open: the seed blob is not additionally wrapped under a Keystore key, so a copy of the preferences file can be attacked off-device at Argon2id cost.**
 
 ---
 
@@ -626,7 +628,7 @@ The assessed artefact is correctly signed. `apksigner verify --print-certs` repo
 
 **Fix.** Throw a `GradleException` instead of falling back. Consider enabling v3 signing to allow future key rotation.
 
-**Status: OPEN, not triggered in this build.**
+**Status: FIXED 2026-10-17.** `build.gradle.kts` throws a `GradleException` when a release build is requested without `key.properties`. There is no debug fallback for release any more; debug variants are unaffected.**
 
 ---
 
@@ -680,7 +682,7 @@ Related: `com.ryanheise.audioservice.AudioService` is exported with no permissio
 
 **Fix.** Default `_showTitlesOnLockScreen` to false. Make it opt-in with a clear explanation.
 
-**Status: OPEN.**
+**Status: FIXED 2026-10-17.** `audio_lockscreen_titles` now defaults to off in `AudioPlayerService`; the media notification shows "CipherNest Audio" until the user turns titles on in Settings.**
 
 ---
 
@@ -696,7 +698,7 @@ A grep for `.timeout(`, `connectionTimeout` and `idleTimeout` across `frontend/l
 
 **Fix.** Wrap every call in a timeout appropriate to its size class, short for metadata operations and longer for transfers, and fail the job cleanly on expiry.
 
-**Status: OPEN.**
+**Status: FIXED 2026-10-17, connect and idle.** `CipherNestHttpOverrides` (`frontend/lib/services/network_timeouts.dart`) is installed as `HttpOverrides.global` in `main()` and again in the background sync isolate, giving every `HttpClient` the app creates, including the ones inside `package:http` and the Drive API client, a 20-second connection timeout and a 30-second idle timeout. A whole-request deadline was deliberately not added: uploads and downloads on a slow link legitimately run for minutes.**
 
 ---
 
@@ -712,7 +714,7 @@ The removed account's filenames, folder names, album names and activity history 
 
 **Fix.** Delete rows by `account_id` from `files`, `folders`, `albums`, `shares` and the sync tables on account removal, and purge that account's cache artefacts. A database file per account would be cleaner.
 
-**Status: OPEN.**
+**Status: FIXED 2026-10-17.** `DatabaseService.deleteAccountData()` removes the account's files, folders, albums and memberships, shares, and sync bookkeeping in one transaction, and the disconnect path in Settings calls it after `AccountRegistry.removeAccount()`, followed by a purge of decrypted large files from the cache.**
 
 ---
 
@@ -734,7 +736,7 @@ Also in plaintext preferences: `backup_enrolled_buckets`, the normalized names o
 
 **Fix.** Store the deletion tracker as `HMAC(k_local, filename|size)`, or move it into the database. Add every vault-derived key to `_vaultPrefs`.
 
-**Status: OPEN.**
+**Status: FIXED 2026-10-17.** The deletion tracker stores `SHA-256("ciphernest/deleted/v1|" + filename + "|" + size)` instead of the plaintext pair, converting old entries in place on first read; the background scan hashes each candidate the same way. The hash is unkeyed because the scan runs with the vault locked and has no k_local, so a guessed filename can still be confirmed against it; the preferences file no longer lists names. Thirteen vault-derived keys were added to `VaultResetService._vaultPrefs`, including the tracker, the entitlement record, the clock skew, the migration counters and the unlock throttle.**
 
 ---
 
@@ -834,7 +836,7 @@ One concrete item: `google_fonts` is declared in `pubspec.yaml:70` but never use
 
 **Fix.** Generate a CycloneDX SBOM as a release artefact. Add `dart pub outdated` and an advisory scan to the release checklist. Remove `google_fonts`, or pin `GoogleFonts.config.allowRuntimeFetching = false` if it is ever used.
 
-**Status: OPEN.**
+**Status: PARTLY FIXED 2026-10-17.** `google_fonts` was removed: it was not referenced anywhere, the fonts are bundled assets. A full third-party licence inventory generated from `pubspec.lock` ships as `THIRD_PARTY_LICENSES.md`. Still open: no SBOM and no automated dependency scan in a release checklist.**
 
 ---
 
@@ -869,7 +871,7 @@ Share revocation has four separate failure paths, all of which leave a publicly 
 
 **Fix.** Write a provisional local row before upload and sweep provisional rows at launch. Keep the row and mark it condemned when a cloud delete fails, retrying on each sync. Add `listPublicShares()` and reconcile the screen against it. Record shares as sync operations so they survive a phrase restore.
 
-**Status: OPEN.**
+**Status: PARTLY FIXED 2026-10-17.** `revokeShare` deletes the local row only after the cloud reports the blob gone (404 counts as gone); on any other failure it keeps the row and throws `ShareRevokeException`, which the Active Shares screen shows, so a share is never listed as revoked while its link still works. Both providers propagate the failure instead of swallowing it. The expired-share sweep skips a failed delete and retries on the next run. Still open: provisional rows before upload, and the vault-reset path, which still forgets live links without revoking them.**
 
 ---
 
@@ -923,7 +925,7 @@ This needs device confirmation before it is treated as settled. See section 7.
 
 **Fix.** Declare `INTERNET` in the application's own manifest.
 
-**Status: OPEN.**
+**Status: FIXED 2026-10-17.** `INTERNET` is declared in the application manifest with a comment saying why.**
 
 ---
 
@@ -1082,8 +1084,12 @@ Fix: implement the remaining SA-WEB-01 steps. The magic-byte check is the highes
 `share.js` reads the key from `location.hash` and never scrubs it. The fragment stays in the address bar, in session history, and in the browsing history of a browser that syncs. Fragments are never sent to a server, so this is a client-side residue issue rather than a transmission one.
 Fix: call `history.replaceState` to strip the fragment immediately after reading it into memory.
 
+**Status: FIXED 2026-10-17.** `share.js` replaces the URL with the bare path once the fragment is in memory. A reload after that shows the missing-key error; that is the intended trade.
+
 **W-05. No subresource integrity on the bundled Argon2 module. Info. ASVS V14.2.**
 `web-viewer/index.html:206` loads `/hash-wasm.min.js` with no `integrity` attribute. The file is self-hosted and same-origin, so the practical risk is low and SRI would mainly defend against a compromise of the asset store itself. Worth adding because it is free.
+
+**Status: FIXED 2026-10-17.** `integrity="sha384-…"` added; the hash must be regenerated whenever `hash-wasm.min.js` is updated.
 
 **Verified clean on the web side.** The viewer escapes all untrusted text before insertion: the filename from the fragment goes through `escapeHtml` at `share.js:408`, as do status and error messages at `:519,524`. The filename is additionally stripped of path separators and capped at 255 characters at `:110`. There is no `localStorage`, `sessionStorage`, `eval`, or `document.write`. The key is never placed in a query string, a POST body or a console log. Decryption happens entirely in `SubtleCrypto`, with Argon2id parameters that match the Dart sender byte for byte (`share.js:39-44`). The `auth.ciphernest.io` host restriction works as designed and was verified live: `/oauth-callback` and the two logo assets return 200, and `/`, `/share.js` and everything else return 404. The OAuth callback page builds its `intent://` URL by concatenating `location.search`, which cannot contain a raw `#`, so the `Intent` parameter block cannot be injected through a crafted callback URL. All four `.well-known` files return 200, and `assetlinks.json` carries both the debug and upload certificate fingerprints.
 
@@ -1351,50 +1357,51 @@ Suggested order, by impact per unit of work rather than by severity alone.
 
 Every finding has a stated outcome. Nothing is left as an open question without a decision attached.
 
-Counts at this revision: 13 fixed in code, 1 reopened and accepted (F-06), 21 open, 5 web findings of which 2 are fixed or partly fixed.
+Counts at this revision: 22 fixed in code, 4 partly fixed with the remainder listed, 1 reopened and accepted (F-06), 5 accepted with reason, 4 deferred with the plan recorded, 2 that need a product decision, 5 web findings of which 4 are fixed and 1 is resolved by evidence.
 
 ### Fixed in code
 
-F-01, F-02, F-03, F-05, F-08, F-09, F-12, F-27, F-30, F-32, F-33, F-34, and W-02. Of these only F-05 and F-34 have been re-verified on the device against the finding they close. The rest are pending the re-verification pass. F-05 is closed for the credential screens only; see its status line.
+F-01, F-02, F-03, F-05, F-08, F-09, F-10, F-12, F-14, F-16, F-18, F-19, F-20, F-21, F-27, F-30, F-31, F-32, F-33, F-34, W-02, W-03, W-04 and W-05. Of these only F-05 and F-34 have been re-verified on the device against the finding they close; the 2026-10-17 batch has unit tests where the behaviour is testable off-device (F-07, F-15) and is otherwise pending the re-verification pass. F-05 is closed for the credential screens only; see its status line. F-14 needs an upgrade-in-place check from the previous build before the public release.
 
-### To be fixed, in this order
+### Partly fixed, remainder stated
 
-| Finding | Severity | Planned resolution |
+| Finding | Done | Remaining |
 |---|---|---|
-| F-04 | High | Stop persisting `share_url`. Keep the share key wrapped, rebuild the link on demand, and mark the clipboard copy sensitive |
-| F-07 | High | Delete the materialized plaintext when the share or open future returns; scope the `open_file` provider to one cache subdirectory; sanitize the filename at the two vault call sites |
-| F-10 | High | Set `EXTRA_IS_SENSITIVE` on the phrase and share-link copies, add a timed clear, and reconsider whether the phrase needs a copy button at all |
-| F-11 | High | Encrypt the metadata database with a key derived from the vault seed and wrapped by the Keystore. Needs a migration, so it goes last of the four |
-
-| F-13 | Medium | Require biometric or password confirmation before creating a share link |
-| F-14 | Medium | Pass `encryptedSharedPreferences: true`, behind a one-way migration flag |
-| F-15 | Medium | Add a Keystore-wrapped layer around the seed blob, raise the password ceiling past 20 characters, add persisted backoff on failed unlocks |
-| F-16 | Medium | Fail the release build instead of falling back to the debug signing key |
-| F-18 | Medium | Default lock-screen track titles and cover art to off |
-| F-19 | Medium | Add timeouts to every network call, sized by operation |
-| F-20 | Medium | Delete rows by `account_id` when an account is removed, and purge that account's cache |
-| F-21 | Medium | Store the deleted-file tracker as an HMAC or move it into the database, and add every vault-derived key to the reset list |
-| F-22 | Medium | Correct the privacy policy wording and answer Data Safety against the shipped build. Partly outside this repository |
-| F-23 | Medium | Add a cloud-side delete and a bulk export |
-| F-28 | Medium | Make share revocation reliable: provisional rows before upload, condemned-row retry, and reconciliation against the cloud |
-| F-29 | Medium | Name log and backup objects by HMAC rather than raw device id, and pad sealed metadata to a fixed length |
-| F-17 | Low | Add `--obfuscate --split-debug-info` to the release command and archive the symbols |
-| F-25 | Low | Integrate Play in-app updates with an immediate flow for security releases |
-| F-26 | Low | Generate a CycloneDX SBOM per release and add a dependency scan to the checklist |
-| F-31 | Low | Declare `INTERNET` in the application's own manifest |
-| W-03 | Low | Resolved 2026-09-22. Origin check and magic-byte validation shipped; rate limit is a dashboard rule; bot challenge declined with reasoning |
-| W-04 | Low | Strip the fragment with `history.replaceState` once the key is read into memory |
-| W-05 | Info | Add a subresource integrity attribute to the bundled Argon2 module |
+| F-07 | Filenames sanitised at both open-file sites | Materialised plaintext is purged at lock time, not when the external app returns |
+| F-15 | 64-character ceiling, persisted doubling lockout after five failures | Keystore wrap around the seed blob |
+| F-26 | Unused `google_fonts` removed; full licence inventory in `THIRD_PARTY_LICENSES.md` | SBOM and a dependency scan in the release checklist |
+| F-28 | Row kept and error shown when the cloud delete fails; sweep retries | Provisional rows before upload; revoke live links on vault reset |
 
 ### Accepted, with the reason stated
 
 **F-06, the recents snapshot.** Reopened on 2026-10-06 when screenshots were allowed outside the credential screens. The reasoning is in the finding's status line: one flag covers both behaviours, the credential screens keep it, and the person who can see the task switcher can also open the app.
+
+**F-13, no re-authentication before creating a share.** Sharing happens from inside an unlocked vault, behind the app lock. Putting a password or biometric prompt in front of every share link adds friction to the one feature the product exists to make easy, for an attacker who already holds the unlocked phone and could read the file directly. If the app lock is set to a short timeout the exposure is bounded by it. Reconsidered if a cheaper confirmation (a single tap on an explanatory sheet) proves acceptable to users.
+
+**F-17, no Dart obfuscation.** The source is published under GPL-3.0, so obfuscation hides nothing an attacker cannot read on GitHub. It would cost readable crash reports and a symbol-archive step on every release. Not worth it for this product.
+
+**F-25, no forced-update mechanism.** Play's own update channel is relied on for v1. An in-app immediate-update flow is planned for the first security release that needs it.
+
+**F-29, object names carry a device identifier and approximate name length.** Renaming the sync log and backup objects changes a frozen format and needs a migration on every device holding the phrase. Recorded for the next format revision; the identifier is random per device and reveals nothing about the user.
 
 **The thumbnail cache keeps decrypted imagery across a lock.** Large artifacts are purged; thumbnails are not, because rebuilding them costs a download and a decrypt each and the grid would be slow and data-hungry after every unlock.
 
 Encrypting them was considered and rejected for now, on priority rather than principle. The exposure needs an attacker who has the device, has the vault locked, and can extract app-private data with root or forensic tooling. No other application on the device can read it. That is precisely the attacker F-11 already hands the entire metadata database to, including every filename, local path, folder and album name, content hash, and a complete timeline of user activity. Encrypting thumbnails while that database sits in plaintext would be securing the smaller of two doors into the same room.
 
 The sequence is therefore F-11 first. Once the vault has a key wired into storage, extending it to the thumbnail cache is cheap, and it can be reconsidered then.
+
+### Deferred, with the plan recorded
+
+All four need a storage-format change and a migration on every device holding the phrase, so they ship together in the first post-launch release rather than in the last days before it. Each is reachable only by an attacker who already has app-private storage, which is the compromised-device case the threat model excludes.
+
+| Finding | Severity | Plan |
+|---|---|---|
+| F-11 | High | Encrypt the metadata database with a key derived from the vault seed and wrapped by the Keystore. Migration: open plain, copy into the encrypted file, delete plain |
+| F-04 | High | Stop persisting `share_url`. Keep the share key wrapped under k_local, rebuild the link on demand |
+| F-07 remainder | High | Delete the materialised plaintext when the open or share future returns; scope the `open_file` provider to one cache subdirectory |
+| F-15 remainder | Medium | Keystore-wrapped layer around the seed blob |
+| F-23 | Medium | Cloud-side delete and bulk export. A feature, not a fix; it goes in the first feature release and the privacy policy says so until then |
+| F-22 | Medium | Privacy policy and Data Safety answers are re-checked against each shipped build as part of the release checklist. Partly outside this repository |
 
 ### Requires a product decision, not a fix
 
@@ -1451,6 +1458,7 @@ One deliberate difference is worth recording. Ente declares `ACCESS_MEDIA_LOCATI
 |---|---|---|
 | 2026-09-20 | 1.0 | Initial assessment at commit `c43cd1a`, static and binary only. |
 | 2026-09-20 | 1.1 | Device pass on a Samsung SM-A556E, Android 16, against the installed shipped build. Eight tests complete, three partial, seven not run. Added F-32 and F-33, both found during testing. Corrected the F-05 claim about the Active Shares screen. Corrected F-17, which had reported R8 as disabled. Added evidence markers throughout and a statement that all five passing controls remain unverified at runtime. |
+| 2026-10-17 | 1.5 | Fixed F-10, F-14, F-16, F-18, F-19, F-20, F-21, F-31, W-04 and W-05 in code; partly fixed F-07, F-15, F-26 and F-28 with the remainder stated. Rewrote section 11: every finding is now fixed, partly fixed with a remainder, accepted with a reason, deferred with a plan, or a recorded product decision. Nothing is "to be fixed" without a date class. |
 | 2026-10-17 | 1.4 | Revised F-05 and F-06 for the 2026-10-06 ruling that allows screenshots outside the credential screens: F-05 is fixed per screen, F-06 is reopened and accepted. Added the active-shares screen to the secured set. Noted the passwordless vault option against F-13. Re-checked every open finding against the code at `e58ea8c`: none has changed. |
 | 2026-09-23 | 1.3 | Corrected the claim that security headers were on every response. They were on static responses only; thirteen return sites, including all proxy errors, were bare. Fixed in the Worker and re-verified. |
 | 2026-09-22 | 1.2 | Closed the StrongBox item on a Samsung SM-S938B: the app takes the StrongBox branch, corroborated against the platform's own HAL registration. Recorded the `noneEnrolled` UI path, observed on the same device. Corrected the OneDrive browser claim, which was stated as settled and was wrong. Replaced the StrongBox entry in verification debt with the biometric enrolment-change path, which is what actually remains unproven. |
