@@ -28,6 +28,7 @@ import '../../widgets/file_actions.dart';
 import '../../widgets/friendly_error_sheet.dart';
 import '../share/share_dialog.dart';
 import 'document_viewer_screen.dart';
+import '../../utils/safe_filename.dart';
 
 /// The two Adobe-Scan-style zoom states: a dense list of small-thumbnail rows,
 /// and roomy cards with a large page preview. Persisted device-wide.
@@ -177,7 +178,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
         return;
       }
       final dir = await getTemporaryDirectory();
-      final tempFile = File('${dir.path}/${file.filename}');
+      final tempFile = File('${dir.path}/${safeFilename(file.filename)}');
       if (await tempFile.exists()) {
         await OpenFile.open(tempFile.path);
         return;

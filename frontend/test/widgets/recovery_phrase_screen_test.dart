@@ -1,4 +1,5 @@
 /// The phrase screen must lay out without throwing on every phone class.
+/// (The type-back stage was removed on 2026-10-06; only one stage remains.)
 /// It once shipped blank: a LayoutBuilder (then a shrink-wrapped GridView)
 /// sat inside an IntrinsicHeight, and neither can report intrinsic sizes.
 library;
@@ -27,23 +28,13 @@ void main() {
   }
 
   for (final size in const [Size(411, 891), Size(360, 640), Size(320, 533)]) {
-    testWidgets('stage 1 renders at ${size.width}x${size.height}',
+    testWidgets('renders at ${size.width}x${size.height}',
         (tester) async {
       await pumpAt(tester, size);
       expect(tester.takeException(), isNull);
       expect(find.text('Your recovery phrase'), findsOneWidget);
-      expect(find.text('I saved it. Test me.'), findsOneWidget);
+      expect(find.text('I have written it down'), findsOneWidget);
       expect(find.text('Have a phrase?'), findsOneWidget);
     });
   }
-
-  testWidgets('stage 2 centers its copy and drops the escape',
-      (tester) async {
-    await pumpAt(tester, const Size(411, 891));
-    await tester.tap(find.text('I saved it. Test me.'));
-    await tester.pump();
-    expect(tester.takeException(), isNull);
-    expect(find.text('Prove you saved it.'), findsOneWidget);
-    expect(find.text('Have a phrase?'), findsNothing);
-  });
 }

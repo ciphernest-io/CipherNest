@@ -26,6 +26,8 @@ import 'sync/sync_coordinator.dart';
 import 'sync_service.dart';
 import 'system_folders.dart';
 import 'media_origin.dart';
+import 'dart:convert';
+import 'package:cryptography/cryptography.dart';
 
 /// One gallery asset inside the scan window, tagged with whether the vault
 /// already has it. Duplicates still ride through [AutoSyncService.runFullSync]
@@ -394,7 +396,7 @@ class AutoSyncService {
       final duplicate = index.uploadedKeys.contains(key) ||
           index.inFlightKeys.contains(key) ||
           index.knownAssetIds.contains(asset.id) ||
-          deletedKeys.contains(key) ||
+          deletedKeys.contains(await _deletedKey(name, size)) ||
           !seenKeys.add(key);
 
       entries.add(ScannedAsset(
@@ -803,21 +805,56 @@ class AutoSyncService {
     }
   }
 
+  static const String _kDeletedKeysPref = 'auto_sync_deleted_keys';
+
+  /// The tracker entry for a deleted file. A SHA-256 over a fixed label and
+  /// `filename|size`, so the preferences file no longer lists the names and
+  /// exact sizes of everything the user has deleted (MASVS F-21). Unkeyed on
+  /// purpose: the background scan runs with the vault locked and has no
+  /// k_local, and the comparison only needs equality. A guessed filename can
+  /// still be confirmed against it; that is the residual exposure.
+  static Future<String> _deletedKey(String filename, int sizeBytes) async {
+    final digest = await Sha256()
+        .hash(utf8.encode('ciphernest/deleted/v1|$filename|$sizeBytes'));
+    return digest.bytes
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+  }
+
   /// Records a file as intentionally deleted so auto-sync won't re-upload it
   /// from the device gallery.
   static Future<void> trackDeletion(String filename, int sizeBytes) async {
-    final prefs = await SharedPreferences.getInstance();
-    final keys = prefs.getStringList('auto_sync_deleted_keys') ?? [];
-    final key = '$filename|$sizeBytes';
-    if (!keys.contains(key)) {
-      keys.add(key);
-      await prefs.setStringList('auto_sync_deleted_keys', keys);
+    final keys = await _getDeletedKeys();
+    final key = await _deletedKey(filename, sizeBytes);
+    if (keys.add(key)) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_kDeletedKeysPref, keys.toList());
     }
   }
 
+  /// Reads the tracker, converting any pre-hash plaintext entries
+  /// (`filename|size`) in place the first time they are seen.
   static Future<Set<String>> _getDeletedKeys() async {
     final prefs = await SharedPreferences.getInstance();
-    return (prefs.getStringList('auto_sync_deleted_keys') ?? []).toSet();
+    final stored = prefs.getStringList(_kDeletedKeysPref) ?? [];
+    final out = <String>{};
+    var migrated = false;
+    for (final entry in stored) {
+      final bar = entry.lastIndexOf('|');
+      if (bar < 0) {
+        out.add(entry);
+        continue;
+      }
+      final size = int.tryParse(entry.substring(bar + 1));
+      if (size == null) {
+        out.add(entry);
+        continue;
+      }
+      out.add(await _deletedKey(entry.substring(0, bar), size));
+      migrated = true;
+    }
+    if (migrated) await prefs.setStringList(_kDeletedKeysPref, out.toList());
+    return out;
   }
 }
 

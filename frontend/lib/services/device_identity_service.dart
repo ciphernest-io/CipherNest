@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:uuid/uuid.dart';
+import 'secure_storage_options.dart';
 
 /// Stable per-install device identity for multi-device coordination.
 ///
@@ -17,7 +18,7 @@ class DeviceIdentityService {
 
   static const String _kDeviceId = 'device_id_v1';
 
-  final _storage = const FlutterSecureStorage();
+  final _storage = kSecureStorage;
   String? _cached;
 
   /// This install's identity. Mints and persists a UUID on first call.

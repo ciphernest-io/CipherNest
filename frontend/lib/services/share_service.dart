@@ -211,21 +211,29 @@ class ShareService {
     return DatabaseService().getShares();
   }
 
-  /// Revokes a share: deletes the cloud blob and removes the local record.
+  /// Revokes a share: deletes the cloud blob, then removes the local record.
   /// The magic link will return 404/access-denied to recipients.
+  ///
+  /// The row is removed only once the cloud says the blob is gone. If the
+  /// delete fails, the row stays so the share is still listed as live and
+  /// the revoke can be retried; a record that disappears while the public
+  /// link keeps working is the failure mode this guards against (MASVS F-28).
   Future<void> revokeShare(String shareId) async {
     final share = await DatabaseService().getShareById(shareId);
     if (share == null) return;
     try {
       await CloudService().deletePublicShare(share.cloudId);
     } catch (e) {
-      debugPrint('revokeShare: cloud delete failed (continuing): $e');
+      debugPrint('revokeShare: cloud delete failed, keeping the record: $e');
+      throw ShareRevokeException(share.id);
     }
     await DatabaseService().deleteShare(shareId);
   }
 
-  /// Cleans up expired shares. Best-effort — if cloud delete fails, we still
-  /// remove the local record. Call from app startup or settings.
+  /// Cleans up expired shares. A share whose cloud delete fails is left in
+  /// place for the next sweep; its link is already refused by the viewer and
+  /// the relay, so nothing is exposed meanwhile. Call from app startup or
+  /// settings.
   Future<int> sweepExpired() async {
     final shares = await DatabaseService().getShares();
     int removed = 0;
@@ -236,9 +244,12 @@ class ShareService {
         visibility: ActivityVisibility.quiet);
     try {
       for (final s in shares) {
-        if (s.isExpired) {
+        if (!s.isExpired) continue;
+        try {
           await revokeShare(s.id);
           removed++;
+        } on ShareRevokeException {
+          // Retried on the next sweep.
         }
       }
       if (removed > 0) {
@@ -253,4 +264,15 @@ class ShareService {
       rethrow;
     }
   }
+}
+
+/// The cloud copy of a share could not be deleted, so its local record was
+/// kept and the link is still live.
+class ShareRevokeException implements Exception {
+  ShareRevokeException(this.shareId);
+  final String shareId;
+
+  @override
+  String toString() =>
+      'Could not reach the cloud to revoke this share. It is still live; try again.';
 }

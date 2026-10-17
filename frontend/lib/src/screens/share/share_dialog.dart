@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../../../services/secure_window_service.dart';
-import 'package:flutter/services.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:share_plus/share_plus.dart';
@@ -11,6 +10,7 @@ import '../../../services/cnest_errors.dart';
 import '../../../services/notify.dart';
 import '../../../services/share_service.dart';
 import '../../../services/upload_pipeline.dart';
+import '../../../services/sensitive_clipboard.dart';
 
 /// Bottom-sheet dialog for creating a new share. Shows expiry dropdown,
 /// optional password field, and a "Create link" button. After creation,
@@ -241,7 +241,7 @@ class _ShareDialogState extends State<ShareDialog> with SecureScreenMixin {
           Expanded(
             child: OutlinedButton.icon(
               onPressed: () async {
-                await Clipboard.setData(ClipboardData(text: url));
+                await SensitiveClipboard.copy(url);
                 Notify.info('Link copied');
               },
               icon: ThemeIcon('copy'),

@@ -612,8 +612,11 @@ class GoogleDriveProvider implements CloudProvider {
     final api = await _getApi();
     try {
       await api.files.delete(cloudId);
-    } catch (e) {
-      debugPrint('deletePublicShare error: $e');
+    } on drive.DetailedApiRequestError catch (e) {
+      // Already gone is the outcome we wanted. Anything else propagates so
+      // the share row is kept and the revoke can be retried (MASVS F-28).
+      if (e.status == 404) return;
+      rethrow;
     }
   }
 }

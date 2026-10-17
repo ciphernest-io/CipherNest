@@ -1,8 +1,16 @@
 package io.ciphernest.vault
 
+import android.content.ClipData
+import android.content.ClipDescription
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.net.Uri
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.PersistableBundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.view.WindowManager
@@ -56,6 +64,34 @@ class MainActivity : AudioServiceFragmentActivity() {
     /// show the last screen again. That is the accepted trade of this ruling.
     ///
     /// Debuggable builds never carry the flag, so UI review still works.
+    /// Copies a secret (recovery phrase, share link) marked sensitive, so
+    /// Android 13+ keeps it out of the clipboard preview and OEM clipboard
+    /// history, and wipes it after [clearAfterMs] (MASVS F-10). The wipe is
+    /// unconditional: on Android 10+ an unfocused app cannot read the clip to
+    /// check it is still ours, and leaving a phrase behind is the worse error.
+    private fun copySensitive(text: String, clearAfterMs: Long) {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = ClipData.newPlainText("", text)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            clip.description.extras = PersistableBundle().apply {
+                putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+            }
+        }
+        cm.setPrimaryClip(clip)
+        if (clearAfterMs <= 0) return
+        Handler(Looper.getMainLooper()).postDelayed({
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    cm.clearPrimaryClip()
+                } else {
+                    cm.setPrimaryClip(ClipData.newPlainText("", ""))
+                }
+            } catch (_: Exception) {
+                // Clipboard service unavailable; nothing to do.
+            }
+        }, clearAfterMs)
+    }
+
     private fun setSecureWindow(on: Boolean) {
         val debuggable =
             (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -113,6 +149,22 @@ class MainActivity : AudioServiceFragmentActivity() {
             when (call.method) {
                 "set" -> {
                     setSecureWindow(call.argument<Boolean>("on") ?: true)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "ciphernest/clipboard",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "copySensitive" -> {
+                    copySensitive(
+                        call.argument<String>("text") ?: "",
+                        (call.argument<Number>("clearAfterMs") ?: 0).toLong(),
+                    )
                     result.success(null)
                 }
                 else -> result.notImplemented()

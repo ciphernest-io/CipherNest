@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 
@@ -7,6 +6,7 @@ import '../../models/share_model.dart';
 import '../../../services/notify.dart';
 import '../../../services/share_service.dart';
 import '../../../services/secure_window_service.dart';
+import '../../../services/sensitive_clipboard.dart';
 
 class ActiveSharesScreen extends StatefulWidget {
   const ActiveSharesScreen({super.key});
@@ -172,8 +172,7 @@ class _ActiveSharesScreenState extends State<ActiveSharesScreen>
                           icon: ThemeIcon('copy', size: 14),
                           label: const Text('Copy'),
                           onPressed: () async {
-                            await Clipboard.setData(
-                                ClipboardData(text: share.shareUrl));
+                            await SensitiveClipboard.copy(share.shareUrl);
                             Notify.info('Link copied');
                           },
                         ),

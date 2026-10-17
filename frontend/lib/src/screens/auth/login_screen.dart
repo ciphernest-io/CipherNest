@@ -149,6 +149,8 @@ class _LoginScreenState extends State<LoginScreen> {
       } else {
         setState(() => _error = "Incorrect password");
       }
+    } on UnlockThrottledException catch (e) {
+      setState(() => _error = e.toString());
     } on PublicKeyMismatchException {
       // Stored vault public key doesn't match the recovery seed — refuse to
       // proceed rather than risk encrypting to a tampered key.

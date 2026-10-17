@@ -10,6 +10,7 @@ import 'package:workmanager/workmanager.dart';
 
 import 'auto_sync_service.dart';
 import 'bg_activity_bridge.dart';
+import 'network_timeouts.dart';
 
 const String autoSyncTaskName = 'autoSyncTask';
 
@@ -197,6 +198,8 @@ class AutoSyncScheduler {
 /// Must be a top-level function (not a method).
 @pragma('vm:entry-point')
 void callbackDispatcher() {
+  // Separate isolate: HttpOverrides.global from main() does not reach here.
+  CipherNestHttpOverrides.install();
   Workmanager().executeTask((taskName, inputData) async {
     if (taskName != autoSyncTaskName) return true;
 

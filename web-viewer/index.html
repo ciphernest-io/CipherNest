@@ -203,10 +203,11 @@
     unlock password-protected shares. UMD bundle, ~213 KB with WASM
     inlined; loaded once per session.
   -->
-  <script src="/hash-wasm.min.js" defer></script>
+  <script src="/hash-wasm.min.js" defer
+          integrity="sha384-vH5IYpGQ6IL2jsEVxeC79UYAz+rs+ZGfo/8s2+oZxDxBcJS8fpEShpxYn1T3pP8S"></script>
   <!-- Version query busts stale browser caches on redeploy. Blob format is
-       still v1; the -r4 suffix is a UI/script revision bump so recipients pull
-       the current share.js (fullscreen image zoom). -->
-  <script src="/share.js?v=fmt1-r4" defer></script>
+       still v1; the -r5 suffix is a UI/script revision bump so recipients pull
+       the current share.js (fragment scrubbed from the URL, W-04). -->
+  <script src="/share.js?v=fmt1-r5" defer></script>
 </body>
 </html>

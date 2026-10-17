@@ -40,7 +40,10 @@ class AudioPlayerService extends ChangeNotifier {
   final AudioPlayer _player = AudioPlayer();
   List<CnestFile> _queue = [];
   String? _queueSourceName;
-  bool _showTitlesOnLockScreen = true;
+  // Off by default (MASVS F-18): the lock screen and the media notification
+  // are visible to anyone holding the phone, so decrypted track titles and
+  // cover art only show when the user turns them on.
+  bool _showTitlesOnLockScreen = false;
 
   AudioPlayer get player => _player;
   List<CnestFile> get queue => List.unmodifiable(_queue);
@@ -68,7 +71,7 @@ class AudioPlayerService extends ChangeNotifier {
 
   Future<void> _loadLockScreenPref() async {
     final prefs = await SharedPreferences.getInstance();
-    _showTitlesOnLockScreen = prefs.getBool(prefsKeyLockScreenTitles) ?? true;
+    _showTitlesOnLockScreen = prefs.getBool(prefsKeyLockScreenTitles) ?? false;
   }
 
   /// Toggle whether the media notification shows real track titles or a

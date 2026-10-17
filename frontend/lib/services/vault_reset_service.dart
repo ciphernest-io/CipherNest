@@ -43,6 +43,19 @@ class VaultResetService {
     'backup_pending_backfill',
     'sync_unreadable_segments_v1',
     'sync_notified_undone_moves_v1',
+    // Vault-derived state that used to survive a reset (MASVS F-21).
+    'auto_sync_deleted_keys',
+    'sync_clock_skew_v1',
+    'meta_migration_remaining_v1',
+    'vault_meta_unreadable_v1',
+    'paywall_pending_v1',
+    'entitlement_plus_v1',
+    'plus_expires_at_v1',
+    'plus_is_lifetime_v1',
+    'plus_last_verified_at_v1',
+    'plus_ever_held_v1',
+    'unlock_failures_v1',
+    'unlock_locked_until_v1',
   ];
 
   /// Tears the vault off this device. Ordering matters: stop the movers

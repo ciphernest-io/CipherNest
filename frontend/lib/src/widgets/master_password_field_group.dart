@@ -11,7 +11,7 @@ import 'theme_icon.dart';
 ///
 /// This is a DEVICE password (the recovery phrase is the key), so the
 /// rules are the plain ones:
-///   1. 8 to 20 characters.
+///   1. 8 to 64 characters.
 ///   2. At least one uppercase letter.
 ///   3. At least one lowercase letter.
 ///   4. At least one number or symbol.
@@ -107,7 +107,7 @@ class _MasterPasswordFieldGroupState extends State<MasterPasswordFieldGroup> {
           ),
         ),
         const SizedBox(height: 20),
-        _RuleRow(label: '8 to 20 characters', passed: rules.lengthOk),
+        _RuleRow(label: '8 to 64 characters', passed: rules.lengthOk),
         _RuleRow(label: 'At least one uppercase letter', passed: rules.upperOk),
         _RuleRow(label: 'At least one lowercase letter', passed: rules.lowerOk),
         _RuleRow(label: 'At least one number or special character', passed: rules.digitOrSymbolOk),
@@ -178,7 +178,7 @@ class _PasswordRules {
   factory _PasswordRules.evaluate(String pass, String confirm) {
     final len = pass.length;
     return _PasswordRules._(
-      lengthOk: len >= 8 && len <= 20,
+      lengthOk: len >= 8 && len <= 64,
       upperOk: pass.contains(RegExp(r'[A-Z]')),
       lowerOk: pass.contains(RegExp(r'[a-z]')),
       digitOrSymbolOk: pass.contains(RegExp(r'[^a-zA-Z]')),

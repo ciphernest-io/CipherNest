@@ -2490,6 +2490,37 @@ class DatabaseService extends ChangeNotifier {
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  /// Removes every row that belongs to [accountId]: files, folders, albums
+  /// and their memberships, shares, and the sync bookkeeping. Called when an
+  /// account is disconnected, so a removed account's metadata does not sit in
+  /// the database for the life of the install (MASVS F-20).
+  Future<void> deleteAccountData(String accountId) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.rawDelete(
+        'DELETE FROM album_files WHERE album_id IN '
+        '(SELECT id FROM albums WHERE account_id = ?)',
+        [accountId],
+      );
+      await txn.rawDelete(
+        'DELETE FROM album_files WHERE file_id IN '
+        '(SELECT id FROM files WHERE account_id = ?)',
+        [accountId],
+      );
+      for (final table in [
+        'albums',
+        'shares',
+        'files',
+        'folders',
+        'sync_ops',
+        'sync_seen_segments',
+        'sync_state',
+      ]) {
+        await txn.delete(table, where: 'account_id = ?', whereArgs: [accountId]);
+      }
+    });
+  }
+
   Future<List<CnestShare>> getShares() async {
     final db = await database;
     if (_currentAccountId == null) return [];

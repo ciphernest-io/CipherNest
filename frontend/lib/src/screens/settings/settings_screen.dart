@@ -864,6 +864,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     await AccountRegistry().removeAccount(accountId);
     CloudService().reset();
+    // The account's metadata and any decrypted large files go with it
+    // (MASVS F-20). Thumbnails are device-wide cache and are left to the
+    // cache manager's own limit.
+    await DatabaseService().deleteAccountData(accountId);
+    await CacheManagerService().purgeAllLargePlaintext();
 
     if (wasActive) {
       final newActive = AccountRegistry().activeAccount;

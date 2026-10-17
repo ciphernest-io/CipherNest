@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import '../../../services/secure_window_service.dart';
-import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../services/billing_service.dart';
@@ -12,6 +11,7 @@ import '../../config/flags.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
+import '../../../services/sensitive_clipboard.dart';
 import '../subscription/subscription_screen.dart'
     show SubscriptionScreenArgs;
 
@@ -215,7 +215,7 @@ class _DisplayStage extends StatelessWidget {
     );
     if (proceed == true) {
       // No toast: Android 13+ shows its own "copied" overlay.
-      await Clipboard.setData(ClipboardData(text: phrase));
+      await SensitiveClipboard.copy(phrase);
     }
   }
 }

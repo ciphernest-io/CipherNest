@@ -8,9 +8,9 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-// Release signing. Reads android/key.properties (gitignored, never committed);
-// falls back to the debug key when that file is absent, so builds still work
-// before the upload keystore exists. See docs/DOMAIN_DNS_SETUP.md Part 5.
+// Release signing. Reads android/key.properties (gitignored, never committed).
+// A release build without it FAILS rather than silently signing with the
+// universally known debug key (MASVS F-16). Debug builds are unaffected.
 val keystorePropertiesFile = rootProject.file("key.properties")
 val keystoreProperties = Properties()
 val hasReleaseKeystore = keystorePropertiesFile.exists()
@@ -46,7 +46,6 @@ android {
 
     signingConfigs {
         // Created only when key.properties exists (upload keystore set up).
-        // Until then, release falls back to the debug key in buildTypes below.
         if (hasReleaseKeystore) {
             create("release") {
                 keyAlias = keystoreProperties["keyAlias"] as String
@@ -59,11 +58,14 @@ android {
 
     buildTypes {
         release {
-            signingConfig = if (hasReleaseKeystore) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
+            if (!hasReleaseKeystore) {
+                throw GradleException(
+                    "Release build needs android/key.properties (release signing key). " +
+                    "Build a debug variant instead, or supply your own keystore; " +
+                    "see README.md > Building from source."
+                )
             }
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

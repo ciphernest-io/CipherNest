@@ -958,10 +958,8 @@ class OneDriveProvider implements CloudProvider {
 
   @override
   Future<void> deletePublicShare(String cloudId) async {
-    try {
-      await deleteFile(cloudId);
-    } catch (e) {
-      debugPrint('deletePublicShare error: $e');
-    }
+    // deleteFile treats 404 as success and throws on anything else, which is
+    // exactly the contract revokeShare needs (MASVS F-28).
+    await deleteFile(cloudId);
   }
 }

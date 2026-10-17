@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'cloud_account.dart';
+import '../secure_storage_options.dart';
 
 /// Singleton ChangeNotifier owning the list of connected cloud accounts and
 /// the currently active one. Persisted to FlutterSecureStorage because it
@@ -16,7 +17,7 @@ class AccountRegistry extends ChangeNotifier {
   static const _storageKeyActive = 'active_account_id';
   static const _lastProviderTypeKey = 'last_provider_type_v1';
 
-  final _storage = const FlutterSecureStorage();
+  final _storage = kSecureStorage;
   List<CloudAccount> _accounts = [];
   String? _activeAccountId;
   bool _loaded = false;

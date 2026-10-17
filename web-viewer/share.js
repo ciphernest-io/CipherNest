@@ -74,6 +74,30 @@ function main() {
     path = path.substring(0, encodedHashIdx);
   }
 
+  // The key is in memory now. Take it out of the address bar so it is not
+  // kept in browser history, synced tabs or a screenshot of the URL. A
+  // reload after this shows the "missing key" error, which is the intended
+  // trade (MASVS W-04).
+  if (rawFragment && window.history && history.replaceState) {
+    try {
+      history.replaceState(null, '', path);
+    } catch (_) {
+      // Some embedded browsers refuse; the page still works.
+    }
+  }
+
+  // The key is in memory now. Take it out of the address bar so it is not
+  // kept in browser history, synced tabs or a screenshot of the URL. A
+  // reload after this shows the "missing key" error, which is the intended
+  // trade (MASVS W-04).
+  if (rawFragment && window.history && history.replaceState) {
+    try {
+      history.replaceState(null, '', path);
+    } catch (_) {
+      // Some embedded browsers refuse; the page still works.
+    }
+  }
+
   const segments = path.split('/').filter(Boolean);
   if (segments.length < 2 || segments[0] !== 's') {
     return showError('This page expects a share link of the form /s/...');

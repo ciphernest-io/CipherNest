@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import '../../../services/secure_window_service.dart';
-import 'package:flutter/services.dart';
 
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 import '../../../services/key_manager_service.dart';
+import '../../../services/sensitive_clipboard.dart';
 
 /// Settings › "View recovery phrase". Re-prompts for the master password,
 /// decrypts the persistent password-wrapped mnemonic blob, and shows the 12
@@ -166,9 +166,9 @@ class _ViewPhraseScreenState extends State<ViewPhraseScreen>with SecureScreenMix
         const SizedBox(height: 20),
         OutlinedButton.icon(
           onPressed: () {
-            Clipboard.setData(ClipboardData(text: words.join(' ')));
+            SensitiveClipboard.copy(words.join(' '));
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text('Phrase copied. Clear your clipboard after')));
+                content: Text('Phrase copied. It clears itself in a minute')));
           },
           icon: ThemeIcon('copy', color: cs.primary),
           label: const Text('Copy to clipboard'),

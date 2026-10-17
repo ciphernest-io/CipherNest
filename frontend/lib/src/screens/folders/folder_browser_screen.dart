@@ -36,6 +36,7 @@ import '../../widgets/folder_picker_sheet.dart';
 import '../../widgets/friendly_error_sheet.dart';
 import '../../widgets/theme_icon.dart';
 import '../gallery/image_viewer_screen.dart';
+import '../../utils/safe_filename.dart';
 import '../gallery/pictures_tab.dart' show GalleryGridItem;
 
 /// How folder contents are ordered. Persisted device-wide (one preference
@@ -1319,7 +1320,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
         return;
       }
       final dir = await getTemporaryDirectory();
-      final tempFile = File('${dir.path}/${file.filename}');
+      final tempFile = File('${dir.path}/${safeFilename(file.filename)}');
       if (!await tempFile.exists()) {
         if (file.cloudId == null) throw Exception('File not synced');
         final encrypted = await CloudService().downloadFile(file.cloudId!);

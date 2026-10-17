@@ -9,6 +9,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'biometric_unlock_service.dart';
+import 'secure_storage_options.dart';
 
 /// Key management for CipherNest's split-key architecture.
 ///
@@ -109,6 +110,18 @@ class KeyManagerService {
   static const _kMnemonicPwMac = 'mnemonic_pw_mac_v1';
   static const _kMnemonicPwSalt = 'mnemonic_pw_salt_v1';
 
+  // --- Unlock throttle (SharedPreferences). ---
+  // Argon2id at 64 MiB already makes a guess cost a second or so of device
+  // time, but nothing stopped an unlimited run of guesses from the lock
+  // screen. After [_kMaxFreeFailures] wrong passwords each further failure
+  // doubles a persisted wait, so a kill-and-relaunch does not reset it
+  // (MASVS F-15).
+  static const _kUnlockFailures = 'unlock_failures_v1';
+  static const _kUnlockLockedUntil = 'unlock_locked_until_v1';
+  static const int _kMaxFreeFailures = 5;
+  static const Duration _kFirstLockout = Duration(seconds: 30);
+  static const Duration _kMaxLockout = Duration(minutes: 15);
+
   // --- Crash-recovery: mnemonic encrypted under k_local. ---
   static const _kSignupInProgress = 'signup_in_progress_v1';
   static const _kRecoveryShown = 'recovery_shown_v1';
@@ -116,7 +129,7 @@ class KeyManagerService {
   static const _kEncryptedMnemonicNonce = 'encrypted_mnemonic_nonce';
   static const _kEncryptedMnemonicMac = 'encrypted_mnemonic_mac';
 
-  final _storage = const FlutterSecureStorage();
+  final _storage = kSecureStorage;
   final _argon2 = Argon2id(
     parallelism: 1,
     memory: 65536, // 64 MB
@@ -465,6 +478,8 @@ class KeyManagerService {
       _kSeedMac,
       _kSeedSalt,
       _kPasswordless,
+      _kUnlockFailures,
+      _kUnlockLockedUntil,
       _kSignupInProgress,
       _kRecoveryShown,
       _kEncryptedMnemonic,
@@ -510,8 +525,28 @@ class KeyManagerService {
   /// storage. Returns false on a wrong password; throws
   /// [PublicKeyMismatchException] if the stored public key was tampered with.
   Future<bool> unlock(String password) async {
+    final prefs = await SharedPreferences.getInstance();
+    final lockedUntil = prefs.getInt(_kUnlockLockedUntil) ?? 0;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (lockedUntil > now) {
+      throw UnlockThrottledException(Duration(milliseconds: lockedUntil - now));
+    }
+
     final seed = await _decryptSeedBlob(password);
-    if (seed == null) return false; // wrong password / no account
+    if (seed == null) {
+      // Wrong password, or no account. Count it either way; a missing blob
+      // cannot be unlocked by any password so the count is harmless there.
+      final failures = (prefs.getInt(_kUnlockFailures) ?? 0) + 1;
+      await prefs.setInt(_kUnlockFailures, failures);
+      if (failures >= _kMaxFreeFailures) {
+        final steps = failures - _kMaxFreeFailures;
+        var wait = _kFirstLockout * (1 << (steps > 10 ? 10 : steps));
+        if (wait > _kMaxLockout) wait = _kMaxLockout;
+        await prefs.setInt(_kUnlockLockedUntil,
+            DateTime.now().millisecondsSinceEpoch + wait.inMilliseconds);
+      }
+      return false;
+    }
 
     final keys = await _deriveKeys(seed);
     await _verifyStoredPublicKey(keys.publicKey);
@@ -520,7 +555,19 @@ class KeyManagerService {
     _vaultPublicKey = keys.publicKey;
     _kLocal = keys.kLocal;
     _billingIdBytes = keys.billingId;
+    await prefs.remove(_kUnlockFailures);
+    await prefs.remove(_kUnlockLockedUntil);
     return true;
+  }
+
+  /// Remaining lockout after too many wrong passwords, or zero.
+  Future<Duration> unlockLockoutRemaining() async {
+    final prefs = await SharedPreferences.getInstance();
+    final lockedUntil = prefs.getInt(_kUnlockLockedUntil) ?? 0;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    return lockedUntil > now
+        ? Duration(milliseconds: lockedUntil - now)
+        : Duration.zero;
   }
 
   /// Re-wraps the on-device seed blob under a new password. The seed — and
@@ -916,4 +963,20 @@ class PublicKeyMismatchException implements Exception {
   String toString() =>
       'Vault public key mismatch: stored key does not match the recovery '
       'seed. Encryption is halted to protect your data.';
+}
+
+/// Thrown by [KeyManagerService.unlock] while a lockout from repeated wrong
+/// passwords is in force. [remaining] is how long until the next attempt is
+/// accepted.
+class UnlockThrottledException implements Exception {
+  UnlockThrottledException(this.remaining);
+  final Duration remaining;
+
+  @override
+  String toString() {
+    final s = remaining.inSeconds + 1;
+    return s >= 60
+        ? 'Too many attempts. Try again in ${(s / 60).ceil()} min.'
+        : 'Too many attempts. Try again in $s s.';
+  }
 }

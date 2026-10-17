@@ -18,6 +18,8 @@ import 'src/screens/splash/splash_screen.dart';
 import 'src/utils/byte_format.dart';
 import 'services/cache_manager_service.dart';
 import 'services/auto_sync_worker.dart';
+import 'services/network_timeouts.dart';
+import 'services/network_timeouts.dart';
 
 /// Decodes the splash mark into the image cache before the first frame.
 /// Without this the splash paints its first frame without the logo and pops
@@ -45,6 +47,8 @@ Future<void> _warmSplashLogo() {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  CipherNestHttpOverrides.install();
+  CipherNestHttpOverrides.install();
   // Everything awaited here delays the first frame (the flat pre-splash
   // surface the OS shows). Each item is a platform round-trip, so they run
   // CONCURRENTLY: the wait is the slowest one, not the sum. Awaited at all
