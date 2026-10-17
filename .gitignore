@@ -23,3 +23,6 @@ CLAUDE_CODE_PROMPT.md
 
 # Editor settings carry machine-specific absolute paths.
 .vscode/
+
+# Gradle temp dir used when C: is short on space.
+.build-tmp/
