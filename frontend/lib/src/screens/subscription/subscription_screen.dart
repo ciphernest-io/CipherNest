@@ -224,10 +224,15 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
       // it is bought outright and the subscription is cancelled by the user
       // in Play (prompted below); Play has no "replace a subscription with a
       // one-time purchase".
-      final oldProduct = SubscriptionService().currentProductId;
+      // Play identifies the subscription being replaced by its subscription
+      // id alone ("plus"); the SDK may report the entitlement's product as
+      // "plus:monthly" (subscription:basePlan), which Play does not know.
+      final oldProduct =
+          SubscriptionService().currentProductId?.split(':').first;
       final deferredSwitch = _changingPlan &&
           _term == _Term.yearly &&
-          oldProduct != null;
+          oldProduct != null &&
+          oldProduct.isNotEmpty;
       final ok = await BillingService().purchase(
         pkg,
         change: deferredSwitch
@@ -508,6 +513,14 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                     ),
                   ),
                 ),
+                // Restore is a backstop for a phrase that already owns Plus,
+                // and lives in Settings. It is NOT offered on the signup
+                // paywall: a brand-new phrase has nothing to restore, and
+                // the only thing the button could do there is pull the
+                // Google account's purchase away from the vault that paid
+                // for it. That move stays possible, but only on purpose,
+                // from Settings.
+                if (widget.args.nextRoute == null)
                 Center(
                   child: TextButton(
                     onPressed: _busy ? null : _restorePurchase,
