@@ -56,6 +56,11 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   bool _loadingPrices = true;
   bool _busy = false;
 
+  /// True until [_open] has heard whether this phrase already owns Plus. A
+  /// flow step for an owner leaves immediately, and drawing the card in the
+  /// meantime flashed it for a frame on the restore-phrase route.
+  bool _checking = true;
+
   /// Set when RevenueCat reports an active entitlement on an UPSELL open. In a
   /// flow the screen leaves instead. Here the card turns into the plan
   /// changer: a monthly subscriber is offered Yearly and Lifetime, a yearly
@@ -109,6 +114,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
       setState(() {
         _alreadyPlus = true;
         _plan = plan;
+        _checking = false;
       });
       if (_upgradeTerms.isEmpty) {
         setState(() => _loadingPrices = false);
@@ -117,6 +123,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
       // Fall through: the longer plans need live prices like a fresh sale.
       setState(() => _term = _upgradeTerms.first);
     }
+    setState(() => _checking = false);
     final offerings = await BillingService().offerings();
     if (!mounted) return;
     setState(() {
@@ -145,7 +152,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
       case PurchasesErrorCode.paymentPendingError:
         return 'Payment pending in Google Play';
       case PurchasesErrorCode.productAlreadyPurchasedError:
-        return 'Already purchased. Tap Restore';
+        return 'Owned by another phrase. Use Restore purchase';
       case PurchasesErrorCode.networkError:
       case PurchasesErrorCode.offlineConnectionError:
         return 'No connection to Google Play';
@@ -271,8 +278,36 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   /// Restores a subscription already attached to this vault's billing ID.
   /// Because that ID derives from the recovery phrase, this is what carries a
   /// subscription onto a new device after a phrase restore.
+  /// Restore is a MOVE, not a copy. Plus is a Google Play purchase, so it
+  /// belongs to the Google account, and RevenueCat (restore behaviour:
+  /// Transfer) attaches it to one App User ID, that is one recovery phrase,
+  /// at a time. Restoring inside a different vault pulls it away from the
+  /// vault that had it. Play also sells one Plus per account, so on a new
+  /// phrase this is the ONLY way to get Plus: the buy button is refused as
+  /// already owned. Hence a confirmation that says exactly what happens,
+  /// rather than hiding the button.
   Future<void> _restorePurchase() async {
     if (_busy) return;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Restore Plus to this phrase?'),
+        content: const Text(
+            'Plus belongs to your Google account and to one recovery phrase '
+            'at a time. Restoring brings it to this phrase. If another vault '
+            'was using it, that vault goes back to the free limit. Its files '
+            'are untouched.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Restore')),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
     setState(() => _busy = true);
     try {
       final ok = await BillingService().restore();
@@ -361,6 +396,22 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_checking) {
+      // Same bare canvas as the route fade lands on; the check is one round
+      // trip and an owner never sees the card at all.
+      return const PopScope(
+        canPop: false,
+        child: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
+        ),
+      );
+    }
     final cs = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     final t = ThemeController().tokens;
@@ -513,14 +564,6 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                     ),
                   ),
                 ),
-                // Restore is a backstop for a phrase that already owns Plus,
-                // and lives in Settings. It is NOT offered on the signup
-                // paywall: a brand-new phrase has nothing to restore, and
-                // the only thing the button could do there is pull the
-                // Google account's purchase away from the vault that paid
-                // for it. That move stays possible, but only on purpose,
-                // from Settings.
-                if (widget.args.nextRoute == null)
                 Center(
                   child: TextButton(
                     onPressed: _busy ? null : _restorePurchase,
