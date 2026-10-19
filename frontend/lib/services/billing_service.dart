@@ -64,6 +64,33 @@ class BillingService {
   /// rather than each firing their own.
   Future<void>? _inFlight;
 
+  /// Fires just after the cached expiry while the app is open, so a renewal
+  /// (or a lapse) is confirmed at the moment it matters instead of at the
+  /// next resume. Without this the wordmark dropped "Plus" at expiry and
+  /// only came back once something else asked RevenueCat. Very visible on
+  /// license-tester subscriptions, which renew every five minutes.
+  Timer? _expiryTimer;
+
+  void _scheduleExpiryCheck() {
+    _expiryTimer?.cancel();
+    final sub = SubscriptionService();
+    final at = sub.expiresAt;
+    if (at == null || sub.isLifetime) return;
+    var wait = Duration(milliseconds: at - DateTime.now().millisecondsSinceEpoch) +
+        const Duration(seconds: 5);
+    if (wait.isNegative) return; // already past: the callers verify now
+    // Long timers are re-armed in steps rather than trusted for a month.
+    const step = Duration(hours: 12);
+    if (wait > step) wait = step;
+    _expiryTimer = Timer(wait, () {
+      if (SubscriptionService().isPastExpiry) {
+        unawaited(verifyNow(coldStart: false));
+      } else {
+        _scheduleExpiryCheck();
+      }
+    });
+  }
+
   bool get isConfigured => _configured;
 
   /// Configures the SDK exactly once, or reports why it cannot.
@@ -107,6 +134,7 @@ class BillingService {
   Future<void> verifyNow({required bool coldStart}) async {
     final sub = SubscriptionService();
     await sub.init();
+    _scheduleExpiryCheck();
 
     if (!coldStart && !sub.isPastExpiry) {
       final last = sub.lastVerifiedAt;
@@ -249,5 +277,6 @@ class BillingService {
       productId: ent.productIdentifier,
       planId: ent.productPlanIdentifier,
     );
+    _scheduleExpiryCheck();
   }
 }

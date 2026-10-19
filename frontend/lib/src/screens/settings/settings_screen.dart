@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -243,10 +245,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _openDevices() async {
     final account = AccountRegistry().activeAccount;
     if (account == null) return;
-    final devices =
-        await DeviceRegistryService().listDevices(accountId: account.id);
+    final devices = ValueNotifier<List<KnownDevice>>(
+        await DeviceRegistryService().listDevices(accountId: account.id));
     final currentName = await DeviceRegistryService().deviceName();
     if (!mounted) return;
+    var open = true;
+    Future<void> refresh() async {
+      final latest =
+          await DeviceRegistryService().listDevices(accountId: account.id);
+      if (open) devices.value = latest;
+    }
+
+    // The list is replayed from the LOCAL log, so another device's rename
+    // only appears after a pull. Pull while the sheet is up rather than
+    // leaving the user to find the gallery's pull-to-refresh.
+    unawaited(SyncCoordinator().sync().then((_) => refresh()));
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -260,9 +273,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
           await DeviceRegistryService().setDeviceName(name);
           await _renameDeviceFolder(name);
           await SyncCoordinator().pushOnly();
+          await refresh();
         },
       ),
     );
+    open = false;
+    devices.dispose();
   }
 
   /// Keeps the Phone Backup device folder's display name in step with the
@@ -1118,7 +1134,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // finished onboarding. Before this, the paywall was reachable from the
       // three setup screens and nowhere else, so an existing subscriber who
       // reinstalled had no way to reach Restore purchases at all.
-      ListTile(
+      ListenableBuilder(
+        listenable: SubscriptionService(),
+        builder: (context, _) => ListTile(
             leading: ThemeIcon('workspace_premium', color: cs.primary),
             title: Text(
                 SubscriptionService().isPlus
@@ -1141,9 +1159,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: () async {
               await Navigator.pushNamed(context, AppRoutes.subscription);
               // Entitlement may have changed while the paywall was open.
-              if (mounted) setState(() {});
+              if (mounted) _setState(() {});
             },
           ),
+      ),
       ListTile(
             leading: ThemeIcon('trash', color: cs.primary),
             title: Text('Recycle Bin', style: TextStyle(color: cs.onSurface)),
@@ -2106,7 +2125,7 @@ class _VaultHealthSheet extends StatelessWidget {
 
 /// Bottom sheet: rename this device and list every device on the vault.
 class _DevicesSheet extends StatefulWidget {
-  final List<KnownDevice> devices;
+  final ValueListenable<List<KnownDevice>> devices;
   final String currentName;
   final Future<void> Function(String) onRename;
   const _DevicesSheet({
@@ -2170,8 +2189,11 @@ class _DevicesSheetState extends State<_DevicesSheet> {
                       ? null
                       : () async {
                           setState(() => _saving = true);
-                          await widget.onRename(_name.text);
-                          if (context.mounted) Navigator.pop(context);
+                          await widget.onRename(_name.text.trim());
+                          // Stay open: the list below updates in place.
+                          if (!mounted) return;
+                          setState(() => _saving = false);
+                          Notify.info('Name saved');
                         },
                   child: const Text('Save'),
                 ),
@@ -2182,20 +2204,32 @@ class _DevicesSheetState extends State<_DevicesSheet> {
                 style: TextStyle(
                     color: cs.onSurface.withAlpha(180), fontSize: 13)),
             const SizedBox(height: 6),
-            if (widget.devices.isEmpty)
-              Text('Only this device so far.',
-                  style: TextStyle(color: cs.onSurface.withAlpha(140))),
-            for (final d in widget.devices)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: ThemeIcon(d.isThisDevice ? 'smartphone' : 'cloudArrowDown',
-                    color: cs.primary),
-                title: Text(d.name, style: TextStyle(color: cs.onSurface)),
-                subtitle: d.isThisDevice
-                    ? Text('This device',
-                        style: TextStyle(color: cs.onSurface.withAlpha(140)))
-                    : null,
+            ValueListenableBuilder<List<KnownDevice>>(
+              valueListenable: widget.devices,
+              builder: (context, devices, _) => Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (devices.isEmpty)
+                    Text('Only this device so far.',
+                        style:
+                            TextStyle(color: cs.onSurface.withAlpha(140))),
+                  for (final d in devices)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: ThemeIcon(
+                          d.isThisDevice ? 'smartphone' : 'cloudArrowDown',
+                          color: cs.primary),
+                      title:
+                          Text(d.name, style: TextStyle(color: cs.onSurface)),
+                      subtitle: d.isThisDevice
+                          ? Text('This device',
+                              style: TextStyle(
+                                  color: cs.onSurface.withAlpha(140)))
+                          : null,
+                    ),
+                ],
               ),
+            ),
           ],
           ),
         ),

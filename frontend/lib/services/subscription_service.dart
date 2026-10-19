@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/foundation.dart' show ChangeNotifier, visibleForTesting;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../src/config/billing.dart';
@@ -28,7 +28,10 @@ import 'database_service.dart';
 /// The one thing an expiry date cannot see is a refund, chargeback or
 /// payment-failure hold, all of which revoke entitlement BEFORE the date.
 /// [BillingService.verifyNow] covers those at app start.
-class SubscriptionService {
+/// Observable: the home wordmark and the Settings row listen, so a
+/// verification landing after the first frame (cold start, a renewal, an
+/// expiry passing) repaints them instead of leaving a stale "Free".
+class SubscriptionService extends ChangeNotifier {
   static final SubscriptionService _instance = SubscriptionService._internal();
   factory SubscriptionService() => _instance;
   SubscriptionService._internal();
@@ -91,6 +94,7 @@ class SubscriptionService {
     }
 
     _loaded = true;
+    notifyListeners();
   }
 
   /// Whether Plus is unlocked, computed locally with no network.
@@ -141,6 +145,12 @@ class SubscriptionService {
 
   bool get isLifetime => _isLifetime;
 
+  /// Cached expiry, epoch ms; null for lifetime or no entitlement.
+  int? get expiresAt => _expiresAt;
+
+  /// The Play base plan the entitlement rides on, when the SDK reported one.
+  String? get currentPlanId => _planId;
+
   /// The store product the entitlement rides on ("plus" for the Play
   /// subscription), which a plan change must name as the product it
   /// replaces. Null when unknown.
@@ -150,12 +160,12 @@ class SubscriptionService {
   PlusPlan get plan {
     if (!isPlus) return PlusPlan.none;
     if (_isLifetime) return PlusPlan.lifetime;
-    final plan = _planId ?? '';
-    final product = _productId ?? '';
-    if (plan == 'monthly' || product.endsWith(':monthly')) {
-      return PlusPlan.monthly;
-    }
-    if (plan == 'annual' || product.endsWith(':annual')) {
+    // Base plan ids are whatever was typed into Play Console, so match on
+    // the word rather than an exact id. The paywall refines this against
+    // the live offering's own identifiers.
+    final hint = '${_planId ?? ''} ${_productId ?? ''}'.toLowerCase();
+    if (hint.contains('month')) return PlusPlan.monthly;
+    if (hint.contains('annual') || hint.contains('year')) {
       return PlusPlan.yearly;
     }
     return PlusPlan.unknown;
@@ -211,6 +221,7 @@ class SubscriptionService {
     }
 
     _loaded = true;
+    notifyListeners();
   }
 
   /// Records that a verification was ATTEMPTED and failed. Never changes the
@@ -218,6 +229,7 @@ class SubscriptionService {
   /// whose expiry is still in the future.
   void recordVerificationFailed() {
     _lastAttemptFailed = true;
+    notifyListeners();
   }
 
   /// Drops the in-memory copy so the next [init] re-reads storage. Tests
@@ -256,6 +268,7 @@ class SubscriptionService {
     _planId = null;
     _lastAttemptFailed = false;
     _loaded = true;
+    notifyListeners();
   }
 }
 

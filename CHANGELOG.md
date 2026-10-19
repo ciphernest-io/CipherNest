@@ -2,7 +2,7 @@
 
 All notable changes to CipherNest are recorded here. Versions follow the Play Store release; the number in brackets is the Android `versionCode`.
 
-## 1.0.0 (7), October 2026
+## 1.0.0 (8), October 2026
 
 First public release.
 

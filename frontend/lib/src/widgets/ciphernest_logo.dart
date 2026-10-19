@@ -28,8 +28,21 @@ class CiphernestLogo extends StatelessWidget {
     final accent = Theme.of(context).colorScheme.primary;
     final color = textColor ?? Theme.of(context).colorScheme.onSurface;
 
-    final plus = showPlus && SubscriptionService().isPlus;
+    // Listening matters: the entitlement is verified after the first frame
+    // on a cold start, and a bare read here froze whatever it said then.
+    return ListenableBuilder(
+      listenable: SubscriptionService(),
+      builder: (context, _) => _lockup(
+        context,
+        accent: accent,
+        color: color,
+        plus: showPlus && SubscriptionService().isPlus,
+      ),
+    );
+  }
 
+  Widget _lockup(BuildContext context,
+      {required Color accent, required Color color, required bool plus}) {
     // One line, always. In an app bar the title shares its row with the
     // account switcher and the gear, and "CipherNest Plus" at 22pt wrapped
     // onto a second line. A brand lockup scales down; it never wraps.

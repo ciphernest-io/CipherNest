@@ -79,9 +79,44 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
 
   bool get _changingPlan => _alreadyPlus && _upgradeTerms.isNotEmpty;
 
-  /// What the switch offers: every term on a fresh sale, only the longer
-  /// ones for a subscriber.
-  List<_Term> get _terms => _alreadyPlus ? _upgradeTerms : _Term.values;
+  _Term? get _currentTerm => switch (_plan) {
+        PlusPlan.monthly => _Term.monthly,
+        PlusPlan.yearly => _Term.yearly,
+        PlusPlan.lifetime => _Term.lifetime,
+        _ => null,
+      };
+
+  /// What the switch shows. A subscriber sees every plan with their own one
+  /// selected and the button saying so; shorter plans stay visible but
+  /// cannot be bought. Plus without a recognised plan shows no switch.
+  List<_Term> get _terms =>
+      _alreadyPlus && _currentTerm == null ? const [] : _Term.values;
+
+  /// The store's own identifiers beat the cached base-plan guess: whatever
+  /// the base plans were called in Play Console, the package the user holds
+  /// is the one whose product matches the entitlement's.
+  PlusPlan _refinePlan(Offering? o, PlusPlan fallback) {
+    if (o == null) return fallback;
+    final product = SubscriptionService().currentProductId;
+    final plan = SubscriptionService().currentPlanId;
+    if (product == null) return fallback;
+    bool holds(Package? pkg) {
+      final id = pkg?.storeProduct.identifier;
+      if (id == null) return false;
+      if (id == product) return true;
+      if (plan != null && id == '$product:$plan') return true;
+      final parts = id.split(':');
+      return parts.length == 2 &&
+          parts.first == product.split(':').first &&
+          plan != null &&
+          parts.last == plan;
+    }
+
+    if (holds(o.lifetime)) return PlusPlan.lifetime;
+    if (holds(o.annual)) return PlusPlan.yearly;
+    if (holds(o.monthly)) return PlusPlan.monthly;
+    return fallback;
+  }
 
   static String _termLabel(_Term t) => switch (t) {
         _Term.monthly => 'Monthly',
@@ -115,20 +150,22 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
         _alreadyPlus = true;
         _plan = plan;
         _checking = false;
+        _term = _currentTerm ?? _term;
       });
-      if (_upgradeTerms.isEmpty) {
-        setState(() => _loadingPrices = false);
-        return;
-      }
-      // Fall through: the longer plans need live prices like a fresh sale.
-      setState(() => _term = _upgradeTerms.first);
+      // Fall through: the card shows every plan with the current one
+      // selected, so it needs live prices like a fresh sale.
     }
     setState(() => _checking = false);
     final offerings = await BillingService().offerings();
     if (!mounted) return;
+    final current = offerings?.current;
     setState(() {
-      _offering = offerings?.current;
+      _offering = current;
       _loadingPrices = false;
+      if (_alreadyPlus) {
+        _plan = _refinePlan(current, _plan);
+        _term = _currentTerm ?? _term;
+      }
     });
   }
 
@@ -139,7 +176,9 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
       };
 
   bool get _canBuy =>
-      !_busy && (!_alreadyPlus || _changingPlan) && _selectedPackage != null;
+      !_busy &&
+      _selectedPackage != null &&
+      (!_alreadyPlus || _upgradeTerms.contains(_term));
 
   /// Plain words for the common Play refusals. The SDK's own descriptions
   /// are written for developers ("The device or user is not allowed to make
@@ -332,7 +371,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   String? get _priceString => _selectedPackage?.storeProduct.priceString;
 
   String get _periodLabel {
-    if (_alreadyPlus && !_changingPlan) return 'You have Plus';
+    if (_alreadyPlus && _currentTerm == null) return 'You have Plus';
     if (_priceString == null) {
       return _loadingPrices ? 'Loading prices...' : 'Unavailable right now';
     }
@@ -355,14 +394,8 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     return 'Save ${pct.round()}% vs monthly.';
   }
 
-  String get _note => _changingPlan
-      ? switch (_term) {
-          _Term.lifetime =>
-            'One payment. Then cancel your subscription in Google Play so '
-                'it stops renewing.',
-          _ => 'Starts when your current month ends. Nothing is charged '
-              'until then.',
-        }
+  String get _note => _alreadyPlus && _currentTerm != null
+      ? _changeNote
       : _alreadyPlus
       ? 'Unlimited uploads are unlocked on this recovery phrase.'
       : switch (_term) {
@@ -372,14 +405,34 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
         };
 
   String get _ctaLabel {
-    if (_alreadyPlus && !_changingPlan) return 'Plus is active';
+    if (_alreadyPlus && _currentTerm == null) return 'Plus is active';
     if (_busy) return 'Working...';
     if (_loadingPrices) return 'Loading...';
+    if (_alreadyPlus && _term == _currentTerm) return 'Your current plan';
+    if (_alreadyPlus && !_upgradeTerms.contains(_term)) {
+      return 'Shorter than your plan';
+    }
     if (_selectedPackage == null) return 'Unavailable right now';
-    if (_changingPlan) {
+    if (_alreadyPlus) {
       return _term == _Term.lifetime ? 'Buy Lifetime' : 'Switch to Yearly';
     }
     return _term == _Term.lifetime ? 'Buy Lifetime' : 'Start Plus';
+  }
+
+  String get _changeNote {
+    if (_term == _currentTerm) {
+      return _term == _Term.lifetime
+          ? 'Yours for good. Nothing more to pay.'
+          : 'Your plan. Renewal and cancellation are in Google Play.';
+    }
+    if (!_upgradeTerms.contains(_term)) {
+      return 'Plans only move to a longer term.';
+    }
+    return _term == _Term.lifetime
+        ? 'One payment. Then cancel your subscription in Google Play so it '
+            'stops renewing.'
+        : 'Starts when your current month ends. Nothing is charged until '
+            'then.';
   }
 
   String get _headline => _changingPlan
@@ -391,7 +444,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   String get _subhead => _changingPlan
       ? 'Longer plans cost less over time. Nothing else changes.'
       : _alreadyPlus
-          ? 'Unlimited uploads on this recovery phrase.'
+          ? 'Unlimited uploads on this recovery phrase. Nothing to add.'
           : 'Free up to 1,000 files. Plus only lifts the upload cap.';
 
   @override
@@ -468,7 +521,9 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        _changingPlan ? 'Change plan' : 'Plus',
+                        _alreadyPlus && _currentTerm != null
+                            ? 'Your plan'
+                            : 'Plus',
                         style: text.titleLarge?.copyWith(
                           color: cardFg,
                           fontWeight: FontWeight.w600,
@@ -476,7 +531,9 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                       ),
                       const SizedBox(height: 24),
                       _PriceLine(
-                        price: _alreadyPlus ? null : _priceString,
+                        price: _alreadyPlus && _currentTerm == null
+                            ? null
+                            : _priceString,
                         period: _periodLabel,
                         ink: cardFg,
                         muted: muted,
@@ -520,9 +577,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                         // colour for the label: the website's swapped CTA.
                         // No ripple and no overlay; it is a plain fill.
                         child: FilledButton(
-                          onPressed: _alreadyPlus && !_changingPlan
-                              ? _leave
-                              : (_canBuy ? _purchase : null),
+                          onPressed: _canBuy ? _purchase : null,
                           style: FilledButton.styleFrom(
                             backgroundColor: cardFg,
                             foregroundColor: cardBg,
