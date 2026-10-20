@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
@@ -10,6 +11,7 @@ import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../src/models/file_model.dart';
 import 'backup_backfill_runner.dart';
+import 'blob_cleanup.dart';
 import 'backup_selection_service.dart';
 import 'cloud/account_registry.dart';
 import 'cloud/cloud_service.dart';
@@ -25,6 +27,8 @@ import 'sync/device_registry_service.dart';
 import 'sync/sync_coordinator.dart';
 import 'sync_service.dart';
 import 'system_folders.dart';
+import 'upload_foreground_guard.dart';
+import 'upload_retry.dart';
 import 'media_origin.dart';
 import 'dart:convert';
 import 'package:cryptography/cryptography.dart';
@@ -139,6 +143,8 @@ class AutoSyncService {
     int failed = 0;
     int skipped = 0;
     int offlineFailures = 0;
+    var limitReached = false;
+    var notStored = 0;
     var pipelineReady = false;
 
     try {
@@ -176,34 +182,58 @@ class AutoSyncService {
       final total = scan.entries.length;
       final outcomes = <({int capturedMs, bool ok})>[];
 
-      for (final entry in scan.entries) {
-        if (entry.duplicate) {
-          skipped++;
-          outcomes.add((capturedMs: entry.capturedMs, ok: true));
-          onProgress?.call(synced + failed + skipped, total);
-          continue;
-        }
-        try {
-          final didSync =
-              await _syncAsset(entry.asset, bucketName: entry.bucketName);
-          if (didSync) {
-            synced++;
-          } else {
-            // Asset unreadable (file handle null). Deliberate safe-skip:
-            // counting it as failure would wedge the watermark on this
-            // asset forever.
+      // Hold the foreground pin while bytes move, so leaving the app does
+      // not freeze the pass and the progress rides into the notification.
+      // Best-effort: in the WorkManager isolate the channel has no handler
+      // and the guard swallows that.
+      final needsPin = scan.entries.any((e) => !e.duplicate);
+      if (needsPin) await UploadForegroundGuard().begin();
+      try {
+        for (var i = 0; i < scan.entries.length; i++) {
+          final entry = scan.entries[i];
+          if (entry.duplicate) {
             skipped++;
+            outcomes.add((capturedMs: entry.capturedMs, ok: true));
+            onProgress?.call(synced + failed + skipped, total);
+            continue;
           }
-          outcomes.add((capturedMs: entry.capturedMs, ok: true));
-        } catch (e) {
-          debugPrint('Auto-sync failed for asset: $e');
-          failed++;
-          if (classifyNetworkError(e) != null) offlineFailures++;
-          outcomes.add((capturedMs: entry.capturedMs, ok: false));
+          try {
+            final didSync =
+                await _syncAsset(entry.asset, bucketName: entry.bucketName);
+            if (didSync) {
+              synced++;
+            } else {
+              // Asset unreadable (file handle null). Deliberate safe-skip:
+              // counting it as failure would wedge the watermark on this
+              // asset forever.
+              skipped++;
+            }
+            outcomes.add((capturedMs: entry.capturedMs, ok: true));
+          } on FreeLimitReachedError {
+            // The cap is a FAILURE outcome, never a skip: a skip would
+            // advance the watermark past this photo and it would never be
+            // backed up, even after an upgrade. Stop the pass here; every
+            // remaining new photo stays inside the next scan window.
+            limitReached = true;
+            notStored = scan.entries
+                .skip(i)
+                .where((e) => !e.duplicate)
+                .length;
+            outcomes.add((capturedMs: entry.capturedMs, ok: false));
+            onProgress?.call(total, total);
+            break;
+          } catch (e) {
+            debugPrint('Auto-sync failed for asset: $e');
+            failed++;
+            if (classifyNetworkError(e) != null) offlineFailures++;
+            outcomes.add((capturedMs: entry.capturedMs, ok: false));
+          }
+          onProgress?.call(synced + failed + skipped, total);
+          // Heartbeat: a long batch must keep the cross-isolate lease fresh.
+          await refreshRunLease();
         }
-        onProgress?.call(synced + failed + skipped, total);
-        // Heartbeat: a long batch must keep the cross-isolate lease fresh.
-        await refreshRunLease();
+      } finally {
+        if (needsPin) await UploadForegroundGuard().end();
       }
 
       // Watermark: advance only past the capture-ordered PREFIX of outcomes
@@ -228,6 +258,7 @@ class AutoSyncService {
         // public-key-only, so this works from the locked background
         // worker — encrypt-while-locked extends to the sync log.
         await SyncCoordinator().pushOnly();
+        unawaited(FreeTierGuard.warnIfNearLimit());
       }
 
       // Notify all subscribed screens (gallery, documents) to refresh
@@ -262,6 +293,8 @@ class AutoSyncService {
       failed: failed,
       skipped: skipped,
       offlineFailures: offlineFailures,
+      limitReached: limitReached,
+      notStored: notStored,
     );
   }
 
@@ -535,10 +568,13 @@ class AutoSyncService {
   /// so the gallery tile never flashes.
   Future<bool> _syncAsset(AssetEntity asset,
       {CnestFile? existingRow, String? bucketName}) async {
-    // Free-tier cap: past the limit only Plus stores more. Quietly skips
-    // (the asset stays eligible for after an upgrade); never touches
-    // anything already stored.
-    if (!await FreeTierGuard.canStoreMore()) return false;
+    // Free-tier cap: past the limit only Plus stores more. THROWS, never
+    // returns false: false counts as a clean skip and advances the
+    // watermark past the asset, which excluded it from backup forever. The
+    // caller stops the pass and the asset stays in the next window.
+    if (!await FreeTierGuard.canStoreMore()) {
+      throw await FreeTierGuard.limitError();
+    }
 
     final account = AccountRegistry().activeAccount;
     if (account == null) {
@@ -649,51 +685,66 @@ class AutoSyncService {
     }
 
     inFlightUploadIds.add(fileId);
+    // Hoisted so the catch can discard a blob that landed for an attempt
+    // that still failed (no orphan for reconcile to adopt).
+    String? mainCloudId;
+    String? thumbCloudId;
     try {
       // Encrypt and upload main file. Content hash (plaintext SHA-256) is
-      // computed in the same single pass as encryption.
+      // computed in the same single pass as encryption. Every cloud write
+      // retries transient failures with backoff; a video reopens its
+      // source per attempt.
       final mainCloudFilename = '$fileId.cnest';
-      String? mainCloudId;
       String? contentHash;
 
       if (isVideo) {
         final encryptedSize =
             EncryptionService.calculateEncryptedSize(fileSize);
-        final hashed = EncryptionService.encryptStreamWithHash(
-            file.openRead(), totalSize: fileSize);
-        mainCloudId = await CloudService().uploadEncryptedFile(
-          filename: mainCloudFilename,
-          type: CnestFileType.image,
-          originalName: filename,
-          stream: hashed.stream,
-          size: encryptedSize,
-        );
-        contentHash = await hashed.hash;
+        Future<String>? hashFuture;
+        mainCloudId = await retryTransientUpload(() {
+          final hashed = EncryptionService.encryptStreamWithHash(
+              file.openRead(),
+              totalSize: fileSize);
+          unawaited(hashed.hash.then((_) {}, onError: (_) {}));
+          hashFuture = hashed.hash;
+          return CloudService().uploadEncryptedFile(
+            filename: mainCloudFilename,
+            type: CnestFileType.image,
+            originalName: filename,
+            stream: hashed.stream,
+            size: encryptedSize,
+          );
+        });
+        contentHash = await hashFuture;
       } else {
         final fileBytes = imageBytes ?? await file.readAsBytes();
         final hashed =
             await EncryptionService.encryptFileWithHashInBackground(fileBytes);
         contentHash = hashed.hash;
-        mainCloudId = await CloudService().uploadEncryptedFile(
-          filename: mainCloudFilename,
-          type: isImage ? CnestFileType.image : CnestFileType.document,
-          originalName: filename,
-          bytes: hashed.encrypted,
-        );
+        final encrypted = hashed.encrypted;
+        mainCloudId = await retryTransientUpload(() =>
+            CloudService().uploadEncryptedFile(
+              filename: mainCloudFilename,
+              type: isImage ? CnestFileType.image : CnestFileType.document,
+              originalName: filename,
+              bytes: encrypted,
+            ));
       }
 
-      if (mainCloudId == null) throw Exception('Upload failed for $filename');
+      final landedMain = mainCloudId;
+      if (landedMain == null) throw Exception('Upload failed for $filename');
 
       // Encrypt and upload thumbnail
-      String? thumbCloudId;
       if (thumbnailBytes != null) {
         final encryptedThumb =
             await EncryptionService.encryptFileInBackground(thumbnailBytes);
-        thumbCloudId = await CloudService().uploadEncryptedFile(
-          filename: '${fileId}_thumb.cnest',
-          type: CnestFileType.image,
-          bytes: encryptedThumb,
-        );
+        final thumbName = '${fileId}_thumb.cnest';
+        thumbCloudId = await retryTransientUpload(() =>
+            CloudService().uploadEncryptedFile(
+              filename: thumbName,
+              type: CnestFileType.image,
+              bytes: encryptedThumb,
+            ));
       }
 
       // Mark as uploaded — also records the createFile sync op (blob is
@@ -701,15 +752,20 @@ class AutoSyncService {
       // asset's MediaStore capture time travels as the gallery sort key so
       // every device orders this photo identically.
       final capturedMs = asset.createDateTime.millisecondsSinceEpoch;
-      await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId,
+      await DatabaseService().markAsUploaded(fileId, landedMain, thumbCloudId,
           filename: filename,
           contentHash: contentHash,
           sizeBytes: fileSize,
           capturedAt: capturedMs > 0 ? capturedMs : null,
           folderId: folderId);
+      // The row is final: the catch below must not discard its blobs.
+      mainCloudId = null;
+      thumbCloudId = null;
 
       return true;
     } catch (e) {
+      await discardLandedBlobs(
+          fileId: fileId, mainCloudId: mainCloudId, thumbCloudId: thumbCloudId);
       // Roll the row back — same contract as the manual upload path — but
       // ONLY for rows THIS attempt inserted. rollbackFailedUpload, NOT
       // permanentlyDeleteFile: this row never recorded a createFile op
@@ -746,12 +802,25 @@ class AutoSyncService {
   /// synced photo while the gallery copy exists, then turns into a broken
   /// tile once it's deleted.
   Future<void> _healPendingUploads() async {
+    // A pending row that reconcile linked to its blob is a finished upload
+    // whose finalise step never ran. Complete it in place first; purging it
+    // as a phantom (what this pass did before) orphaned the blob, and the
+    // next reconcile adopted it as a new rootless file.
+    try {
+      await DatabaseService()
+          .finalizeLinkedPendingUploads(inFlight: inFlightUploadIds);
+    } catch (e) {
+      debugPrint('Finalize of linked uploads failed: $e');
+    }
     final pending = await DatabaseService().getPendingUploads();
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     for (final row in pending) {
       // Never touch a row whose upload is running in this process right
       // now — deleting it mid-upload orphans the uploader's markAsUploaded.
       if (inFlightUploadIds.contains(row.id)) continue;
+      // Linked but not finalised (in flight above, or finalise failed):
+      // never a phantom, never re-uploaded.
+      if (row.cloudId != null) continue;
 
       // Grace measures from the last upload ATTEMPT, not createdAt —
       // createdAt is the media's CAPTURE time, which for an old photo
@@ -867,11 +936,18 @@ class AutoSyncResult {
   /// Messaging only — V1 never auto-retries; the next sync rescans them.
   final int offlineFailures;
 
+  /// The pass stopped at the Free cap. [notStored] new photos were left
+  /// for the next window; the watermark did not move past any of them.
+  final bool limitReached;
+  final int notStored;
+
   AutoSyncResult({
     required this.synced,
     required this.failed,
     required this.skipped,
     this.offlineFailures = 0,
+    this.limitReached = false,
+    this.notStored = 0,
   });
 
   bool get allFailuresOffline => failed > 0 && offlineFailures >= failed;

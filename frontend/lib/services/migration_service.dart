@@ -7,6 +7,8 @@ import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../src/models/file_model.dart';
 import 'auto_sync_service.dart';
+import 'blob_cleanup.dart';
+import 'cnest_errors.dart';
 import 'system_folders.dart';
 import 'cloud/cloud_service.dart';
 import 'database_backup_service.dart';
@@ -14,6 +16,7 @@ import 'database_service.dart';
 import 'subscription_service.dart';
 import 'encryption_service.dart';
 import 'media_origin.dart';
+import 'upload_retry.dart';
 
 class MigrationService {
   static final MigrationService _instance = MigrationService._internal();
@@ -207,6 +210,7 @@ class MigrationService {
     int failed = 0;
     int skipped = 0;
     int bytesUploaded = 0;
+    var limitReached = false;
     final stopwatch = Stopwatch()..start();
 
     for (int i = 0; i < assets.length; i++) {
@@ -243,6 +247,12 @@ class MigrationService {
         } else {
           skipped++;
         }
+      } on FreeLimitReachedError {
+        // Stop the pass. Nothing after this asset can be stored, and the
+        // caller keeps the album's backfill flag so it resumes after an
+        // upgrade or a clean-out.
+        limitReached = true;
+        break;
       } catch (e) {
         debugPrint('Migration failed for asset ${asset.id}: $e');
         failed++;
@@ -290,7 +300,8 @@ class MigrationService {
         synced: synced,
         failed: failed,
         skipped: skipped,
-        cancelled: wasCancelled);
+        cancelled: wasCancelled,
+        limitReached: limitReached);
   }
 
   void pause() => _isPaused = true;
@@ -302,10 +313,12 @@ class MigrationService {
 
   Future<bool> _migrateAsset(AssetEntity asset, String email,
       {String? bucketName}) async {
-    // Free-tier cap: past the limit only Plus stores more. Quietly skips
-    // (the asset stays eligible for after an upgrade); never touches
-    // anything already stored.
-    if (!await FreeTierGuard.canStoreMore()) return false;
+    // Free-tier cap: past the limit only Plus stores more. Throws so the
+    // pass stops instead of counting the asset as a clean skip (which
+    // would clear the album's backfill flag with photos left behind).
+    if (!await FreeTierGuard.canStoreMore()) {
+      throw await FreeTierGuard.limitError();
+    }
 
     final file = await MediaOrigin.fileWithMetadata(asset);
     if (file == null) return false;
@@ -376,60 +389,80 @@ class MigrationService {
     // never retry this row in place while our upload is running (a slow
     // large-video backfill can outlive the 15-minute grace window).
     AutoSyncService.inFlightUploadIds.add(fileId);
+    // Hoisted so the catch can discard a blob that landed for an attempt
+    // that still failed (no orphan for reconcile to adopt).
+    String? mainCloudId;
+    String? thumbCloudId;
     try {
-      // Encrypt and upload (content hash computed in the same pass).
+      // Encrypt and upload (content hash computed in the same pass). Every
+      // cloud write retries transient failures with backoff; a video
+      // reopens its source per attempt.
       final mainCloudFilename = '$fileId.cnest';
-      String? mainCloudId;
       String? contentHash;
 
       if (isVideo) {
         final encryptedSize =
             EncryptionService.calculateEncryptedSize(fileSize);
-        final hashed = EncryptionService.encryptStreamWithHash(
-            file.openRead(), totalSize: fileSize);
-        mainCloudId = await CloudService().uploadEncryptedFile(
-          filename: mainCloudFilename,
-          type: CnestFileType.image,
-          originalName: filename,
-          stream: hashed.stream,
-          size: encryptedSize,
-        );
-        contentHash = await hashed.hash;
+        Future<String>? hashFuture;
+        mainCloudId = await retryTransientUpload(() {
+          final hashed = EncryptionService.encryptStreamWithHash(
+              file.openRead(),
+              totalSize: fileSize);
+          unawaited(hashed.hash.then((_) {}, onError: (_) {}));
+          hashFuture = hashed.hash;
+          return CloudService().uploadEncryptedFile(
+            filename: mainCloudFilename,
+            type: CnestFileType.image,
+            originalName: filename,
+            stream: hashed.stream,
+            size: encryptedSize,
+          );
+        });
+        contentHash = await hashFuture;
       } else {
         final fileBytes = imageBytes ?? await file.readAsBytes();
         final hashed = await EncryptionService.encryptFileWithHashInBackground(fileBytes);
         contentHash = hashed.hash;
-        mainCloudId = await CloudService().uploadEncryptedFile(
-          filename: mainCloudFilename,
-          type: isImage ? CnestFileType.image : CnestFileType.document,
-          originalName: filename,
-          bytes: hashed.encrypted,
-        );
+        final encrypted = hashed.encrypted;
+        mainCloudId = await retryTransientUpload(() =>
+            CloudService().uploadEncryptedFile(
+              filename: mainCloudFilename,
+              type: isImage ? CnestFileType.image : CnestFileType.document,
+              originalName: filename,
+              bytes: encrypted,
+            ));
       }
 
-      if (mainCloudId == null) throw Exception('Upload failed for $filename');
+      final landedMain = mainCloudId;
+      if (landedMain == null) throw Exception('Upload failed for $filename');
 
       // Upload thumbnail
-      String? thumbCloudId;
       if (thumbnailBytes != null) {
         final encryptedThumb =
             await EncryptionService.encryptFileInBackground(thumbnailBytes);
-        thumbCloudId = await CloudService().uploadEncryptedFile(
-          filename: '${fileId}_thumb.cnest',
-          type: CnestFileType.image,
-          bytes: encryptedThumb,
-        );
+        final thumbName = '${fileId}_thumb.cnest';
+        thumbCloudId = await retryTransientUpload(() =>
+            CloudService().uploadEncryptedFile(
+              filename: thumbName,
+              type: CnestFileType.image,
+              bytes: encryptedThumb,
+            ));
       }
 
       final capturedMs = asset.createDateTime.millisecondsSinceEpoch;
-      await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId,
+      await DatabaseService().markAsUploaded(fileId, landedMain, thumbCloudId,
           filename: filename,
           contentHash: contentHash,
           sizeBytes: fileSize,
           capturedAt: capturedMs > 0 ? capturedMs : null,
           folderId: folderId);
+      // The row is final: the catch below must not discard its blobs.
+      mainCloudId = null;
+      thumbCloudId = null;
       return true;
     } catch (e) {
+      await discardLandedBlobs(
+          fileId: fileId, mainCloudId: mainCloudId, thumbCloudId: thumbCloudId);
       // Failed mid-upload: remove the phantom row — same contract as the
       // manual pipeline (rollbackFailedUpload, never permanentlyDeleteFile:
       // no createFile op exists yet, so a purge op would be a spurious
@@ -518,10 +551,15 @@ class MigrationResult {
   /// pass" (the backfill runner) must check this too.
   final bool cancelled;
 
+  /// True when the pass stopped at the Free cap. Also not a clean pass:
+  /// the album's backfill flag must survive so it resumes later.
+  final bool limitReached;
+
   MigrationResult({
     required this.synced,
     required this.failed,
     required this.skipped,
     this.cancelled = false,
+    this.limitReached = false,
   });
 }

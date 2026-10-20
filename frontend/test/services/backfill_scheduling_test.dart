@@ -42,6 +42,7 @@ void main() {
     runner = BackupBackfillRunner();
     migrated = [];
     runner.debugScan = (album) async => _scanWithOneAsset();
+    runner.debugCanStore = () async => true;
     runner.debugMigrate = (album, scan) async {
       migrated.add(album.name);
       return MigrationResult(synced: 1, failed: 0, skipped: 0);
@@ -52,6 +53,7 @@ void main() {
     runner.debugAlbums = null;
     runner.debugScan = null;
     runner.debugMigrate = null;
+    runner.debugCanStore = null;
     // Let any coalesced rerun microtask settle before the next test.
     await Future<void>.delayed(const Duration(milliseconds: 10));
   });
@@ -152,5 +154,42 @@ void main() {
     expect(await BackupSelectionService().pendingBackfills(),
         contains('otherphonealbum'),
         reason: 'another device\'s album keeps its flag');
+  });
+
+  test('at the Free cap the runner skips silently and keeps every flag',
+      () async {
+    runner.debugAlbums = () async => [_album('AlbumA'), _album('AlbumB')];
+    await BackupSelectionService().enroll('AlbumA', backfill: true);
+    await BackupSelectionService().enroll('AlbumB', backfill: true);
+    runner.debugCanStore = () async => false;
+    runner.debugMigrate = (album, scan) async {
+      migrated.add(album.name);
+      return MigrationResult(synced: 1, failed: 0, skipped: 0);
+    };
+
+    await runner.runPending();
+
+    expect(migrated, isEmpty, reason: 'nothing can be stored, nothing runs');
+    expect(await BackupSelectionService().pendingBackfills(),
+        containsAll(['albuma', 'albumb']),
+        reason: 'flags survive so the backfill resumes after an upgrade');
+  });
+
+  test('a pass that hits the cap mid-album keeps the flag and stops the queue',
+      () async {
+    runner.debugAlbums = () async => [_album('AlbumA'), _album('AlbumB')];
+    await BackupSelectionService().enroll('AlbumA', backfill: true);
+    await BackupSelectionService().enroll('AlbumB', backfill: true);
+    runner.debugMigrate = (album, scan) async {
+      migrated.add(album.name);
+      return MigrationResult(
+          synced: 3, failed: 0, skipped: 0, limitReached: true);
+    };
+
+    await runner.runPending();
+
+    expect(migrated, ['AlbumA'], reason: 'the queue stops at the cap');
+    expect(await BackupSelectionService().pendingBackfills(),
+        containsAll(['albuma', 'albumb']));
   });
 }

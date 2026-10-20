@@ -14,6 +14,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:ciphernest/services/database_service.dart';
+import 'package:ciphernest/services/key_manager_service.dart';
+import 'package:cryptography/cryptography.dart';
+import 'dart:typed_data';
 
 const _acct = 'google_test@example.com';
 
@@ -57,9 +60,18 @@ void main() {
 
   test('unopenable sealed metadata adopts FLAGGED; legacy plaintext does not',
       () async {
+    // The vault is UNLOCKED with its own key; the seal was made under a
+    // different one (the start-over shape). A locked vault defers instead,
+    // see reconcile_hardening_test.
+    final keyPair = await X25519().newKeyPairFromSeed(
+        Uint8List.fromList(List<int>.generate(32, (i) => i + 1)));
+    KeyManagerService().installKeysForTest(
+      keyPair: keyPair,
+      publicKey: await keyPair.extractPublicKey(),
+    );
     await DatabaseService().reconcile(
       [
-        // Sealed metadata that cannot open under our (absent) key — the
+        // Sealed metadata that cannot open under our key — the
         // foreign-vault shape.
         _blob('c-foreign', 'uuid-foreign.cnest',
             sealedMeta: 'bm90LXJlYWwtc2VhbGVkLWJsb2I='),

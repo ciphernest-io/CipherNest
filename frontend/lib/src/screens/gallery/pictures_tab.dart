@@ -1494,6 +1494,11 @@ class PicturesTabState extends State<PicturesTab>
       return;
     }
     final r = SyncService().lastAutoSyncResult;
+    if (r != null && r.limitReached) {
+      Notify.error('Free limit reached. Upgrade to Plus or free up space '
+          'to keep backing up');
+      return;
+    }
     if (r == null || (r.synced == 0 && r.failed == 0)) {
       Notify.info('Sync complete');
     }

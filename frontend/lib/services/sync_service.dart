@@ -114,6 +114,13 @@ class SyncService {
         cloudFiles.cast<Map<String, dynamic>>(),
         accountId: accountId,
       );
+      // Pending rows the reconcile just linked to their blobs are finished
+      // uploads; finalise them now rather than at the next heal pass.
+      if (switched()) return true;
+      await DatabaseService().finalizeLinkedPendingUploads(
+        accountId: accountId,
+        inFlight: AutoSyncService.inFlightUploadIds,
+      );
 
       // 3. Snapshot after reconcile — detect deletions
       final newMap =
@@ -201,10 +208,12 @@ class SyncService {
         final r = lastAutoSyncResult;
         final t = bTask;
         if (t != null && r != null) {
-          final msg = r.failed > 0
-              ? '${r.synced} backed up · ${r.failed} failed'
-              : '${r.synced} photo${r.synced == 1 ? '' : 's'} secured';
-          r.failed > 0 ? t.fail(msg) : t.complete(msg);
+          final msg = r.limitReached
+              ? 'Free limit reached · ${r.notStored} not backed up'
+              : r.failed > 0
+                  ? '${r.synced} backed up · ${r.failed} failed'
+                  : '${r.synced} photo${r.synced == 1 ? '' : 's'} secured';
+          (r.failed > 0 || r.limitReached) ? t.fail(msg) : t.complete(msg);
         }
       }
 

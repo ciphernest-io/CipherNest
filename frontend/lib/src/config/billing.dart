@@ -44,6 +44,15 @@ const Duration kOfflineTolerance = Duration(hours: 48);
 /// verifies, and a resume past expiry verifies regardless of this gap.
 const Duration kResumeMinGap = Duration(minutes: 15);
 
+/// Minimum gap between entitlement verifications triggered by the Free cap.
+///
+/// Auto-sync and backfill ask the cap question once per asset. At the cap
+/// every one of those used to reach RevenueCat; a 1,000-photo album meant a
+/// thousand requests to learn the same answer. One verification per gap is
+/// plenty: a purchase made on another device lands within seconds via the
+/// customer-info listener anyway, and Restore is always explicit.
+const Duration kCapRecheckMinGap = Duration(minutes: 10);
+
 /// SharedPreferences key marking that the signup paywall was reached and not
 /// yet left. A kill on the paywall used to resume at cloud selection with the
 /// step silently skipped; the login router reads this and returns to the

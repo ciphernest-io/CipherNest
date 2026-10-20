@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:isolate';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -19,6 +20,7 @@ import '../src/utils/media_store_uri.dart';
 import 'activity_center.dart';
 import 'audio_art_parser.dart';
 import 'auto_sync_service.dart';
+import 'blob_cleanup.dart';
 import 'cloud/account_registry.dart';
 import 'cloud/cloud_account.dart';
 import 'cloud/cloud_service.dart';
@@ -30,6 +32,7 @@ import 'file_metadata_service.dart';
 import 'mp4_metadata_parser.dart';
 import 'subscription_service.dart';
 import 'upload_foreground_guard.dart';
+import 'upload_retry.dart';
 import 'media_origin.dart';
 
 /// Which picker surface the user came through. Drives type classification
@@ -45,6 +48,10 @@ class UploadOutcome {
   final bool skippedDuplicate;
   final Object? error;
   const UploadOutcome._(this.filename,
+      {required this.ok, this.skippedDuplicate = false, this.error});
+
+  @visibleForTesting
+  const UploadOutcome.forTest(this.filename,
       {required this.ok, this.skippedDuplicate = false, this.error});
 }
 
@@ -103,14 +110,15 @@ class UploadPipeline {
       ];
     }
 
-    // Free-tier cap: the whole batch must fit (a partial upload of a
-    // hand-picked batch confuses more than it helps). Typed failure so
-    // callers surface the upsell like any other upload error.
-    if (!await FreeTierGuard.canStoreMore(adding: picks.length)) {
+    // Free-tier cap. The per-file check lives in _uploadOne AFTER the
+    // duplicate check (a duplicate never needs a slot), so a batch fills to
+    // the cap and the rest fail typed. With duplicate skipping off (folder
+    // import) nothing can be a duplicate, so a full vault is answered up
+    // front without copying or hashing a single file.
+    if (!skipDuplicates && !await FreeTierGuard.canStoreMore()) {
+      final err = await FreeTierGuard.limitError(notStored: picks.length);
       return [
-        for (final p in picks)
-          UploadOutcome._(p.name,
-              ok: false, error: const FreeLimitReachedError()),
+        for (final p in picks) UploadOutcome._(p.name, ok: false, error: err),
       ];
     }
 
@@ -144,6 +152,19 @@ class UploadPipeline {
             label: 'Encrypting ${i + 1}/${picks.length}…');
         onProgress?.call(i + 1, picks.length);
       }
+      // One limit error for the batch, carrying how many did not fit, so
+      // the sheet can say "7 files were not uploaded" instead of one.
+      final overLimit =
+          outcomes.where((o) => o.error is FreeLimitReachedError).length;
+      if (overLimit > 0) {
+        final err = await FreeTierGuard.limitError(notStored: overLimit);
+        for (var i = 0; i < outcomes.length; i++) {
+          if (outcomes[i].error is FreeLimitReachedError) {
+            outcomes[i] =
+                UploadOutcome._(outcomes[i].filename, ok: false, error: err);
+          }
+        }
+      }
       final summary = cancelled
           ? 'Upload stopped: ${outcomes.length} of ${picks.length} done'
           : summarizeOutcomes(outcomes);
@@ -151,6 +172,9 @@ class UploadPipeline {
         task?.fail(summary);
       } else {
         task?.complete(summary);
+      }
+      if (outcomes.any((o) => o.ok && !o.skippedDuplicate)) {
+        unawaited(FreeTierGuard.warnIfNearLimit());
       }
       return outcomes;
     } catch (e) {
@@ -169,7 +193,9 @@ class UploadPipeline {
     final uploaded =
         outcomes.where((o) => o.ok && !o.skippedDuplicate).length;
     final dups = outcomes.where((o) => o.skippedDuplicate).length;
-    final failures = outcomes.where((o) => !o.ok).length;
+    final overLimit =
+        outcomes.where((o) => o.error is FreeLimitReachedError).length;
+    final failures = outcomes.where((o) => !o.ok).length - overLimit;
     final parts = <String>[];
     if (uploaded > 0) {
       parts.add(outcomes.length == 1
@@ -177,6 +203,7 @@ class UploadPipeline {
           : '$uploaded file${uploaded == 1 ? '' : 's'} secured');
     }
     if (dups > 0) parts.add('$dups already in your vault');
+    if (overLimit > 0) parts.add('$overLimit over the Free limit');
     if (failures > 0) parts.add('$failures failed');
     return parts.isEmpty ? 'Nothing uploaded' : parts.join(' · ');
   }
@@ -189,14 +216,16 @@ class UploadPipeline {
     bool skipDuplicates = true,
   }) async {
     Uint8List? fileBytes;
-    Stream<List<int>>? fileStream;
     Uint8List? thumbnailBytes;
     String filename = pickedFile.name;
     String? pickedPath;
     bool isLocalFile = false;
     // Hoisted so the catch block can roll back the row inserted in step 4
-    // when a later step (upload) fails.
+    // when a later step (upload) fails, and discard any blob that landed.
     String? fileId;
+    String? mainCloudId;
+    String? thumbCloudId;
+    Future<String?>? thumbUploadFuture;
 
     try {
       final fileSize = pickedFile.size;
@@ -219,7 +248,7 @@ class UploadPipeline {
 
       // --- 2. PREPARE STREAM OR BYTES + VIDEO THUMB ---
       if (isVideo) {
-        fileStream = File(pickedPath).openRead();
+        // The source is streamed at upload time (reopened per attempt).
         try {
           thumbnailBytes = await VideoThumbnail.thumbnailData(
             video: pickedPath,
@@ -293,6 +322,15 @@ class UploadPipeline {
             await DatabaseService().hasActiveContentHash(hashed.hash)) {
           return UploadOutcome._(filename, ok: true, skippedDuplicate: true);
         }
+      }
+
+      // Free-tier cap, per file and AFTER the duplicate check: a duplicate
+      // never needs a slot, so re-sending an already stored photo at the
+      // cap reads "already in your vault", not an error. Typed so the
+      // callers surface the upsell.
+      if (!await FreeTierGuard.canStoreMore()) {
+        return UploadOutcome._(filename,
+            ok: false, error: await FreeTierGuard.limitError());
       }
 
       // --- 4. DATABASE ENTRY ---
@@ -427,53 +465,69 @@ class UploadPipeline {
       }
 
       // --- 5. ENCRYPT & UPLOAD ---
+      // Every cloud write retries transient failures (rate limit, 5xx, a
+      // connection that died mid-transfer) with backoff. A streamed video
+      // reopens its source per attempt; bytes are replayed as they are.
       final mainCloudFilename = '$fileId.cnest';
-      Future<String?> mainUploadFuture;
+      final Future<String?> mainUploadFuture;
       Future<String>? contentHashFuture;
 
-      if (isVideo && fileStream != null) {
+      if (isVideo) {
         final encryptedSize =
             EncryptionService.calculateEncryptedSize(fileSize);
-        final hashed = EncryptionService.encryptStreamWithHash(fileStream,
-            totalSize: fileSize);
-        contentHashFuture = hashed.hash;
-        mainUploadFuture = CloudService().uploadEncryptedFile(
-          filename: mainCloudFilename,
-          type: type,
-          originalName: filename,
-          stream: hashed.stream,
-          size: encryptedSize,
-          bytes: null,
-          account: account,
-        );
+        final sourcePath = pickedPath;
+        final uploadType = type;
+        final uploadName = filename;
+        mainUploadFuture = retryTransientUpload(() {
+          final hashed = EncryptionService.encryptStreamWithHash(
+              File(sourcePath).openRead(),
+              totalSize: fileSize);
+          // A failed attempt's hash future must not surface as an
+          // unhandled error; the successful attempt's is awaited below.
+          unawaited(hashed.hash.then((_) {}, onError: (_) {}));
+          contentHashFuture = hashed.hash;
+          return CloudService().uploadEncryptedFile(
+            filename: mainCloudFilename,
+            type: uploadType,
+            originalName: uploadName,
+            stream: hashed.stream,
+            size: encryptedSize,
+            bytes: null,
+            account: account,
+          );
+        });
       } else if (preEncrypted != null) {
         contentHashFuture = Future.value(preEncrypted.hash);
-        mainUploadFuture = CloudService().uploadEncryptedFile(
-          filename: mainCloudFilename,
-          type: type,
-          originalName: filename,
-          bytes: preEncrypted.encrypted,
-          account: account,
-        );
+        final encrypted = preEncrypted.encrypted;
+        final uploadType = type;
+        final uploadName = filename;
+        mainUploadFuture = retryTransientUpload(() =>
+            CloudService().uploadEncryptedFile(
+              filename: mainCloudFilename,
+              type: uploadType,
+              originalName: uploadName,
+              bytes: encrypted,
+              account: account,
+            ));
       } else {
         throw Exception('Invalid state');
       }
 
-      Future<String?>? thumbUploadFuture;
       if (thumbnailBytes != null) {
         final encryptedThumbBytes =
             await EncryptionService.encryptFileInBackground(thumbnailBytes);
-        thumbUploadFuture = CloudService().uploadEncryptedFile(
-          bytes: encryptedThumbBytes,
-          filename: '${fileId}_thumb.cnest',
-          type: CnestFileType.image,
-          account: account,
-        );
+        final thumbName = '${fileId}_thumb.cnest';
+        thumbUploadFuture = retryTransientUpload(() =>
+            CloudService().uploadEncryptedFile(
+              bytes: encryptedThumbBytes,
+              filename: thumbName,
+              type: CnestFileType.image,
+              account: account,
+            ));
       }
 
-      final mainCloudId = await mainUploadFuture;
-      final thumbCloudId =
-          thumbUploadFuture != null ? await thumbUploadFuture : null;
+      mainCloudId = await mainUploadFuture;
+      thumbCloudId = thumbUploadFuture != null ? await thumbUploadFuture : null;
       if (mainCloudId == null) throw Exception('Main upload failed');
 
       // The blobs went to the bound account (providerFor). Finalise the row
@@ -488,13 +542,17 @@ class UploadPipeline {
 
       final contentHash = await contentHashFuture;
 
-      await DatabaseService().markAsUploaded(fileId, mainCloudId, thumbCloudId,
+      final landedMain = mainCloudId;
+      await DatabaseService().markAsUploaded(fileId, landedMain, thumbCloudId,
           filename: filename,
           contentHash: contentHash,
           sizeBytes: fileSize,
           capturedAt: capturedMs,
           folderId: folderId);
       DatabaseBackupService().scheduleBackup();
+      // The row is final: nothing below may discard its blobs.
+      mainCloudId = null;
+      thumbCloudId = null;
 
       // Prime the grid's thumb cache from bytes already in memory — only
       // for videos with no MediaStore binding (asset-bound videos render
@@ -502,7 +560,7 @@ class UploadPipeline {
       if (isVideo && thumbnailBytes != null && matchedAssetId == null) {
         try {
           final dir = await getTemporaryDirectory();
-          await File('${dir.path}/thumb_$mainCloudId.jpg')
+          await File('${dir.path}/thumb_$landedMain.jpg')
               .writeAsBytes(thumbnailBytes);
           final localThumb = File('${dir.path}/thumb_local_$fileId.jpg');
           if (await localThumb.exists()) await localThumb.delete();
@@ -517,6 +575,19 @@ class UploadPipeline {
       // entry. Matches the auto-sync rollback.
       final rollbackId = fileId;
       if (rollbackId != null) {
+        // A thumb still in flight may land after the main upload failed;
+        // learn its id so it can be discarded too.
+        if (thumbCloudId == null && thumbUploadFuture != null) {
+          try {
+            thumbCloudId = await thumbUploadFuture;
+          } catch (_) {}
+        }
+        await discardLandedBlobs(
+          fileId: rollbackId,
+          mainCloudId: mainCloudId,
+          thumbCloudId: thumbCloudId,
+          account: account,
+        );
         try {
           await DatabaseService().rollbackFailedUpload(rollbackId);
         } catch (rollbackErr) {
@@ -548,10 +619,12 @@ class UploadPipeline {
     }
   }
 
-  /// Maps an upload failure to the friendly error surface. Quota first —
-  /// its exceptions can carry connection-ish wording that the network
-  /// classifier would misread.
+  /// Maps an upload failure to the friendly error surface. Typed errors
+  /// pass through untouched: the Free-limit error used to fall into the
+  /// generic "Code: UPLOAD" here. Quota next — its exceptions can carry
+  /// connection-ish wording that the network classifier would misread.
   static CnestError mapUploadError(Object e) {
+    if (e is CnestError) return e;
     final msg = e.toString().toLowerCase();
     if (msg.contains('storagequotaexceeded') ||
         msg.contains('quotalimitreached') ||

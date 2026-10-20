@@ -12,6 +12,7 @@ import 'cache_manager_service.dart';
 import 'cloud/account_registry.dart';
 import 'notify.dart';
 import 'cloud/sealed_metadata.dart';
+import 'key_manager_service.dart';
 import 'sync/sync_coordinator.dart';
 import 'sync/sync_op.dart';
 import 'system_folders.dart';
@@ -39,7 +40,18 @@ class AutoSyncDedupIndex {
         inFlightKeys = const {};
 }
 
+/// How long after an upload ATTEMPT started its row is immune to the
+/// reconcile deletion pass. Covers the listing lag of a blob created
+/// moments ago, plus a slow large upload whose row was finalised while
+/// the listing was already in flight.
+const Duration kFreshUploadGrace = Duration(minutes: 15);
+
 class DatabaseService extends ChangeNotifier {
+  /// Cloud ids whose blob was missing from exactly one listing so far (see
+  /// [reconcile]). Process-local on purpose: after a restart the first miss
+  /// counts again, which only delays a true remote deletion by one cycle.
+  final Set<String> _blobMissingOnce = <String>{};
+
   static final DatabaseService _instance = DatabaseService._internal();
   factory DatabaseService() => _instance;
   DatabaseService._internal();
@@ -1469,14 +1481,72 @@ class DatabaseService extends ChangeNotifier {
     return maps.map((m) => CnestFile.fromMap(m)).toList();
   }
 
-  /// Vault-wide live file count, ALL accounts. The free-tier cap counts
-  /// everything that occupies a slot: uploaded or still pending, any type.
-  /// Deleted (recycled) rows do not count; purging frees the slot.
-  Future<int> countActiveFiles() async {
+  /// Vault-wide stored-file count, ALL accounts: the number the Free cap is
+  /// measured against. Everything that occupies a slot counts: uploaded or
+  /// still pending, any type, live OR in the Recycle Bin. A binned row is
+  /// restorable (directly, through a folder restore, or by op replay from
+  /// another device), so excluding it let "bin one, upload one, restore"
+  /// end at 1,001 files. Only a purge frees a slot. Rows flagged prior_key
+  /// are foreign blobs this vault cannot open; they are not the user's
+  /// files and do not count.
+  Future<int> countStoredFiles() async {
     final db = await database;
     final rows = await db
-        .rawQuery('SELECT COUNT(*) AS n FROM files WHERE is_deleted = 0');
+        .rawQuery('SELECT COUNT(*) AS n FROM files WHERE prior_key = 0');
     return (rows.first['n'] as int?) ?? 0;
+  }
+
+  /// How many of the stored rows sit in the Recycle Bin (any account). The
+  /// limit sheet tells the user where their slots went.
+  Future<int> countBinnedFiles() async {
+    final db = await database;
+    final rows = await db.rawQuery(
+        'SELECT COUNT(*) AS n FROM files WHERE prior_key = 0 AND is_deleted = 1');
+    return (rows.first['n'] as int?) ?? 0;
+  }
+
+  /// Pending rows (is_uploaded = 0) that [reconcile] has since linked to a
+  /// blob by uuid stem. Such a row is a FINISHED upload whose finalise step
+  /// never ran: the process died between the blob landing and
+  /// [markAsUploaded]. Complete it in place, so it keeps its folder, name,
+  /// local path and dimensions, and record its createFile op now.
+  ///
+  /// Before this the heal pass treated the row as a phantom and purged it;
+  /// the next reconcile then adopted the very same blob as a new row at the
+  /// vault root with no path, which is how imported files "moved" to the
+  /// root and binned files came back. [inFlight] are rows being uploaded
+  /// right now by this process; they finish through their own uploader.
+  Future<int> finalizeLinkedPendingUploads({
+    String? accountId,
+    Set<String> inFlight = const {},
+  }) async {
+    final acct = accountId ?? _currentAccountId;
+    if (acct == null) return 0;
+    final db = await database;
+    final rows = await db.query(
+      'files',
+      where: 'account_id = ? AND is_uploaded = 0 AND cloud_id IS NOT NULL',
+      whereArgs: [acct],
+    );
+    var n = 0;
+    for (final r in rows) {
+      final f = CnestFile.fromMap(r);
+      if (inFlight.contains(f.id)) continue;
+      final cloudId = f.cloudId;
+      if (cloudId == null) continue;
+      await markAsUploaded(
+        f.id,
+        cloudId,
+        f.thumbnailCloudId,
+        filename: f.filename,
+        contentHash: f.contentHash,
+        sizeBytes: f.sizeBytes,
+        capturedAt: f.createdAt.millisecondsSinceEpoch,
+        folderId: f.folderId,
+      );
+      n++;
+    }
+    return n;
   }
 
   /// Index the auto-sync scan uses to decide "is this gallery asset already
@@ -1671,16 +1741,33 @@ class DatabaseService extends ChangeNotifier {
     final cloudIds = cloudFiles.map((f) => f['id'] as String).toSet();
     final localRows = await db.query(
       'files',
-      columns: ['id', 'cloud_id'],
+      columns: ['id', 'cloud_id', 'upload_started_at'],
       where: 'is_uploaded = 1 AND account_id = ?',
       whereArgs: [acct]
     );
     
+    // A row is deleted only when its blob is missing from TWO consecutive
+    // listings, and never while its upload attempt is fresh. A Drive
+    // listing can lag a just-created blob by seconds; one stale listing
+    // used to delete the row here and the next one re-adopted the blob as
+    // a new file at the vault root (no folder, no local path). True remote
+    // deletions still converge, one cycle later.
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
     for (var row in localRows) {
       final cloudId = row['cloud_id'] as String?;
-      if (cloudId != null && !cloudIds.contains(cloudId)) {
-        batch.delete('files', where: 'id = ?', whereArgs: [row['id']]);
+      if (cloudId == null) continue;
+      if (cloudIds.contains(cloudId)) {
+        _blobMissingOnce.remove(cloudId);
+        continue;
       }
+      final started = row['upload_started_at'] as int?;
+      if (started != null &&
+          nowMs - started < kFreshUploadGrace.inMilliseconds) {
+        continue;
+      }
+      if (_blobMissingOnce.add(cloudId)) continue; // first strike
+      _blobMissingOnce.remove(cloudId);
+      batch.delete('files', where: 'id = ?', whereArgs: [row['id']]);
     }
     
     await batch.commit(noResult: true);
@@ -1722,6 +1809,7 @@ class DatabaseService extends ChangeNotifier {
     }
 
     var unreadableMeta = 0;
+    final unlocked = KeyManagerService().isUnlocked;
     for (var file in mainFiles) {
       final name = file['name'] as String? ?? '';
       final stem = name.replaceAll('.cnest', '');
@@ -1731,6 +1819,10 @@ class DatabaseService extends ChangeNotifier {
       // corruption) degrades to the UUID and gets counted for Vault Health —
       // it must never fail the sweep.
       final sealedMeta = file['sealed_meta'] as String?;
+      // Locked vault: the seal cannot be opened, so the blob would adopt as
+      // a prior-key row with a UUID name, permanently (the insert is
+      // ignore-on-conflict). Wait for an unlocked cycle instead.
+      if (sealedMeta != null && !unlocked) continue;
       final opened =
           sealedMeta == null ? null : await SealedMetadata.tryOpen(sealedMeta);
       final resolved = CloudNameResolver.resolve(

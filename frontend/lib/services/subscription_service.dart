@@ -4,7 +4,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../src/config/billing.dart';
 import '../src/config/flags.dart';
 import 'billing_service.dart';
+import 'cnest_errors.dart';
 import 'database_service.dart';
+import 'notify.dart';
 
 /// Entitlement gate for Plus.
 ///
@@ -272,14 +274,71 @@ class SubscriptionService extends ChangeNotifier {
   }
 }
 
-/// The Free tier's storage cap and its single enforcement question. Both
-/// upload funnels (manual UploadPipeline; auto-sync / migration per-asset)
-/// ask here. Reading, decrypting, and deleting are NEVER gated.
+/// Where the vault stands against the Free cap, for every surface that
+/// shows or enforces it. One query, one number: [stored] counts every row
+/// that holds a slot (live, pending, Recycle Bin), see
+/// [DatabaseService.countStoredFiles].
+class FreeTierStatus {
+  const FreeTierStatus({
+    required this.isPlus,
+    required this.stored,
+    required this.binned,
+    this.limit = FreeTierGuard.freeFileLimit,
+  });
+
+  final bool isPlus;
+  final int stored;
+  final int binned;
+  final int limit;
+
+  /// Slots left on Free; meaningless (and huge) on Plus.
+  int get remaining => isPlus ? 1 << 30 : (limit - stored).clamp(0, limit);
+  bool get atLimit => !isPlus && stored >= limit;
+
+  /// From 90% up the UI turns amber and a one-time toast fires.
+  bool get nearLimit =>
+      !isPlus && stored >= (limit * FreeTierGuard.warnAtPercent) ~/ 100;
+  double get fraction => limit == 0 ? 0 : (stored / limit).clamp(0.0, 1.0);
+}
+
+/// The Free tier's storage cap and its single enforcement question. Every
+/// upload funnel (manual UploadPipeline; auto-sync / backfill per-asset)
+/// asks here. Reading, decrypting, and deleting are NEVER gated.
 class FreeTierGuard {
   FreeTierGuard._();
 
   /// Free stores this many files; Plus is unlimited.
   static const int freeFileLimit = 1000;
+
+  /// Percentage of the cap at which the UI starts warning.
+  static const int warnAtPercent = 90;
+
+  static const _kWarnedBucketPref = 'free_limit_warned_bucket_v1';
+
+  /// Epoch ms of the last cap-triggered entitlement verification. See
+  /// [kCapRecheckMinGap]: at the cap every skipped asset used to ask
+  /// RevenueCat again.
+  static int? _lastCapRefreshMs;
+
+  @visibleForTesting
+  static void resetThrottleForTest() => _lastCapRefreshMs = null;
+
+  /// Snapshot for the Home card, the buttons and the limit sheet.
+  static Future<FreeTierStatus> status() async {
+    final sub = SubscriptionService();
+    await sub.init();
+    final db = DatabaseService();
+    final stored = await db.countStoredFiles();
+    final binned = await db.countBinnedFiles();
+    return FreeTierStatus(isPlus: sub.isPlus, stored: stored, binned: binned);
+  }
+
+  /// The typed error every blocked upload surfaces, with the counts the
+  /// message needs. [notStored] is how many files of the batch did not fit.
+  static Future<FreeLimitReachedError> limitError({int notStored = 0}) async {
+    final binned = await DatabaseService().countBinnedFiles();
+    return FreeLimitReachedError(binned: binned, notStored: notStored);
+  }
 
   /// Whether [adding] more files fits the tier.
   ///
@@ -288,11 +347,8 @@ class FreeTierGuard {
   ///  1. A user with a known-good, unexpired entitlement passes immediately.
   ///  2. A user comfortably under the cap passes on a local row count.
   ///  3. Only a user who is at the cap, or whose entitlement is past its
-  ///     expiry, is worth a network round trip.
-  ///
-  /// Step 3 used to be unreachable: this method began with an unconditional
-  /// `if (isPlus) return true`, so a cached entitlement was never re-checked
-  /// here no matter how stale.
+  ///     expiry, is worth a network round trip, and that round trip is
+  ///     throttled to one per [kCapRecheckMinGap].
   static Future<bool> canStoreMore({int adding = 1}) async {
     final sub = SubscriptionService();
     await sub.init();
@@ -303,18 +359,64 @@ class FreeTierGuard {
     // Past expiry while still inside the offline tolerance. Confirm before
     // trusting it, because this is the moment the entitlement is being USED.
     if (sub.isPastExpiry) {
-      await BillingService().refreshIfStale();
+      await _refreshThrottled();
       if (sub.isPlus) return true;
     }
 
-    final count = await DatabaseService().countActiveFiles();
+    final count = await DatabaseService().countStoredFiles();
     if (count + adding <= freeFileLimit) return true;
 
-    // At or over the cap while not entitled. Worth asking: the user may have
-    // bought Plus on another device, redeemed a promo code in the Play Store,
-    // or restored this phrase after buying elsewhere.
-    await BillingService().refreshIfStale();
+    // At or over the cap while not entitled. Worth asking once per gap: the
+    // user may have bought Plus on another device, redeemed a promo code in
+    // the Play Store, or restored this phrase after buying elsewhere.
+    await _refreshThrottled();
     return sub.isPlus;
+  }
+
+  static Future<void> _refreshThrottled() async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final last = _lastCapRefreshMs;
+    if (last != null && now - last < kCapRecheckMinGap.inMilliseconds) return;
+    _lastCapRefreshMs = now;
+    await BillingService().refreshIfStale();
+  }
+
+  /// Called after a batch or sync that stored something. Toasts once when
+  /// the vault crosses [warnAtPercent] and once more when it reaches the
+  /// cap; falling back below resets so the next climb warns again. Never
+  /// fires on Plus.
+  static Future<void> warnIfNearLimit() async {
+    try {
+      final st = await status();
+      final bucket = st.isPlus
+          ? 0
+          : st.atLimit
+              ? 2
+              : st.nearLimit
+                  ? 1
+                  : 0;
+      final prefs = await SharedPreferences.getInstance();
+      final last = prefs.getInt(_kWarnedBucketPref) ?? 0;
+      if (bucket == last) return;
+      await prefs.setInt(_kWarnedBucketPref, bucket);
+      if (bucket < last) return; // dropped back under: silent reset
+      Notify.info(bucket == 2
+          ? 'Free vault is full: ${fmtCount(st.limit)} of ${fmtCount(st.limit)} files'
+          : '${fmtCount(st.stored)} of ${fmtCount(st.limit)} Free files used');
+    } catch (_) {
+      // Advisory only. Never let a warning break the flow that called it.
+    }
+  }
+
+  /// "1000" -> "1,000". Tiny, locale-neutral, no intl dependency.
+  static String fmtCount(int n) {
+    final s = n.toString();
+    final b = StringBuffer();
+    for (var i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) b.write(',');
+      b.write(s[i]);
+    }
+    return b.toString();
   }
 }
 

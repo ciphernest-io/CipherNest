@@ -7,6 +7,7 @@ import 'cloud/cloud_service.dart';
 import 'database_service.dart';
 import 'device_identity_service.dart';
 import 'encryption_service.dart';
+import 'upload_retry.dart';
 
 /// One cloud snapshot of the metadata database.
 class BackupSnapshot {
@@ -115,11 +116,13 @@ class DatabaseBackupService {
         await CloudService().deleteFile(existingOwnId);
       }
 
-      await CloudService().uploadEncryptedFile(
-        filename: ownName,
-        type: CnestFileType.other,
-        bytes: encrypted,
-      );
+      // Retried on rate limit / transient failure: the index backup lands
+      // right after a batch, exactly when Drive is most likely to push back.
+      await retryTransientUpload(() => CloudService().uploadEncryptedFile(
+            filename: ownName,
+            type: CnestFileType.other,
+            bytes: encrypted,
+          ));
 
       // The legacy single-name snapshot is strictly older data from the
       // pre-Stage-1 build; once a per-device snapshot exists, retire it so

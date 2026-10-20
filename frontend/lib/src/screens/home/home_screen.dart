@@ -18,6 +18,7 @@ import '../../../services/database_service.dart';
 import '../../../services/cloud/cloud_service.dart';
 import '../../../services/cloud/account_registry.dart';
 import '../../../services/notify.dart';
+import '../../../services/subscription_service.dart';
 import '../../../services/sync_service.dart';
 import '../../../services/sync/sync_coordinator.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -41,6 +42,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isLoadingSession = true;
   Map<String, int>? _vaultStats;
 
+  /// Where the vault stands against the Free cap: drives the counter on
+  /// the usage card and turns the Add File button into the limit sheet.
+  FreeTierStatus? _tier;
+
   @override
   void initState() {
     super.initState();
@@ -55,6 +60,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // sync round-trip. Also covers "user was on Settings deleting files,
     // popped back to Home, expects to see the new count immediately."
     DatabaseService().addListener(_refreshStats);
+    // Plus landing (cold-start verification, purchase, restore) lifts the
+    // cap; the card and the button must follow without a restart.
+    SubscriptionService().addListener(_refreshStats);
   }
 
   void _showConflicts() {
@@ -73,6 +81,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     SyncService().syncNotifier.removeListener(_refreshStats);
     SyncCoordinator().conflicts.removeListener(_showConflicts);
     DatabaseService().removeListener(_refreshStats);
+    SubscriptionService().removeListener(_refreshStats);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -90,7 +99,26 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _refreshStats() async {
     final stats = await DatabaseService().getStorageStats();
-    if (mounted) setState(() => _vaultStats = stats);
+    final tier = await FreeTierGuard.status();
+    if (mounted) {
+      setState(() {
+        _vaultStats = stats;
+        _tier = tier;
+      });
+    }
+  }
+
+  /// The Free-limit sheet, with the only purchase entry point a user who
+  /// finished onboarding can reach.
+  Future<void> _showLimitSheet({int notStored = 0}) async {
+    final err = await FreeTierGuard.limitError(notStored: notStored);
+    if (!mounted) return;
+    await showCnestError(
+      context,
+      err,
+      onPrimaryAction: () =>
+          Navigator.pushNamed(context, AppRoutes.subscription),
+    );
   }
 
   Future<void> _markSetupCompleted() async {
@@ -203,7 +231,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _reportUploadOutcomes(List<UploadOutcome> outcomes) async {
     final failures = outcomes.where((o) => !o.ok).toList();
     if (failures.isNotEmpty && mounted) {
-      final err = UploadPipeline.mapUploadError(failures.first.error!);
+      // A cap hit outranks any other failure in the batch: it is the one
+      // the user can act on from the sheet.
+      final first = failures.firstWhere(
+          (o) => o.error is FreeLimitReachedError,
+          orElse: () => failures.first);
+      final err = UploadPipeline.mapUploadError(first.error!);
       await showCnestError(
         context,
         err,
@@ -220,6 +253,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final capped = _tier?.atLimit ?? false;
 
     if (_isLoadingSession) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
@@ -294,7 +328,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               },
             ),
             const SizedBox(height: 20),
-            _VaultUsageCard(stats: _vaultStats),
+            _VaultUsageCard(
+              stats: _vaultStats,
+              tier: _tier,
+              onLimitTap: () =>
+                  Navigator.pushNamed(context, AppRoutes.subscription),
+            ),
             const SizedBox(height: 16),
             // Landscape: pack the category cards into a two-column grid so
             // the user doesn't have to scroll past their full vertical stack
@@ -337,14 +376,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
       ),
       // Counted progress lives in the activity pill; the FAB just shows
-      // busy + disabled while a batch runs.
+      // busy + disabled while a batch runs. At the Free cap it dims and
+      // opens the limit sheet instead of a picker: nothing can be stored,
+      // so there is nothing to pick.
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _isUploading ? null : () => _showUploadSheet(context),
-        backgroundColor: cs.primary,
+        onPressed: _isUploading
+            ? null
+            : capped
+                ? _showLimitSheet
+                : () => _showUploadSheet(context),
+        backgroundColor: capped ? cs.primary.withAlpha(110) : cs.primary,
         icon: _isUploading
           ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: cs.onPrimary, strokeWidth: 2))
-          : ThemeIcon('plus', color: cs.onPrimary),
-        label: Text(_isUploading ? 'Encrypting...' : 'Add File'),
+          : ThemeIcon(capped ? 'lockKey' : 'plus', color: cs.onPrimary),
+        label: Text(_isUploading
+            ? 'Encrypting...'
+            : capped
+                ? 'Vault full'
+                : 'Add File'),
       ),
     );
   }
@@ -548,7 +597,13 @@ class _DashboardCard extends StatelessWidget {
 
 class _VaultUsageCard extends StatelessWidget {
   final Map<String, int>? stats;
-  const _VaultUsageCard({required this.stats});
+  final FreeTierStatus? tier;
+  final VoidCallback onLimitTap;
+  const _VaultUsageCard({
+    required this.stats,
+    required this.tier,
+    required this.onLimitTap,
+  });
 
   String _fmt(int bytes) => formatBytes(bytes);
 
@@ -633,6 +688,10 @@ class _VaultUsageCard extends StatelessWidget {
               fontSize: 12,
             ),
           ),
+          if (tier != null && !tier!.isPlus) ...[
+            const SizedBox(height: 12),
+            _FreeLimitLine(tier: tier!, onTap: onLimitTap),
+          ],
           if (segments.isNotEmpty) ...[
             const SizedBox(height: 14),
             ClipRRect(
@@ -691,4 +750,72 @@ class _UsageSegment {
   final int bytes;
   final Color color;
   _UsageSegment(this.label, this.bytes, this.color);
+}
+
+/// "N of 1,000 files" with a thin bar, for Free vaults only. Neutral under
+/// 90%, the pack's warning colour from 90%, the danger colour at the cap,
+/// where the line also says how to lift it. Tapping opens the paywall.
+class _FreeLimitLine extends StatelessWidget {
+  const _FreeLimitLine({required this.tier, required this.onTap});
+  final FreeTierStatus tier;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = ThemeController().tokens;
+    final stored = FreeTierGuard.fmtCount(tier.stored);
+    final limit = FreeTierGuard.fmtCount(tier.limit);
+    final Color color;
+    final String text;
+    if (tier.atLimit) {
+      color = t.danger;
+      text = 'Free limit reached: $stored of $limit files. Tap for Plus';
+    } else if (tier.nearLimit) {
+      color = t.warning;
+      text = '$stored of $limit files. Approaching the Free limit';
+    } else {
+      color = cs.primary;
+      text = '$stored of $limit Free files';
+    }
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              text,
+              style: TextStyle(
+                color: tier.nearLimit ? color : cs.onSurface.withAlpha(160),
+                fontSize: 12,
+                fontWeight: tier.nearLimit ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(3),
+              child: SizedBox(
+                height: 4,
+                child: Row(
+                  children: [
+                    Expanded(
+                      flex: (tier.fraction * 1000).round().clamp(0, 1000),
+                      child: Container(color: color),
+                    ),
+                    Expanded(
+                      flex: ((1 - tier.fraction) * 1000).round().clamp(0, 1000),
+                      child: Container(color: cs.onSurface.withAlpha(30)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

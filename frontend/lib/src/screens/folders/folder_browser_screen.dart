@@ -18,6 +18,7 @@ import '../../../services/cloud/cloud_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/saf_folder_import.dart';
+import '../../../services/subscription_service.dart';
 import '../../../services/upload_foreground_guard.dart';
 import '../../../services/upload_pipeline.dart';
 import '../../models/file_model.dart';
@@ -83,6 +84,10 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   bool _isUploading = false;
   String? _openingFileId;
 
+  /// True when a Free vault is at the cap: the Upload button dims and opens
+  /// the limit sheet instead of a picker.
+  bool _atLimit = false;
+
   // Sort + search over the current level's contents (both suppressed in
   // picker mode, where the browser is a destination chooser).
   _FolderSort _sort = _FolderSort.dateNewest;
@@ -101,6 +106,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   void initState() {
     super.initState();
     DatabaseService().addListener(_reload);
+    SubscriptionService().addListener(_reload);
     _loadSort();
     _reload();
   }
@@ -108,6 +114,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   @override
   void dispose() {
     DatabaseService().removeListener(_reload);
+    SubscriptionService().removeListener(_reload);
     _selectionClaim?.release();
     _searchCtrl.dispose();
     super.dispose();
@@ -163,6 +170,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     final folders = await DatabaseService().getFolders(parentId: _folderId);
     final files = await DatabaseService().getFilesInFolder(_folderId);
     final counts = await DatabaseService().getFolderItemCounts();
+    final tier = await FreeTierGuard.status();
     if (!mounted) return;
     // The folder itself may have been deleted/restored elsewhere mid-view
     // (a sync can bin the very folder being browsed) — pop rather than
@@ -184,8 +192,22 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       _files = files;
       _counts = counts;
       _self = self;
+      _atLimit = tier.atLimit;
       _loading = false;
     });
+  }
+
+  /// The Free-limit sheet, with the only purchase entry point a user who
+  /// finished onboarding can reach.
+  Future<void> _showLimitSheet({int notStored = 0}) async {
+    final err = await FreeTierGuard.limitError(notStored: notStored);
+    if (!mounted) return;
+    await showCnestError(
+      context,
+      err,
+      onPrimaryAction: () =>
+          Navigator.pushNamed(context, AppRoutes.subscription),
+    );
   }
 
   // ---- Folder actions ---------------------------------------------------
@@ -496,18 +518,29 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
         floatingActionButton: _selectionMode || _isPicker
             ? null
             : FloatingActionButton.extended(
-                onPressed: _isUploading ? null : _showBrowserUploadSheet,
-                backgroundColor: cs.primary,
+                onPressed: _isUploading
+                    ? null
+                    : _atLimit
+                        ? _showLimitSheet
+                        : _showBrowserUploadSheet,
+                backgroundColor:
+                    _atLimit ? cs.primary.withAlpha(110) : cs.primary,
                 icon: _isUploading
                     ? SizedBox(
                         width: 20,
                         height: 20,
                         child: CircularProgressIndicator(
                             color: cs.onPrimary, strokeWidth: 2))
-                    : ThemeIcon('uploadSimple', color: cs.onPrimary),
+                    : ThemeIcon(_atLimit ? 'lockKey' : 'uploadSimple',
+                        color: cs.onPrimary),
                 // Counted progress lives in the activity pill; the FAB just
-                // shows busy + disabled.
-                label: Text(_isUploading ? 'Encrypting...' : 'Upload'),
+                // shows busy + disabled. At the Free cap it dims and opens
+                // the limit sheet: nothing can be stored, nothing to pick.
+                label: Text(_isUploading
+                    ? 'Encrypting...'
+                    : _atLimit
+                        ? 'Vault full'
+                        : 'Upload'),
               ),
       ),
     );
@@ -767,12 +800,21 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   /// surprise than a duplicated photo.
   Future<void> _importFolder() async {
     SafTree? tree;
+    // The tree walk runs before any file moves; on a thousand-entry folder
+    // that is seconds of silence. Show it as work in progress.
+    final reading = ActivityCenter()
+        .start(kind: ActivityKind.folderImport, label: 'Reading folder…');
     try {
       tree = await SafFolderImport.pickTree();
     } on PlatformException {
+      reading.discard();
       Notify.error('Couldn\'t read that folder. Try "Upload files" instead.');
       return;
+    } catch (_) {
+      reading.discard();
+      rethrow;
     }
+    reading.discard();
     if (tree == null || !mounted) return; // cancelled
     final picked = tree;
     if (picked.entries.isEmpty) {
@@ -786,7 +828,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     // files.
     final guard = UploadForegroundGuard();
     await guard.begin();
-    var secured = 0, failed = 0;
+    var secured = 0, failed = 0, overLimit = 0;
     String rootName = picked.name;
     final task = ActivityCenter().start(
         kind: ActivityKind.folderImport,
@@ -834,6 +876,14 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
             skipDuplicates: false,
             trackActivity: false, // the outer import task counts instead
           );
+          // The Free cap stops the import here: every remaining entry
+          // would fail the same way, so neither copy nor hash them.
+          if (res.any((o) => o.error is FreeLimitReachedError)) {
+            overLimit = picked.entries.length - i;
+            task.update(picked.entries.length,
+                label: 'Import stopped at the Free limit');
+            break;
+          }
           for (final o in res) {
             if (o.ok) {
               secured++;
@@ -849,11 +899,15 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
 
       final parts = <String>[];
       if (secured > 0) parts.add('$secured file${secured == 1 ? '' : 's'}');
+      if (overLimit > 0) parts.add('$overLimit over the Free limit');
       if (failed > 0) parts.add('$failed failed');
       // No silent caps: a truncated walk is said out loud.
       if (picked.truncated) parts.add('first 2000 files only');
       final summary = 'Imported "$rootName": ${parts.join(' · ')}';
-      failed > 0 ? task.fail(summary) : task.complete(summary);
+      (failed > 0 || overLimit > 0) ? task.fail(summary) : task.complete(summary);
+      if (overLimit > 0 && mounted) {
+        await _showLimitSheet(notStored: overLimit);
+      }
     } catch (e) {
       task.fail('Import of "$rootName" failed');
       if (mounted) {
@@ -940,7 +994,12 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   Future<void> _reportUploadOutcomes(List<UploadOutcome> outcomes) async {
     final failures = outcomes.where((o) => !o.ok).toList();
     if (failures.isNotEmpty && mounted) {
-      final err = UploadPipeline.mapUploadError(failures.first.error!);
+      // A cap hit outranks any other failure in the batch: it is the one
+      // the user can act on from the sheet.
+      final first = failures.firstWhere(
+          (o) => o.error is FreeLimitReachedError,
+          orElse: () => failures.first);
+      final err = UploadPipeline.mapUploadError(first.error!);
       await showCnestError(
         context,
         err,

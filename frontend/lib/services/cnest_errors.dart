@@ -246,6 +246,38 @@ CnestError? classifyNetworkError(Object e) {
   return null;
 }
 
+/// True for failures worth retrying with backoff: the provider asked us to
+/// slow down (Drive 403 rateLimitExceeded / userRateLimitExceeded, 429),
+/// a server-side hiccup (5xx, backendError, internalError), or a connection
+/// that existed and then died mid-transfer. NOT transient: storage quota
+/// (a retry cannot free space), auth (needs a reconnect), and DNS failure
+/// (the device is offline; retrying burns the batch's time for nothing).
+bool isTransientCloudError(Object e) {
+  final msg = e.toString().toLowerCase();
+  if (msg.contains('storagequotaexceeded') ||
+      msg.contains('quotalimitreached') ||
+      msg.contains('quota exceeded')) {
+    return false;
+  }
+  if (isAuthInvalidError(e)) return false;
+  if (msg.contains('ratelimit') ||
+      msg.contains('rate limit') ||
+      msg.contains('status: 429') ||
+      msg.contains('too many requests') ||
+      msg.contains('backenderror') ||
+      msg.contains('internalerror') ||
+      msg.contains('internal error') ||
+      msg.contains('status: 500') ||
+      msg.contains('status: 502') ||
+      msg.contains('status: 503') ||
+      msg.contains('status: 504') ||
+      msg.contains('service unavailable') ||
+      msg.contains('bad gateway')) {
+    return true;
+  }
+  return classifyNetworkError(e) is UploadInterruptedError;
+}
+
 /// Fallback. Carries a short code (surfaced to the user, used in bug
 /// reports) and an optional debug detail (log-only, never shown).
 final class UnexpectedError extends CnestError {
@@ -270,14 +302,29 @@ final class UnexpectedError extends CnestError {
 /// until the user upgrades or deletes something; nothing already stored is
 /// ever held back.
 final class FreeLimitReachedError extends CnestError {
-  const FreeLimitReachedError();
+  /// [binned] rows count toward the limit (they are restorable, so they
+  /// still hold a slot); saying so tells the user where the slots went.
+  /// [notStored] is how many files of the attempted batch did not fit.
+  const FreeLimitReachedError({this.binned = 0, this.notStored = 0});
+  final int binned;
+  final int notStored;
   @override
   String get title => 'Your Free vault is full.';
   @override
-  String get message =>
-      'Free stores up to 1,000 files, and this vault just reached it. '
-      'Upgrade to Plus for unlimited uploads, or delete files you no '
-      'longer need.';
+  String get message {
+    final b = StringBuffer(
+        'Free stores up to 1,000 files, and this vault is at the limit.');
+    if (notStored > 1) b.write(' $notStored files were not uploaded.');
+    if (binned > 0) {
+      b.write(binned == 1
+          ? ' One of them is in the Recycle Bin; emptying it frees the slot.'
+          : ' $binned of them are in the Recycle Bin; emptying it frees '
+              'those slots.');
+    }
+    b.write(' Upgrade to Plus for unlimited uploads, or delete files you '
+        'no longer need.');
+    return b.toString();
+  }
   // This message says "Upgrade to Plus" and for a long time offered no way
   // to do it: the paywall was reachable from the three onboarding screens
   // and nowhere else. A user blocked at the cap is at the highest-intent

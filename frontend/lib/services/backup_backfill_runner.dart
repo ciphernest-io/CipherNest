@@ -4,7 +4,9 @@ import 'activity_center.dart';
 import 'auto_sync_service.dart';
 import 'backup_selection_service.dart';
 import 'migration_service.dart';
+import 'subscription_service.dart';
 import 'system_folders.dart';
+import 'upload_foreground_guard.dart';
 
 /// Runs the queued "include existing photos" backfills — one bucket-scoped
 /// migration pass per pending album, with an ActivityCenter task for
@@ -47,6 +49,10 @@ class BackupBackfillRunner {
   Future<MigrationResult> Function(AlbumInfo album, MigrationScanResult scan)?
       debugMigrate;
 
+  /// Seam for the per-album cap check (the real one reads the database).
+  @visibleForTesting
+  Future<bool> Function()? debugCanStore;
+
   /// The pending albums that exist on this device, in album-list order.
   /// Pure so it's testable without MediaStore.
   @visibleForTesting
@@ -83,6 +89,11 @@ class BackupBackfillRunner {
     }
     _running = true;
     _cancelAll = false;
+    // Stop draining once the Free cap is hit: every further album would
+    // fail at its first photo. Flags stay, so the queue resumes after an
+    // upgrade or a clean-out. Silent by design: Home shows the limit and
+    // the pass that hit it said so once.
+    var capped = false;
     try {
       // Sweep until the pending set is drained. The set is re-read every
       // sweep so albums enrolled WHILE a backfill runs are picked up by
@@ -90,7 +101,7 @@ class BackupBackfillRunner {
       // Albums already attempted this run are excluded so a failing album
       // can't spin the loop; its flag stays for the next sync cycle.
       final attempted = <String>{};
-      while (!_cancelAll) {
+      while (!_cancelAll && !capped) {
         final pendingAll = await BackupSelectionService().pendingBackfills();
         final pending = pendingAll.difference(attempted);
         if (pending.isEmpty) break;
@@ -107,8 +118,15 @@ class BackupBackfillRunner {
         if (wanted.isEmpty) break;
 
         for (final album in albums) {
-          if (_cancelAll) break;
+          if (_cancelAll || capped) break;
           if (!wanted.contains(album.name)) continue;
+          final canStore = debugCanStore != null
+              ? await debugCanStore!()
+              : await FreeTierGuard.canStoreMore();
+          if (!canStore) {
+            capped = true;
+            break;
+          }
           attempted.add(SystemFolders.normalize(album.name));
           final scan = debugScan != null
               ? await debugScan!(album)
@@ -131,6 +149,9 @@ class BackupBackfillRunner {
               MigrationService().cancel();
             },
           );
+          // Foreground pin for the whole album: leaving the app must not
+          // freeze the pass, and the progress rides into the notification.
+          await UploadForegroundGuard().begin();
           try {
             final result = debugMigrate != null
                 ? await debugMigrate!(album, scan)
@@ -142,7 +163,11 @@ class BackupBackfillRunner {
                     onProgress: (p) => task.update(p.current,
                         total: p.total, detail: p.currentFileName),
                   );
-            if (!result.cancelled &&
+            if (result.limitReached) {
+              // Flag stays; the queue stops here for this run.
+              capped = true;
+              task.fail('Free limit reached · ${album.name} paused');
+            } else if (!result.cancelled &&
                 result.failed == 0 &&
                 result.synced + result.skipped > 0) {
               await BackupSelectionService().clearBackfill(album.name);
@@ -159,6 +184,8 @@ class BackupBackfillRunner {
           } catch (e) {
             debugPrint('Backfill failed for ${album.name}: $e');
             task.fail('Could not back up ${album.name}');
+          } finally {
+            await UploadForegroundGuard().end();
           }
         }
       }
