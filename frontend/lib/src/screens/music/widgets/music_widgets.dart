@@ -10,6 +10,7 @@ import '../../../models/file_model.dart';
 import '../../../widgets/doc_thumbnail.dart';
 import '../../../widgets/theme_icon.dart';
 import '../now_playing_screen.dart';
+import '../../../../services/cloud/account_registry.dart';
 
 /// Square track-art tile. Renders the track's embedded cover art (uploaded
 /// as its encrypted thumbnail) when [file] carries one; the Samsung-style
@@ -203,10 +204,19 @@ class MiniPlayerBar extends StatelessWidget {
     final t = ThemeController().tokens;
 
     return AnimatedBuilder(
-      animation: service,
+      animation: Listenable.merge([service, AccountRegistry()]),
       builder: (context, _) {
         final current = service.current;
         if (current == null) return const SizedBox.shrink();
+        // Playback belongs to the vault it started in. Switching accounts
+        // leaves it running (one player, one notification), but the bar in
+        // another account's vault must not show a track that vault does
+        // not hold. Playing anything here replaces the queue and stops it.
+        final owner = current.accountId;
+        final active = AccountRegistry().activeAccount?.id;
+        if (owner != null && active != null && owner != active) {
+          return const SizedBox.shrink();
+        }
         return SafeArea(
           top: false,
           child: Padding(

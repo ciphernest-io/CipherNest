@@ -30,13 +30,19 @@ class _ViewPhraseScreenState extends State<ViewPhraseScreen>with SecureScreenMix
     super.dispose();
   }
 
+  bool get _passwordless => KeyManagerService().passwordlessCached;
+
   Future<void> _reveal() async {
-    if (_busy || _passCtrl.text.isEmpty) return;
+    if (_busy || (!_passwordless && _passCtrl.text.isEmpty)) return;
     setState(() {
       _busy = true;
       _error = null;
     });
-    final phrase = await KeyManagerService().revealMnemonic(_passCtrl.text);
+    // No password on this vault: the words are kept beside the seed and the
+    // vault is already open, so there is nothing to check them against.
+    final phrase = _passwordless
+        ? await KeyManagerService().revealMnemonicNoAuth()
+        : await KeyManagerService().revealMnemonic(_passCtrl.text);
     if (!mounted) return;
     if (phrase == null) {
       setState(() {
@@ -61,6 +67,29 @@ class _ViewPhraseScreenState extends State<ViewPhraseScreen>with SecureScreenMix
 
   Widget _buildGate() {
     final cs = Theme.of(context).colorScheme;
+    if (_passwordless) {
+      return ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          Text(
+            'This vault has no password, so your 12 words show as soon as '
+            'you tap below. Anyone with these words can restore your vault; '
+            'reveal them only somewhere private.',
+            style: TextStyle(color: cs.onSurface.withAlpha(160), fontSize: 13),
+          ),
+          const SizedBox(height: 24),
+          FilledButton(
+            onPressed: _busy ? null : _reveal,
+            child: _busy
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Text('Reveal phrase'),
+          ),
+        ],
+      );
+    }
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [

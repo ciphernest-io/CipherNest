@@ -85,7 +85,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // Gallery
   bool _showFeatured = true;
-  bool _showYearAgo = true;
+  /// Per-kind story toggles under the Featured master switch.
+  final Map<String, bool> _storyFlags = {};
 
   // Security
   int _autoLockMinutes = AppLockService.defaultMinutes;
@@ -120,6 +121,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } else if (arg == kSettingsBackupSection) {
       title = 'Backup & sync';
       builder = _backupChildren;
+    } else if (arg == kSettingsMusicSection) {
+      title = 'Music';
+      builder = _musicChildren;
     }
     if (title == null || builder == null) return;
     // Render the category AS this screen instead of pushing it on top of
@@ -182,7 +186,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             : 'Selected albums';
         _autoSyncIntervalMinutes = interval.inMinutes;
         _showFeatured = prefs.getBool('gallery_show_featured') ?? true;
-        _showYearAgo = prefs.getBool('gallery_show_year_ago') ?? true;
+        for (final k in GalleryPrefs.subKinds) {
+          _storyFlags[k.$1] = prefs.getBool(k.$1) ?? true;
+        }
         _autoLockMinutes = prefs.getInt(AppLockService.prefsKeyMinutes) ??
             AppLockService.defaultMinutes;
         _keepPlayingOnClose =
@@ -769,9 +775,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) _setState(() => _showFeatured = val);
   }
 
-  Future<void> _toggleYearAgo(bool val) async {
-    await GalleryPrefs().setShowYearAgo(val);
-    if (mounted) _setState(() => _showYearAgo = val);
+  Future<void> _setStoryFlag(String key, bool val) async {
+    await GalleryPrefs().set(key, val);
+    if (mounted) _setState(() => _storyFlags[key] = val);
   }
 
   /// The real provider brand mark, rendered on a white chip. Falls back to a
@@ -964,13 +970,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _CategoryTile(
             icon: 'googleLogo',
             title: 'Account',
-            subtitle: 'Connected clouds and activity log',
+            subtitle: 'Connected clouds, Plus, activity log',
             onTap: () => _openSection('Account', _accountChildren),
           ),
           _CategoryTile(
             icon: 'database',
             title: 'Storage & cache',
-            subtitle: 'Cache usage, size limit, recycle bin',
+            subtitle: 'Cache usage, size limit, units, recycle bin',
             onTap: () => _openSection('Storage & cache', _storageChildren),
           ),
           _CategoryTile(
@@ -986,6 +992,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: () => _openSection('Gallery', _galleryChildren),
           ),
           _CategoryTile(
+            icon: 'musicNotes',
+            title: 'Music',
+            subtitle: 'Playback and the media notification',
+            onTap: () => _openSection('Music', _musicChildren),
+          ),
+          _CategoryTile(
             icon: cs.brightness == Brightness.dark ? 'moon' : 'sun',
             title: 'Appearance',
             subtitle: 'Theme mode and color packs',
@@ -994,7 +1006,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _CategoryTile(
             icon: 'shieldCheck',
             title: 'Security',
-            subtitle: 'Lock, keys, devices, shares',
+            subtitle: 'Password, phrase, lock, keys, devices',
             onTap: () => _openSection('Security', _securityChildren),
           ),
           _CategoryTile(
@@ -1068,13 +1080,63 @@ class _SettingsScreenState extends State<SettingsScreen> {
               );
             },
           ),
+      const Divider(height: 24),
+      // The ONLY purchase and restore entry point for a user who has
+      // finished onboarding. Before this, the paywall was reachable from the
+      // three setup screens and nowhere else, so an existing subscriber who
+      // reinstalled had no way to reach Restore purchases at all.
+      ListenableBuilder(
+        listenable: SubscriptionService(),
+        builder: (context, _) => ListTile(
+            leading: ThemeIcon('workspace_premium', color: cs.primary),
+            title: Text(
+                SubscriptionService().isPlus
+                    ? 'CipherNest Plus'
+                    : 'Upgrade to Plus',
+                style: TextStyle(color: cs.onSurface)),
+            subtitle: Text(
+                switch (SubscriptionService().plan) {
+                  PlusPlan.monthly =>
+                    'Monthly plan. Tap to switch to Yearly or Lifetime.',
+                  PlusPlan.yearly => 'Yearly plan. Tap to switch to Lifetime.',
+                  PlusPlan.lifetime => 'Lifetime. Unlimited uploads.',
+                  PlusPlan.unknown => 'Active. Unlimited uploads.',
+                  PlusPlan.none =>
+                    'Free stores 1,000 files. Plus removes the limit.',
+                },
+                style: TextStyle(color: cs.onSurface.withAlpha(140))),
+            trailing: ThemeIcon('caretRight',
+                size: 16, color: cs.onSurface.withAlpha(140)),
+            onTap: () async {
+              await Navigator.pushNamed(context, AppRoutes.subscription);
+              // Entitlement may have changed while the paywall was open.
+              if (mounted) _setState(() {});
+            },
+          ),
+      ),
+      ListTile(
+        leading: ThemeIcon('browseActivity', color: cs.primary),
+        title: Text('Activity log', style: TextStyle(color: cs.onSurface)),
+        subtitle: Text('Running tasks and recent results',
+            style: TextStyle(color: cs.onSurface.withAlpha(140))),
+        trailing: ThemeIcon('caretRight',
+            size: 16, color: cs.onSurface.withAlpha(140)),
+        onTap: () => showActivitySheet(context),
+      ),
     ];
   }
 
   List<Widget> _storageChildren(ColorScheme cs) {
     final tokens = ThemeController().tokens;
     return <Widget>[
-      const CacheUsageCard(),
+      CacheUsageCard(
+        onClear: _clearCache,
+        onShowContents: _showCacheContents,
+        clearSubtitle: _systemCacheSize == null
+            ? 'Free up $_cacheSize on this device'
+            : 'CipherNest: $_cacheSize · Android system caches: '
+                '$_systemCacheSize',
+      ),
       Container(
         margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
         padding: EdgeInsets.all(tokens.pad),
@@ -1123,19 +1185,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
       ListTile(
-            leading: ThemeIcon('broom', color: cs.primary),
-            title: Text('Clear Local Cache', style: TextStyle(color: cs.onSurface)),
-            subtitle: Text(
-              _systemCacheSize == null
-                  ? 'Free up $_cacheSize on device'
-                  : 'CipherNest: $_cacheSize · Android system caches: '
-                      '$_systemCacheSize',
-              style: TextStyle(color: cs.onSurface.withAlpha(140)),
-            ),
-            onTap: _clearCache,
-            onLongPress: _showCacheContents,
-          ),
-      ListTile(
             leading: ThemeIcon('ruler', color: cs.primary),
             title: Text('File size units',
                 style: TextStyle(color: cs.onSurface)),
@@ -1147,39 +1196,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             onTap: _pickSizeUnits,
           ),
-      // The ONLY purchase and restore entry point for a user who has
-      // finished onboarding. Before this, the paywall was reachable from the
-      // three setup screens and nowhere else, so an existing subscriber who
-      // reinstalled had no way to reach Restore purchases at all.
-      ListenableBuilder(
-        listenable: SubscriptionService(),
-        builder: (context, _) => ListTile(
-            leading: ThemeIcon('workspace_premium', color: cs.primary),
-            title: Text(
-                SubscriptionService().isPlus
-                    ? 'CipherNest Plus'
-                    : 'Upgrade to Plus',
-                style: TextStyle(color: cs.onSurface)),
-            subtitle: Text(
-                switch (SubscriptionService().plan) {
-                  PlusPlan.monthly =>
-                    'Monthly plan. Tap to switch to Yearly or Lifetime.',
-                  PlusPlan.yearly => 'Yearly plan. Tap to switch to Lifetime.',
-                  PlusPlan.lifetime => 'Lifetime. Unlimited uploads.',
-                  PlusPlan.unknown => 'Active. Unlimited uploads.',
-                  PlusPlan.none =>
-                    'Free stores 1,000 files. Plus removes the limit.',
-                },
-                style: TextStyle(color: cs.onSurface.withAlpha(140))),
-            trailing: ThemeIcon('caretRight',
-                size: 16, color: cs.onSurface.withAlpha(140)),
-            onTap: () async {
-              await Navigator.pushNamed(context, AppRoutes.subscription);
-              // Entitlement may have changed while the paywall was open.
-              if (mounted) _setState(() {});
-            },
-          ),
-      ),
       ListTile(
             leading: ThemeIcon('trash', color: cs.primary),
             title: Text('Recycle Bin', style: TextStyle(color: cs.onSurface)),
@@ -1187,15 +1203,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
             onTap: () => Navigator.pushNamed(context, AppRoutes.recycleBin),
           ),
-      ListTile(
-        leading: ThemeIcon('browseActivity', color: cs.primary),
-        title: Text('Activity log', style: TextStyle(color: cs.onSurface)),
-        subtitle: Text('Running tasks and recent results',
-            style: TextStyle(color: cs.onSurface.withAlpha(140))),
-        trailing: ThemeIcon('caretRight',
-            size: 16, color: cs.onSurface.withAlpha(140)),
-        onTap: () => showActivitySheet(context),
-      ),
     ];
   }
 
@@ -1322,21 +1329,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   List<Widget> _galleryChildren(ColorScheme cs) {
+    const icons = <String, String>{
+      GalleryPrefs.kShowYearAgo: 'clockCounterClockwise',
+      GalleryPrefs.kShowOnThisDay: 'clockCounterClockwise',
+      GalleryPrefs.kShowToday: 'sparkle',
+      GalleryPrefs.kShowLastMonth: 'images',
+      GalleryPrefs.kShowBestOf: 'heart',
+      GalleryPrefs.kShowFeaturedVideo: 'videoCamera',
+    };
+    final muted = cs.onSurface.withAlpha(140);
     return <Widget>[
+      // Master switch: everything on the Stories tab hangs off it.
       SwitchListTile(
             secondary: ThemeIcon('sparkle', color: cs.primary),
-            title: Text('Show Featured Content', style: TextStyle(color: cs.onSurface)),
-            subtitle: Text('Display stories and highlights', style: TextStyle(color: cs.onSurface.withAlpha(140))),
+            title: Text('Show featured content', style: TextStyle(color: cs.onSurface)),
+            subtitle: Text('Stories and memories on the Stories tab',
+                style: TextStyle(color: muted)),
             value: _showFeatured,
             onChanged: _toggleFeatured,
           ),
-      SwitchListTile(
-            secondary: ThemeIcon('clockCounterClockwise', color: cs.primary),
-            title: Text('A Year Ago Memories', style: TextStyle(color: cs.onSurface)),
-            subtitle: Text('Show photos from this day last year', style: TextStyle(color: cs.onSurface.withAlpha(140))),
-            value: _showYearAgo,
-            onChanged: _toggleYearAgo,
-          ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+        child: Text('Stories to show',
+            style: TextStyle(
+                color: _showFeatured ? cs.onSurface : muted,
+                fontWeight: FontWeight.w600)),
+      ),
+      for (final k in GalleryPrefs.subKinds)
+        SwitchListTile(
+          secondary: ThemeIcon(icons[k.$1] ?? 'images',
+              color: _showFeatured ? cs.primary : muted),
+          title: Text(k.$2,
+              style: TextStyle(color: _showFeatured ? cs.onSurface : muted)),
+          subtitle: Text(k.$3, style: TextStyle(color: muted)),
+          value: _storyFlags[k.$1] ?? true,
+          // Greyed out, not hidden, while the master switch is off.
+          onChanged: _showFeatured ? (v) => _setStoryFlag(k.$1, v) : null,
+        ),
     ];
   }
 
@@ -1372,8 +1401,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                    child: _ThemePackList(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: _ThemePackCarousel(
                       current: tc.pack,
                       onPick: tc.setPack,
                     ),
@@ -1386,216 +1415,212 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   List<Widget> _securityChildren(ColorScheme cs) {
+    final muted = cs.onSurface.withAlpha(140);
     return <Widget>[
-      // Manual lock. Until this existed, AppLockService.lockNow() had no
-      // callers anywhere and the only way to close the vault was to wait out
-      // the inactivity timer, which playback could defer indefinitely. A
-      // privacy product has to let you shut the door before handing someone
-      // your phone (MASVS F-32).
-      // A passwordless vault has no lock screen, so neither tile applies:
-      // locking it would only bounce through login and straight back.
-      if (!_passwordlessVault)
-      ListTile(
-            leading: ThemeIcon('lock', color: cs.primary),
-            title: Text('Lock vault now', style: TextStyle(color: cs.onSurface)),
-            subtitle: Text(
-              'Close the vault and return to the unlock screen',
-              style: TextStyle(color: cs.onSurface.withAlpha(140)),
-            ),
-            onTap: () => AppLockService().lockNow(),
-          ),
-      if (!_passwordlessVault)
-      ListTile(
-            leading: ThemeIcon('lock', color: cs.primary),
-            title: Text('Auto-lock', style: TextStyle(color: cs.onSurface)),
-            subtitle: Text(
-              _autoLockLabel(_autoLockMinutes),
-              style: TextStyle(color: cs.onSurface.withAlpha(140)),
-            ),
-            trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
-            onTap: _pickAutoLock,
-          ),
-      // Closing the app should close the vault. The exception is deliberate
-      // background playback, which needs the process to outlive the task, so
-      // it is opt-in rather than assumed (MASVS F-34).
-      SwitchListTile(
-            secondary: ThemeIcon('musicNotes', color: cs.primary),
-            title: Text('Keep playing after closing',
-                style: TextStyle(color: cs.onSurface)),
-            subtitle: Text(
-              _passwordlessVault
-                  ? (_keepPlayingOnClose
-                      ? 'Music keeps playing after you close the app'
-                      : 'Closing the app stops the music')
-                  : _keepPlayingOnClose
-                      ? 'Music survives closing the app and auto-lock. Lock '
-                          'vault now always stops it'
-                      : 'Closing the app or clearing it from recents locks '
-                          'the vault',
-              style: TextStyle(color: cs.onSurface.withAlpha(140)),
-            ),
-            value: _keepPlayingOnClose,
-            onChanged: (v) async {
-              await AppLockService().setKeepPlayingOnClose(v);
-              if (mounted) _setState(() => _keepPlayingOnClose = v);
-            },
-          ),
-      // Hidden outright when the device can never support it (no sensor /
-          // no lock screen) — an impossible toggle is worse than none.
-          if (!_passwordlessVault &&
-                _bioCapability != BiometricCapability.noHardware &&
-              _bioCapability != BiometricCapability.noLockScreen)
-            SwitchListTile(
-              secondary: ThemeIcon('fingerprint', color: cs.primary),
-              title: Text('Unlock with fingerprint',
-                  style: TextStyle(color: cs.onSurface)),
-              subtitle: Text(
-                _bioSubtitleOverride ??
-                    (_bioCapability == BiometricCapability.noneEnrolled
-                        ? 'No fingerprints enrolled. Add one in Android Settings'
-                        : 'Hardware-backed. Your master password always works.'),
-                style: TextStyle(color: cs.onSurface.withAlpha(140)),
-              ),
-              value: _bioEnabled,
-              onChanged: _bioCapability == BiometricCapability.available
-                  ? _toggleBiometric
-                  : null,
-            ),
-      // Only vaults created/restored after view-phrase shipped keep a
-          // password-wrapped mnemonic blob; older ones can't reveal it, so
-          // hide the tile rather than offer a button that always fails.
-          FutureBuilder<bool>(
-            future: KeyManagerService().canRevealMnemonic(),
-            builder: (context, snap) {
-              if (snap.data != true) return const SizedBox.shrink();
-              return ListTile(
-                leading: ThemeIcon('shieldCheck', color: cs.primary),
-                title: Text('View recovery phrase',
-                    style: TextStyle(color: cs.onSurface)),
-                subtitle: Text(
-                    'Show your 12 words after a password check',
-                    style: TextStyle(color: cs.onSurface.withAlpha(140))),
-                trailing: ThemeIcon('caretRight',
-                    size: 16, color: cs.onSurface.withAlpha(140)),
-                onTap: () =>
-                    Navigator.pushNamed(context, AppRoutes.viewPhrase),
-              );
-            },
-          ),
+      // The password decision comes first: it is what the lock, the
+      // fingerprint and the phrase check below all depend on.
       if (_passwordlessVault)
         ListTile(
           leading: ThemeIcon('password', color: cs.primary),
           title: Text('Add password', style: TextStyle(color: cs.onSurface)),
-          subtitle: Text(
-              'Ask for a password every time the vault opens',
-              style: TextStyle(color: cs.onSurface.withAlpha(140))),
-          trailing: ThemeIcon('caretRight',
-              size: 16, color: cs.onSurface.withAlpha(140)),
+          subtitle: Text('Ask for a password every time the vault opens',
+              style: TextStyle(color: muted)),
+          trailing: ThemeIcon('caretRight', size: 16, color: muted),
           onTap: () => Navigator.pushNamed(context, AppRoutes.addPassword)
               .then((_) => _loadBiometricState()),
         )
       else
-      ListTile(
-            leading: ThemeIcon('password', color: cs.primary),
-            title:
-                Text('Change password', style: TextStyle(color: cs.onSurface)),
-            subtitle: Text(
-                'Set a new master password (your recovery phrase stays the same)',
-                style: TextStyle(color: cs.onSurface.withAlpha(140))),
-            trailing: ThemeIcon('caretRight',
-                size: 16, color: cs.onSurface.withAlpha(140)),
-            onTap: () =>
-                Navigator.pushNamed(context, AppRoutes.changePassword),
-          ),
-      ListTile(
-            leading: ThemeIcon('key', color: cs.primary),
-            title: Text('Key Management', style: TextStyle(color: cs.onSurface)),
-            subtitle: Text('Check encryption integrity', style: TextStyle(color: cs.onSurface.withAlpha(140))),
-            trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
-            onTap: () => Navigator.pushNamed(context, AppRoutes.keyManagement),
-          ),
-      ListTile(
-            leading: ThemeIcon('heart', color: cs.primary),
-            title: Text('Vault Health', style: TextStyle(color: cs.onSurface)),
-            subtitle: Text(_vaultHealthSubtitle(cs),
-                style: TextStyle(color: cs.onSurface.withAlpha(140))),
-            trailing: _vaultHealthScanning
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2))
-                : ThemeIcon('caretRight',
-                    size: 16, color: cs.onSurface.withAlpha(140)),
-            onTap: _vaultHealthScanning ? null : _runVaultHealthScan,
-          ),
-      ListTile(
-            leading: ThemeIcon('smartphone', color: cs.primary),
-            title: Text('Devices', style: TextStyle(color: cs.onSurface)),
-            subtitle: Text('Name this device, see others on your vault',
-                style: TextStyle(color: cs.onSurface.withAlpha(140))),
-            trailing: ThemeIcon('caretRight',
-                size: 16, color: cs.onSurface.withAlpha(140)),
-            onTap: _openDevices,
-          ),
-      // Storage cleanup for blobs sealed under a PREVIOUS vault key
-          // (kept during a "start over"). Hidden while there are none.
-          FutureBuilder<List<CnestFile>>(
-            key: ValueKey('prior_key_$_priorKeyRefresh'),
-            future: DatabaseService().getPriorKeyFiles(),
-            builder: (context, snap) {
-              final rows = snap.data ?? const <CnestFile>[];
-              if (rows.isEmpty) return const SizedBox.shrink();
-              final total = rows.fold<int>(0, (s, f) => s + f.sizeBytes);
-              return ListTile(
-                leading: ThemeIcon('lockKey', color: cs.primary),
-                title: Text('Files from a previous phrase',
-                    style: TextStyle(color: cs.onSurface)),
-                subtitle: Text(
-                    '${rows.length} locked file${rows.length == 1 ? '' : 's'}'
-                    ' · ${formatBytes(total)} · tap to remove',
-                    style: TextStyle(color: cs.onSurface.withAlpha(140))),
-                trailing: ThemeIcon('caretRight',
-                    size: 16, color: cs.onSurface.withAlpha(140)),
-                onTap: () => _cleanupPriorKeyFiles(rows),
-              );
-            },
-          ),
-      ListTile(
-            leading: ThemeIcon('linkSimple', color: cs.primary),
-            title: Text('Active Shares', style: TextStyle(color: cs.onSurface)),
-            subtitle: Text('Manage and revoke share links', style: TextStyle(color: cs.onSurface.withAlpha(140))),
-            trailing: ThemeIcon('caretRight', size: 16, color: cs.onSurface.withAlpha(140)),
-            onTap: () => Navigator.pushNamed(context, AppRoutes.activeShares),
-          ),
-      ListTile(
-            leading: ThemeIcon('signOut', color: cs.primary),
-            title: Text('Forget this vault on this device',
+        ListTile(
+          leading: ThemeIcon('password', color: cs.primary),
+          title: Text('Change password', style: TextStyle(color: cs.onSurface)),
+          subtitle: Text(
+              'Set a new master password (your recovery phrase stays the same)',
+              style: TextStyle(color: muted)),
+          trailing: ThemeIcon('caretRight', size: 16, color: muted),
+          onTap: () => Navigator.pushNamed(context, AppRoutes.changePassword),
+        ),
+      // Vaults created or restored since view-phrase shipped keep their
+      // words (password-wrapped, or beside the seed when there is no
+      // password); older ones cannot reveal them, so the tile hides.
+      FutureBuilder<bool>(
+        future: KeyManagerService().canRevealMnemonic(),
+        builder: (context, snap) {
+          if (snap.data != true) return const SizedBox.shrink();
+          return ListTile(
+            leading: ThemeIcon('shieldCheck', color: cs.primary),
+            title: Text('View recovery phrase',
                 style: TextStyle(color: cs.onSurface)),
             subtitle: Text(
-                'Remove keys, index, and caches here. Cloud files stay; '
-                'your recovery phrase gets you back in.',
-                style: TextStyle(color: cs.onSurface.withAlpha(140))),
-            trailing: ThemeIcon('caretRight',
-                size: 16, color: cs.onSurface.withAlpha(140)),
-            onTap: _forgetVaultOnDevice,
+                _passwordlessVault
+                    ? 'Show your 12 words'
+                    : 'Show your 12 words after a password check',
+                style: TextStyle(color: muted)),
+            trailing: ThemeIcon('caretRight', size: 16, color: muted),
+            onTap: () => Navigator.pushNamed(context, AppRoutes.viewPhrase),
+          );
+        },
+      ),
+      // Manual lock (MASVS F-32) and auto-lock. A passwordless vault has no
+      // lock screen, so neither applies there.
+      if (!_passwordlessVault)
+        ListTile(
+          leading: ThemeIcon('lock', color: cs.primary),
+          title: Text('Lock vault now', style: TextStyle(color: cs.onSurface)),
+          subtitle: Text('Close the vault and return to the unlock screen',
+              style: TextStyle(color: muted)),
+          onTap: () => AppLockService().lockNow(),
+        ),
+      if (!_passwordlessVault)
+        ListTile(
+          leading: ThemeIcon('lock', color: cs.primary),
+          title: Text('Auto-lock', style: TextStyle(color: cs.onSurface)),
+          subtitle: Text(_autoLockLabel(_autoLockMinutes),
+              style: TextStyle(color: muted)),
+          trailing: ThemeIcon('caretRight', size: 16, color: muted),
+          onTap: _pickAutoLock,
+        ),
+      // Hidden outright when the device can never support it (no sensor /
+      // no lock screen): an impossible toggle is worse than none.
+      if (!_passwordlessVault &&
+          _bioCapability != BiometricCapability.noHardware &&
+          _bioCapability != BiometricCapability.noLockScreen)
+        SwitchListTile(
+          secondary: ThemeIcon('fingerprint', color: cs.primary),
+          title: Text('Unlock with fingerprint',
+              style: TextStyle(color: cs.onSurface)),
+          subtitle: Text(
+            _bioSubtitleOverride ??
+                (_bioCapability == BiometricCapability.noneEnrolled
+                    ? 'No fingerprints enrolled. Add one in Android Settings'
+                    : 'Hardware-backed. Your master password always works.'),
+            style: TextStyle(color: muted),
           ),
+          value: _bioEnabled,
+          onChanged: _bioCapability == BiometricCapability.available
+              ? _toggleBiometric
+              : null,
+        ),
+      ListTile(
+        leading: ThemeIcon('key', color: cs.primary),
+        title: Text('Key Management', style: TextStyle(color: cs.onSurface)),
+        subtitle: Text('Check encryption integrity',
+            style: TextStyle(color: muted)),
+        trailing: ThemeIcon('caretRight', size: 16, color: muted),
+        onTap: () => Navigator.pushNamed(context, AppRoutes.keyManagement),
+      ),
+      ListTile(
+        leading: ThemeIcon('heart', color: cs.primary),
+        title: Text('Vault Health', style: TextStyle(color: cs.onSurface)),
+        subtitle: Text(_vaultHealthSubtitle(cs),
+            style: TextStyle(color: muted)),
+        trailing: _vaultHealthScanning
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2))
+            : ThemeIcon('caretRight', size: 16, color: muted),
+        onTap: _vaultHealthScanning ? null : _runVaultHealthScan,
+      ),
+      ListTile(
+        leading: ThemeIcon('smartphone', color: cs.primary),
+        title: Text('Devices', style: TextStyle(color: cs.onSurface)),
+        subtitle: Text('Name this device, see others on your vault',
+            style: TextStyle(color: muted)),
+        trailing: ThemeIcon('caretRight', size: 16, color: muted),
+        onTap: _openDevices,
+      ),
+      // Storage cleanup for blobs sealed under a PREVIOUS vault key (kept
+      // during a "start over"). Hidden while there are none.
+      FutureBuilder<List<CnestFile>>(
+        key: ValueKey('prior_key_$_priorKeyRefresh'),
+        future: DatabaseService().getPriorKeyFiles(),
+        builder: (context, snap) {
+          final rows = snap.data ?? const <CnestFile>[];
+          if (rows.isEmpty) return const SizedBox.shrink();
+          final total = rows.fold<int>(0, (s, f) => s + f.sizeBytes);
+          return ListTile(
+            leading: ThemeIcon('lockKey', color: cs.primary),
+            title: Text('Files from a previous phrase',
+                style: TextStyle(color: cs.onSurface)),
+            subtitle: Text(
+                '${rows.length} locked file${rows.length == 1 ? '' : 's'}'
+                ' · ${formatBytes(total)} · tap to remove',
+                style: TextStyle(color: muted)),
+            trailing: ThemeIcon('caretRight', size: 16, color: muted),
+            onTap: () => _cleanupPriorKeyFiles(rows),
+          );
+        },
+      ),
+      ListTile(
+        leading: ThemeIcon('linkSimple', color: cs.primary),
+        title: Text('Active Shares', style: TextStyle(color: cs.onSurface)),
+        subtitle: Text('Manage and revoke share links',
+            style: TextStyle(color: muted)),
+        trailing: ThemeIcon('caretRight', size: 16, color: muted),
+        onTap: () => Navigator.pushNamed(context, AppRoutes.activeShares),
+      ),
+      ListTile(
+        leading: ThemeIcon('signOut', color: cs.primary),
+        title: Text('Forget this vault on this device',
+            style: TextStyle(color: cs.onSurface)),
+        subtitle: Text(
+            'Remove keys, index, and caches here. Cloud files stay; '
+            'your recovery phrase gets you back in.',
+            style: TextStyle(color: muted)),
+        trailing: ThemeIcon('caretRight', size: 16, color: muted),
+        onTap: _forgetVaultOnDevice,
+      ),
+    ];
+  }
+
+  /// Playback settings, out of Security: they are about how music behaves,
+  /// and the Music tab links straight here.
+  List<Widget> _musicChildren(ColorScheme cs) {
+    final muted = cs.onSurface.withAlpha(140);
+    return <Widget>[
+      // Closing the app should close the vault. The exception is deliberate
+      // background playback, which needs the process to outlive the task,
+      // so it is opt-in rather than assumed (MASVS F-34).
+      SwitchListTile(
+        secondary: ThemeIcon('musicNotes', color: cs.primary),
+        title: Text('Keep playing after closing',
+            style: TextStyle(color: cs.onSurface)),
+        subtitle: Text(
+          _passwordlessVault
+              ? (_keepPlayingOnClose
+                  ? 'Music keeps playing after you close the app'
+                  : 'Closing the app stops the music')
+              : _keepPlayingOnClose
+                  ? 'Music survives closing the app and auto-lock. Lock '
+                      'vault now always stops it'
+                  : 'Closing the app or clearing it from recents locks '
+                      'the vault',
+          style: TextStyle(color: muted),
+        ),
+        value: _keepPlayingOnClose,
+        onChanged: (v) async {
+          await AppLockService().setKeepPlayingOnClose(v);
+          if (mounted) _setState(() => _keepPlayingOnClose = v);
+        },
+      ),
+      // Off by default (MASVS F-18): the media notification is visible to
+      // anyone holding the phone.
       AnimatedBuilder(
-            animation: AudioPlayerService(),
-            builder: (context, _) => SwitchListTile(
-              secondary: ThemeIcon('musicNotes', color: cs.primary),
-              title: Text('Track titles on lock screen',
-                  style: TextStyle(color: cs.onSurface)),
-              subtitle: Text(
-                AudioPlayerService().showTitlesOnLockScreen
-                    ? 'Media notification shows what\'s playing'
-                    : 'Media notification shows "CipherNest Audio"',
-                style: TextStyle(color: cs.onSurface.withAlpha(140)),
-              ),
-              value: AudioPlayerService().showTitlesOnLockScreen,
-              onChanged: (v) =>
-                  AudioPlayerService().setShowTitlesOnLockScreen(v),
-            ),
+        animation: AudioPlayerService(),
+        builder: (context, _) => SwitchListTile(
+          secondary: ThemeIcon('lock', color: cs.primary),
+          title: Text('Track titles in the media notification',
+              style: TextStyle(color: cs.onSurface)),
+          subtitle: Text(
+            AudioPlayerService().showTitlesOnLockScreen
+                ? 'Shows what is playing, on the lock screen too'
+                : 'Shows "CipherNest Audio" instead of the title',
+            style: TextStyle(color: muted),
           ),
+          value: AudioPlayerService().showTitlesOnLockScreen,
+          onChanged: (v) => AudioPlayerService().setShowTitlesOnLockScreen(v),
+        ),
+      ),
     ];
   }
 
@@ -1622,15 +1647,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 14),
             Text(
-              'A year of a student coding, learning, and a lot of '
-              'hard work. Thanks for using it, and sorry in advance for any '
-              'bugs.',
+              'CipherNest took more than a year to build. Hope you find it '
+              'worth your while.',
               textAlign: TextAlign.center,
+              style: TextStyle(color: muted, fontSize: 13, height: 1.55),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'USMAN',
               style: TextStyle(
-                  color: muted,
-                  fontSize: 13,
-                  height: 1.55,
-                  fontStyle: FontStyle.italic),
+                fontFamily: 'BungeeHairline',
+                color: cs.onSurface.withAlpha(200),
+                fontSize: 13,
+                letterSpacing: 3,
+              ),
             ),
             const SizedBox(height: 22),
             Wrap(
@@ -1644,6 +1674,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     'https://www.linkedin.com/in/usmanshafs'),
                 _aboutLink(_brandSvg('github', cs), 'GitHub',
                     'https://ciphernest.io/source'),
+                _aboutLink(_brandSvg('gitlab', cs), 'GitLab',
+                    'https://gitlab.com/ciphernest-io'),
               ],
             ),
           ],
@@ -1872,50 +1904,76 @@ class _ModePill extends StatelessWidget {
 
 /// The theme-pack picker: shows the first few packs, with a button to expand
 /// the rest and collapse again. The selected pack is always kept visible.
-class _ThemePackList extends StatefulWidget {
-  const _ThemePackList({required this.current, required this.onPick});
+/// The theme picker: a horizontal carousel with the chosen pack centred at
+/// full size and its neighbours peeking in from both sides, smaller and
+/// faded. Swiping a pack into the centre applies it; tapping a neighbour
+/// swipes it in. No tick: being in view IS the selection.
+class _ThemePackCarousel extends StatefulWidget {
+  const _ThemePackCarousel({required this.current, required this.onPick});
 
   final ThemePack current;
   final ValueChanged<ThemePack> onPick;
 
   @override
-  State<_ThemePackList> createState() => _ThemePackListState();
+  State<_ThemePackCarousel> createState() => _ThemePackCarouselState();
 }
 
-class _ThemePackListState extends State<_ThemePackList> {
-  bool _expanded = false;
-  static const int _collapsedCount = 4;
+class _ThemePackCarouselState extends State<_ThemePackCarousel> {
+  static const _packs = ThemePack.values;
+  late final PageController _ctrl = PageController(
+    viewportFraction: 0.8,
+    initialPage: _packs.indexOf(widget.current),
+  );
 
-  List<ThemePack> get _visible {
-    const all = ThemePack.values;
-    if (_expanded || all.length <= _collapsedCount) return all;
-    final first = all.take(_collapsedCount).toList();
-    if (first.contains(widget.current)) return first;
-    // Keep the selected pack on screen by swapping it into the last slot.
-    return [...first.take(_collapsedCount - 1), widget.current];
+  @override
+  void didUpdateWidget(covariant _ThemePackCarousel old) {
+    super.didUpdateWidget(old);
+    if (old.current == widget.current || !_ctrl.hasClients) return;
+    final i = _packs.indexOf(widget.current);
+    if ((_ctrl.page ?? i).round() != i) _goTo(i);
   }
 
   @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _goTo(int i) => _ctrl.animateToPage(i,
+      duration: const Duration(milliseconds: 280), curve: Curves.easeOutCubic);
+
+  @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final canExpand = ThemePack.values.length > _collapsedCount;
-    return Column(
-      children: [
-        for (final pack in _visible)
-          _ThemePackTile(
-            pack: pack,
-            selected: widget.current == pack,
-            onTap: () => widget.onPick(pack),
+    return SizedBox(
+      height: 132,
+      child: PageView.builder(
+        controller: _ctrl,
+        itemCount: _packs.length,
+        onPageChanged: (i) => widget.onPick(_packs[i]),
+        itemBuilder: (context, i) => AnimatedBuilder(
+          animation: _ctrl,
+          builder: (context, child) {
+            final settled = _ctrl.hasClients &&
+                _ctrl.position.hasContentDimensions;
+            final page = settled
+                ? (_ctrl.page ?? i.toDouble())
+                : _packs.indexOf(widget.current).toDouble();
+            final d = (page - i).abs().clamp(0.0, 1.0);
+            return Transform.scale(
+              scale: 1 - 0.12 * d,
+              child: Opacity(opacity: 1 - 0.5 * d, child: child),
+            );
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: _ThemePackTile(
+              pack: _packs[i],
+              selected: _packs[i] == widget.current,
+              onTap: () => _goTo(i),
+            ),
           ),
-        if (canExpand)
-          TextButton.icon(
-            onPressed: () => setState(() => _expanded = !_expanded),
-            icon: ThemeIcon(_expanded ? 'caretUp' : 'caretDown',
-                size: 18, color: cs.primary),
-            label: Text(_expanded ? 'Show less' : 'More themes',
-                style: TextStyle(color: cs.primary)),
-          ),
-      ],
+        ),
+      ),
     );
   }
 }
@@ -1978,9 +2036,6 @@ class _ThemePackTile extends StatelessWidget {
                               ),
                             ),
                           ),
-                          if (selected)
-                            ThemeIcon('checkCircle',
-                                selected: true, color: t.accent, size: 20),
                         ],
                       ),
                       const SizedBox(height: 4),

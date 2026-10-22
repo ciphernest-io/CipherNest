@@ -22,7 +22,20 @@ import '../../../services/database_service.dart';
 /// through [DatabaseService.getCacheOwnerMap]; anything unattributable counts
 /// as "shared".
 class CacheUsageCard extends StatefulWidget {
-  const CacheUsageCard({super.key});
+  const CacheUsageCard({
+    super.key,
+    this.onClear,
+    this.onShowContents,
+    this.clearSubtitle,
+  });
+
+  /// Clears the cache; rendered as a button inside the card so the number
+  /// and the action that changes it sit together.
+  final VoidCallback? onClear;
+
+  /// Long-press on the same button: the cache contents sheet.
+  final VoidCallback? onShowContents;
+  final String? clearSubtitle;
 
   @override
   State<CacheUsageCard> createState() => _CacheUsageCardState();
@@ -229,6 +242,31 @@ class _CacheUsageCardState extends State<CacheUsageCard> {
                         ],
                       ))
                   .toList(),
+            ),
+          ],
+          if (widget.onClear != null) ...[
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    widget.clearSubtitle ?? '',
+                    style: TextStyle(
+                        color: cs.onSurface.withAlpha(140), fontSize: 11),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                OutlinedButton.icon(
+                  onPressed: widget.onClear,
+                  onLongPress: widget.onShowContents,
+                  icon: ThemeIcon('broom', size: 16, color: cs.primary),
+                  label: Text('Clear', style: TextStyle(color: cs.onSurface)),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: cs.outline),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+              ],
             ),
           ],
         ],

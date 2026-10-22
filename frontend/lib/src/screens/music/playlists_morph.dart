@@ -159,10 +159,11 @@ class _PlaylistsMorphViewState extends State<PlaylistsMorphView>
           _PlaylistMorphGrid(
             progress: _viewProgress,
             playlists: widget.playlists,
-            buildCard: (playlist, g) => _PlaylistMorphCard(
+            buildCard: (playlist, g, coverWidth) => _PlaylistMorphCard(
               key: ValueKey(playlist.id),
               playlist: playlist,
               gridness: g,
+              coverWidth: coverWidth,
               onTap: () => widget.onOpen(playlist),
               onLongPress: widget.onLongPress == null
                   ? null
@@ -188,7 +189,10 @@ class _PlaylistMorphGrid extends StatelessWidget {
 
   final List<CnestAlbum> playlists;
   final double progress;
-  final Widget Function(CnestAlbum, double) buildCard;
+
+  /// (playlist, gridness, coverWidth): coverWidth is the cover box width
+  /// while morphing toward the list rung, null to fill the card.
+  final Widget Function(CnestAlbum, double, double?) buildCard;
 
   Rect _rectFor(int i, int modeIdx, double w) {
     if (modeIdx == 0) return Rect.fromLTWH(0, i * 84.0, w, 76);
@@ -231,7 +235,16 @@ class _PlaylistMorphGrid extends StatelessWidget {
               Positioned.fromRect(
                 key: ValueKey('pos-${playlists[i].id}'),
                 rect: Rect.lerp(_rectFor(i, lo, w), _rectFor(i, hi, w), f)!,
-                child: buildCard(playlists[i], gridness),
+                // Same rule as the gallery albums: toward the list rung the
+                // cover shrinks from the 3-across tile straight to the 76 px
+                // square, never through the widening card.
+                child: buildCard(
+                  playlists[i],
+                  gridness,
+                  p < 1.0
+                      ? 76.0 + (_rectFor(i, 1, w).width - 76.0) * p
+                      : null,
+                ),
               ),
           ],
         ),
@@ -250,10 +263,12 @@ class _PlaylistMorphCard extends StatelessWidget {
     required this.gridness,
     required this.onTap,
     this.onLongPress,
+    this.coverWidth,
   });
 
   final CnestAlbum playlist;
   final double gridness;
+  final double? coverWidth;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
 
@@ -269,11 +284,15 @@ class _PlaylistMorphCard extends StatelessWidget {
       onLongPress: onLongPress,
       child: LayoutBuilder(builder: (context, c) {
         final size = Size(c.maxWidth, c.maxHeight);
-        final boxRect = Rect.lerp(
-          Rect.fromLTWH(0, 0, size.height, size.height),
-          Rect.fromLTWH(0, 0, size.width, size.height),
-          g,
-        )!;
+        final cw = coverWidth;
+        final boxRect = cw != null
+            ? Rect.fromLTWH(
+                0, 0, cw.clamp(0.0, size.width).toDouble(), size.height)
+            : Rect.lerp(
+                Rect.fromLTWH(0, 0, size.height, size.height),
+                Rect.fromLTWH(0, 0, size.width, size.height),
+                g,
+              )!;
         return Stack(
           children: [
             Positioned.fromRect(

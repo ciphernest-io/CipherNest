@@ -904,7 +904,10 @@ class KeyManagerService {
   /// vaults return false and cannot reveal their words.
   Future<bool> canRevealMnemonic() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_kMnemonicPwBlob) != null;
+    if (prefs.getString(_kMnemonicPwBlob) != null) return true;
+    // A passwordless vault keeps its words beside the seed (there is no
+    // password to wrap them under); Settings reveals them directly.
+    return (await _storage.read(key: _kMnemonicNoAuth)) != null;
   }
 
   /// Decrypts and returns the recovery phrase for a correct [password], or

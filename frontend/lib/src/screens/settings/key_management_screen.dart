@@ -135,7 +135,7 @@ class _KeyManagementScreenState extends State<KeyManagementScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              "• Algorithm: AES-256-GCM\n• Key storage: Android Keystore\n• Cloud: your connected drive (private CipherNest folder)",
+              "• Algorithm: AES-256-GCM\n• Key storage: Android Keystore\n• Cloud: your connected drive",
               style: TextStyle(color: cs.onSurface.withAlpha(140), height: 1.5, fontFamily: t.monoFontFamily),
             ),
           ],

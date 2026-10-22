@@ -21,6 +21,32 @@ class GalleryPrefs {
 
   static const kShowFeatured = 'gallery_show_featured';
   static const kShowYearAgo = 'gallery_show_year_ago';
+  static const kShowToday = 'gallery_show_today';
+  static const kShowOnThisDay = 'gallery_show_on_this_day';
+  static const kShowLastMonth = 'gallery_show_last_month';
+  static const kShowBestOf = 'gallery_show_best_of';
+  static const kShowFeaturedVideo = 'gallery_show_featured_video';
+
+  /// Every story kind under the Featured master switch, with its label.
+  static const subKinds = <(String key, String label, String subtitle)>[
+    (kShowYearAgo, 'Years ago', 'Photos from this day in past years'),
+    (kShowOnThisDay, 'On this day', 'Same date, every year you have'),
+    (kShowToday, 'Today', 'A recap of what you added today'),
+    (kShowLastMonth, 'Last month', 'A look back at last month'),
+    (kShowBestOf, 'Best of the month', 'Your favourites this month'),
+    (kShowFeaturedVideo, 'Featured video', 'One random video'),
+  ];
+
+  Future<bool> read(String key, {bool fallback = true}) async {
+    final p = await SharedPreferences.getInstance();
+    return p.getBool(key) ?? fallback;
+  }
+
+  Future<void> set(String key, bool v) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setBool(key, v);
+    changed.value++;
+  }
 
   Future<bool> readShowFeatured() async {
     final p = await SharedPreferences.getInstance();

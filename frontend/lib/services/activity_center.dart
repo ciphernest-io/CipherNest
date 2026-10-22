@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import 'bg_activity_bridge.dart';
+import 'cloud/account_registry.dart';
 import 'notify.dart';
 import 'sync_service.dart';
 import 'upload_foreground_guard.dart';
@@ -139,7 +140,22 @@ class ActivityTask {
 class ActivityCenter extends ChangeNotifier {
   static final ActivityCenter _instance = ActivityCenter._internal();
   factory ActivityCenter() => _instance;
-  ActivityCenter._internal();
+  ActivityCenter._internal() {
+    AccountRegistry().addListener(_onAccountChanged);
+  }
+
+  /// Recent results belong to the vault they ran in. The sheet used to show
+  /// account A's uploads from inside account B.
+  String? _accountForRecent;
+  void _onAccountChanged() {
+    final id = AccountRegistry().activeAccount?.id;
+    if (id == _accountForRecent) return;
+    _accountForRecent = id;
+    if (_recent.isEmpty) return;
+    _recent.clear();
+    _clearTerminal();
+    notifyListeners();
+  }
 
   static const int _recentCap = 10;
   static const Duration terminalDisplay = Duration(seconds: 4);

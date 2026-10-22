@@ -187,38 +187,53 @@ class StoriesTabState extends State<StoriesTab> {
 
   Future<void> _reload() async {
     final prefs = await SharedPreferences.getInstance();
-    _showFeatured = prefs.getBool('gallery_show_featured') ?? true;
-    _showYearAgo = prefs.getBool('gallery_show_year_ago') ?? true;
+    bool on(String key) => prefs.getBool(key) ?? true;
+    // "Show featured content" is the master switch; each story kind under
+    // it has its own toggle in Settings > Gallery.
+    _showFeatured = on(GalleryPrefs.kShowFeatured);
+    _showYearAgo = _showFeatured && on(GalleryPrefs.kShowYearAgo);
+    final showToday = _showFeatured && on(GalleryPrefs.kShowToday);
+    final showOnThisDay = _showFeatured && on(GalleryPrefs.kShowOnThisDay);
+    final showLastMonth = _showFeatured && on(GalleryPrefs.kShowLastMonth);
+    final showBestOf = _showFeatured && on(GalleryPrefs.kShowBestOf);
+    final showVideo = _showFeatured && on(GalleryPrefs.kShowFeaturedVideo);
 
     final db = DatabaseService();
     final stories = <_Story>[];
 
-    // Date-memory surfaces are all gated by the "A Year Ago Memories" toggle.
-    if (_showYearAgo) {
+    if (showToday) {
       final today = await db.getTodaysRecap();
       if (today.isNotEmpty) {
         stories.add(_Story('Today', today, subtitle: 'Recap'));
       }
+    }
 
+    if (showOnThisDay) {
       final onThisDay = await db.getMemoriesOnThisDay();
       if (onThisDay.isNotEmpty) {
         stories.add(_Story('On this day', onThisDay, subtitle: 'Past years'));
       }
+    }
 
+    if (showLastMonth) {
       final lastMonth = await db.getLastMonth();
       if (lastMonth.isNotEmpty) {
         final now = DateTime.now();
         final lm = (now.month - 2 + 12) % 12;
         stories.add(_Story(_months[lm], lastMonth, subtitle: 'Last month'));
       }
+    }
 
+    if (_showYearAgo) {
       for (final y in const [1, 2, 3, 4]) {
         final files = await db.getFilesFromYearsAgo(y);
         if (files.isNotEmpty) {
           stories.add(_Story(y == 1 ? 'A year ago' : '$y years ago', files));
         }
       }
+    }
 
+    if (showBestOf) {
       final best = await db.getBestOfThisMonth();
       if (best.isNotEmpty) {
         stories.add(_Story('Best of ${_months[DateTime.now().month - 1]}',
@@ -227,7 +242,7 @@ class StoriesTabState extends State<StoriesTab> {
       }
     }
 
-    if (_showFeatured) {
+    if (showVideo) {
       final allImages = await db.getFilesByType(CnestFileType.image);
       final videos = allImages.where((f) {
         final ext = f.filename.split('.').last.toLowerCase();

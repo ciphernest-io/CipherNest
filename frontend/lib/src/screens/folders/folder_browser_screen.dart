@@ -35,6 +35,7 @@ import 'upload_picker_session.dart';
 import '../../widgets/file_actions.dart';
 import '../../widgets/folder_picker_sheet.dart';
 import '../../widgets/friendly_error_sheet.dart';
+import '../../widgets/menu_items.dart';
 import '../../widgets/theme_icon.dart';
 import '../gallery/image_viewer_screen.dart';
 import '../gallery/photo_hero.dart';
@@ -613,14 +614,18 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
               _ => null,
             },
             itemBuilder: (_) => [
-              const PopupMenuItem(value: 'rename', child: Text('Rename')),
-              const PopupMenuItem(value: 'move', child: Text('Move')),
-              PopupMenuItem(
-                  value: 'hide',
-                  child: Text((_self ?? widget.folder!).isHidden
+              iconMenuItem(cs, 'rename', 'pencilSimple', 'Rename'),
+              iconMenuItem(cs, 'move', 'folderSimple', 'Move'),
+              iconMenuItem(
+                  cs,
+                  'hide',
+                  (_self ?? widget.folder!).isHidden
+                      ? 'visibility'
+                      : 'visibility_off',
+                  (_self ?? widget.folder!).isHidden
                       ? 'Unhide'
-                      : 'Hide from Photos & other views')),
-              const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                      : 'Hide from views'),
+              iconMenuItem(cs, 'delete', 'trash', 'Delete', danger: true),
             ],
           ),
         if (!_isPicker) _buildSortButton(),
@@ -1158,16 +1163,16 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
               // so only Hide is offered there.
               itemBuilder: (_) => [
                 if (!f.isSystem) ...[
-                  const PopupMenuItem(value: 'rename', child: Text('Rename')),
-                  const PopupMenuItem(value: 'move', child: Text('Move')),
+                  iconMenuItem(cs, 'rename', 'pencilSimple', 'Rename'),
+                  iconMenuItem(cs, 'move', 'folderSimple', 'Move'),
                 ],
-                PopupMenuItem(
-                    value: 'hide',
-                    child: Text(f.isHidden
-                        ? 'Unhide'
-                        : 'Hide from Photos & other views')),
+                iconMenuItem(
+                    cs,
+                    'hide',
+                    f.isHidden ? 'visibility' : 'visibility_off',
+                    f.isHidden ? 'Unhide' : 'Hide from views'),
                 if (!f.isSystem)
-                  const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                  iconMenuItem(cs, 'delete', 'trash', 'Delete', danger: true),
               ],
               onSelected: (v) => switch (v) {
                 'rename' => _renameFolder(f),
@@ -1298,23 +1303,16 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
                   icon: ThemeIcon('dotsThreeVertical',
                       color: cs.onSurface.withAlpha(120), size: 20),
                   itemBuilder: (_) => [
-                    const PopupMenuItem(
-                        value: 'send', child: Text('Send file')),
-                    const PopupMenuItem(
-                        value: 'save', child: Text('Save to device')),
-                    const PopupMenuItem(
-                        value: 'rename', child: Text('Rename')),
-                    const PopupMenuItem(
-                        value: 'move', child: Text('Move to folder')),
-                    PopupMenuItem(
-                        value: 'hide',
-                        child: Text(file.isHidden
-                            ? 'Unhide'
-                            : 'Hide from views')),
-                    PopupMenuItem(
-                        value: 'delete',
-                        child: Text('Delete',
-                            style: TextStyle(color: cs.error))),
+                    iconMenuItem(cs, 'send', 'shareFat', 'Send file'),
+                    iconMenuItem(cs, 'save', 'downloadSimple', 'Save to device'),
+                    iconMenuItem(cs, 'rename', 'pencilSimple', 'Rename'),
+                    iconMenuItem(cs, 'move', 'folderSimple', 'Move to folder'),
+                    iconMenuItem(
+                        cs,
+                        'hide',
+                        file.isHidden ? 'visibility' : 'visibility_off',
+                        file.isHidden ? 'Unhide' : 'Hide from views'),
+                    iconMenuItem(cs, 'delete', 'trash', 'Delete', danger: true),
                   ],
                   onSelected: (v) => switch (v) {
                     'send' => sendFilesPlain(context, [file]),

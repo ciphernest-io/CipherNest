@@ -9,3 +9,4 @@ const String kAppVersionLabel = 'CipherNest v1.0.0 Beta';
 /// argument so [SettingsScreen] opens straight to that category page.
 const String kSettingsGallerySection = 'gallery';
 const String kSettingsBackupSection = 'backup';
+const String kSettingsMusicSection = 'music';

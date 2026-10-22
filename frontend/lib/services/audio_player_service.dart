@@ -75,12 +75,38 @@ class AudioPlayerService extends ChangeNotifier {
   }
 
   /// Toggle whether the media notification shows real track titles or a
-  /// generic label. Applies from the next [playQueue] on — the media session
-  /// tags of an already-loaded queue are immutable.
+  /// generic label. Media-session tags are baked into the loaded sources,
+  /// so a playing queue is reloaded in place (same track, same position)
+  /// and the notification follows the switch immediately. Before this it
+  /// kept saying "CipherNest Audio" until the next queue started, which
+  /// read as the setting doing nothing.
   Future<void> setShowTitlesOnLockScreen(bool value) async {
     _showTitlesOnLockScreen = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(prefsKeyLockScreenTitles, value);
+    notifyListeners();
+    await _reloadQueueTags();
+  }
+
+  Future<void> _reloadQueueTags() async {
+    if (_queue.isEmpty) return;
+    final index = (_player.currentIndex ?? 0).clamp(0, _queue.length - 1);
+    final position = _player.position;
+    final wasPlaying = _player.playing;
+    try {
+      final sources = await Future.wait([
+        for (var i = 0; i < _queue.length; i++)
+          _sourceFor(_queue[i], artDownload: i == index),
+      ]);
+      await _player.setAudioSource(
+        ConcatenatingAudioSource(children: sources),
+        initialIndex: index,
+        initialPosition: position,
+      );
+      if (wasPlaying) unawaited(_player.play());
+    } catch (e) {
+      debugPrint('Media tag reload failed: $e');
+    }
     notifyListeners();
   }
 

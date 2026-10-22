@@ -10,6 +10,8 @@ import '../../../services/database_backup_service.dart';
 import '../../../services/database_service.dart';
 import '../../../services/notify.dart';
 import '../../../services/sync_service.dart';
+import '../../config/app_info.dart';
+import '../../config/routes.dart';
 import '../../models/album_model.dart';
 import '../../models/file_model.dart';
 import '../../widgets/activity_pill.dart';
@@ -263,6 +265,13 @@ class _MusicHomeScreenState extends State<MusicHomeScreen>
                 IconButton(
                   icon: const ThemeIcon('magnifyingGlass'),
                   onPressed: () => setState(() => _searching = true),
+                ),
+                IconButton(
+                  tooltip: 'Music settings',
+                  icon: const ThemeIcon('gear'),
+                  onPressed: () => Navigator.pushNamed(
+                      context, AppRoutes.settings,
+                      arguments: kSettingsMusicSection),
                 ),
               ],
         bottom: TabBar(

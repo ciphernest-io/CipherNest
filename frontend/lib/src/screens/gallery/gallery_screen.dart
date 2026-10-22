@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 import 'albums_tab.dart';
@@ -304,10 +303,9 @@ class _GalleryScreenState extends State<GalleryScreen> {
                             builder: (_) => const GallerySearchScreen()),
                       ),
                     ),
-                    // Stories has no overflow actions (its only item was
-                    // Settings, reachable from the Menu tab) — drop the
-                    // three-dot there entirely.
-                    if (_bottomNavIndex != 2) _overflowMenu(cs),
+                    // Only Pictures has overflow actions (Settings lives in
+                    // the Menu tab); the other tabs get no three-dot.
+                    if (_bottomNavIndex == 0) _overflowMenu(cs),
                   ],
                 ),
               ),
@@ -337,8 +335,6 @@ class _GalleryScreenState extends State<GalleryScreen> {
             pictures?.setFavoritesOnly(!(pictures.favoritesOnly));
           case 'sync':
             pictures?.handleSync();
-          case 'settings':
-            Navigator.pushNamed(context, AppRoutes.settings);
         }
       },
       itemBuilder: (ctx) {
@@ -352,7 +348,6 @@ class _GalleryScreenState extends State<GalleryScreen> {
             ),
             const PopupMenuItem(value: 'sync', child: Text('Sync now')),
           ],
-          const PopupMenuItem(value: 'settings', child: Text('Settings')),
         ];
       },
     );

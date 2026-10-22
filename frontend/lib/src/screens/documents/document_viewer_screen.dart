@@ -12,6 +12,7 @@ import '../../models/file_model.dart';
 import '../../widgets/file_actions.dart';
 import '../../widgets/theme_icon.dart';
 import '../share/share_dialog.dart';
+import '../../widgets/menu_items.dart';
 
 /// In-app, read-only viewer for the document types we can render natively —
 /// PDF (via pdfx / the platform PDF renderer), plain text / Markdown, and
@@ -121,10 +122,13 @@ class _DocumentViewerScreenState extends State<DocumentViewerScreen> {
         actions: [
           PopupMenuButton<String>(
             icon: ThemeIcon('dotsThreeVertical'),
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'send', child: Text('Send file')),
-              PopupMenuItem(value: 'share', child: Text('Share secure link')),
-              PopupMenuItem(value: 'save', child: Text('Save to device')),
+            position: PopupMenuPosition.under,
+            itemBuilder: (_) => [
+              iconMenuItem(cs, 'send', 'shareFat', 'Send file'),
+              iconMenuItem(
+                  cs, 'share', 'linkSimple', 'Share secure link'),
+              iconMenuItem(
+                  cs, 'save', 'downloadSimple', 'Save to device'),
             ],
             onSelected: (v) => switch (v) {
               'send' => sendFilesPlain(context, [widget.file]),

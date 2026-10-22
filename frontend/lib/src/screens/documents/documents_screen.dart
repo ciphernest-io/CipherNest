@@ -29,6 +29,7 @@ import '../../widgets/friendly_error_sheet.dart';
 import '../share/share_dialog.dart';
 import 'document_viewer_screen.dart';
 import '../../utils/safe_filename.dart';
+import '../../widgets/menu_items.dart';
 
 /// The two Adobe-Scan-style zoom states: a dense list of small-thumbnail rows,
 /// and roomy cards with a large page preview. Persisted device-wide.
@@ -247,6 +248,10 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
 
   void _closeSearch() {
     _searchCtrl.clear();
+    // Drop keyboard focus explicitly: when the field unmounts, focus used to
+    // jump to the next focusable widget, the view-toggle button, which then
+    // drew its focus highlight as if it had been tapped.
+    FocusManager.instance.primaryFocus?.unfocus();
     setState(() {
       _searching = false;
       _query = '';
@@ -657,7 +662,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                                                 strokeWidth: 2,
                                                 color: cs.onSurface)),
                                       )
-                                    : _menu(cs, file),
+                                    : _menu(cs, file, inExpanded: true),
                               ],
                             ),
                         ],
@@ -714,22 +719,23 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
     return _menu(cs, file);
   }
 
-  Widget _menu(ColorScheme cs, CnestFile file) {
+  /// [inExpanded]: the large card already shows Send and Save buttons, so
+  /// the menu does not repeat them there.
+  Widget _menu(ColorScheme cs, CnestFile file, {bool inExpanded = false}) {
     return PopupMenuButton<String>(
       icon: ThemeIcon('dotsThreeVertical', color: cs.onSurface.withAlpha(140)),
+      position: PopupMenuPosition.under,
       itemBuilder: (_) => [
-        const PopupMenuItem(value: 'send', child: Text('Send file')),
-        const PopupMenuItem(value: 'share', child: Text('Share secure link')),
-        const PopupMenuItem(value: 'save', child: Text('Save to device')),
-        const PopupMenuItem(value: 'rename', child: Text('Rename')),
-        PopupMenuItem(
-          value: 'delete',
-          child: Row(children: [
-            ThemeIcon('trash', color: cs.error, size: 20),
-            const SizedBox(width: 12),
-            Text('Delete', style: TextStyle(color: cs.error)),
-          ]),
-        ),
+        if (!inExpanded)
+          iconMenuItem(cs, 'send', 'shareFat', 'Send file'),
+        iconMenuItem(
+            cs, 'share', 'linkSimple', 'Share secure link'),
+        if (!inExpanded)
+          iconMenuItem(
+              cs, 'save', 'downloadSimple', 'Save to device'),
+        iconMenuItem(cs, 'rename', 'pencilSimple', 'Rename'),
+        iconMenuItem(cs, 'delete', 'trash', 'Delete',
+            danger: true),
       ],
       onSelected: (v) {
         switch (v) {
