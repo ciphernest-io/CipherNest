@@ -18,6 +18,8 @@ The CipherNest name and logo are not covered by the licence. The maintainer reta
 
 ## Before you start
 
+**This is a one-person project.** Expect days to weeks for a review, and a PR that sits is not a rejection.
+
 **Open an issue first** for anything that changes:
 
 - a file format, a chunk layout or an authenticated-data binding;
@@ -51,6 +53,7 @@ A release build needs `--no-tree-shake-icons`; see the README.
 ## What a good pull request looks like
 
 - One change per pull request, with a short description of what it does and why.
+- A PR with no description of the problem it solves will be closed without review.
 - Tests for anything that touches encryption, key handling, storage layout or the share path. A change there without a test will be sent back.
 - `flutter analyze` clean and `flutter test` green.
 - No new third-party UI packages. The interface is built from plain Flutter widgets on purpose; see the design notes in the code before adding a dependency.
