@@ -1365,6 +1365,9 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       onWillPop: _onWillPop,
       child: Scaffold(
         extendBodyBehindAppBar: true,
+        // The edit-info dialog raises the keyboard; the photo behind it
+        // must not be squeezed into the remaining half of the screen.
+        resizeToAvoidBottomInset: false,
         appBar: _showControls
             ? AppBar(
                 backgroundColor: Colors.transparent,
@@ -1398,6 +1401,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                     // (Rotate lives in the in-app editor; the old top-bar
                     // rotate button was a no-op and has been removed.)
                     PopupMenuButton<String>(
+                      position: PopupMenuPosition.under,
                       icon:
                           ThemeIcon('dotsThreeVertical', color: overlayColor),
                       itemBuilder: (context) => [
@@ -2805,8 +2809,6 @@ class _InfoSheetBodyState extends State<_InfoSheetBody> {
             ],
           ),
         ],
-        const SizedBox(height: 24),
-        _AddTagChip(),
         const SizedBox(height: 32),
         // CipherNest-specific extras — grouped so they read as "vault
         // metadata" separate from the camera info block above.
@@ -2983,39 +2985,6 @@ class _EditInfoDialogState extends State<_EditInfoDialog> {
   }
 }
 
-/// Placeholder chip matching Samsung's `# Add tag` control. Wired to a
-/// no-op for launch; tag storage is a v1.0.1 candidate.
-class _AddTagChip extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(ThemeController().tokens.rPill),
-          border: Border.all(color: cs.onSurface.withAlpha(80)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              '#',
-              style: TextStyle(color: cs.onSurface.withAlpha(160), fontSize: 14),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              'Add tag',
-              style: TextStyle(color: cs.onSurface.withAlpha(160), fontSize: 14),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _SinglePhotoView extends StatefulWidget {
   final CnestFile file;
   final int index;
@@ -3099,6 +3068,18 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
   // survives the cross-fade and the parent can watch the zoom level.
   final TransformationController _zoomCtrl = TransformationController();
   bool _lastReportedZoom = false;
+
+  /// Aspect of the DECODED placeholder (the shared ThumbStore image the
+  /// flight carries). Orientation-correct by construction, so it is the
+  /// truth for the hero box; stored width/height are only the fallback.
+  double? _placeholderAspect;
+  bool _inInitState = false;
+
+  /// True once the route's entrance (and the hero flight with it) has
+  /// finished. The full-resolution image is held back until then: swapping
+  /// it in under the flight was the sharpness pop / flicker at landing.
+  bool _routeSettled = false;
+  Animation<double>? _routeAnim;
 
   // ---- Raw-pointer pinch/pan engine ----
   // No InteractiveViewer: its ScaleGestureRecognizer had to WIN the gesture
@@ -3254,7 +3235,74 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
         if (mounted && widget.isFocused) unawaited(_initializeVideo());
       });
     }
+    _inInitState = true;
+    _resolvePlaceholderAspect();
+    _inInitState = false;
     _loadImages();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_routeAnim != null || _routeSettled) return;
+    final anim = ModalRoute.of(context)?.animation;
+    if (anim == null || anim.isCompleted) {
+      _routeSettled = true;
+      return;
+    }
+    _routeAnim = anim;
+    anim.addStatusListener(_onRouteStatus);
+  }
+
+  void _onRouteStatus(AnimationStatus status) {
+    if (status != AnimationStatus.completed) return;
+    _routeAnim?.removeStatusListener(_onRouteStatus);
+    _routeAnim = null;
+    if (mounted) setState(() => _routeSettled = true);
+  }
+
+  /// Reads the decoded size of the shared placeholder. The ImageCache entry
+  /// is warm from the grid, so the listener fires synchronously here and
+  /// the very first frame already has the right hero box.
+  void _resolvePlaceholderAspect() {
+    final pv = _storeThumbProvider();
+    if (pv == null) return;
+    final stream = pv.resolve(ImageConfiguration.empty);
+    late final ImageStreamListener listener;
+    listener = ImageStreamListener((info, _) {
+      final w = info.image.width;
+      final h = info.image.height;
+      info.dispose();
+      stream.removeListener(listener);
+      if (w <= 0 || h <= 0) return;
+      final a = w / h;
+      if (_placeholderAspect != null &&
+          (_placeholderAspect! - a).abs() < 0.001) {
+        return;
+      }
+      if (_inInitState || !mounted) {
+        _placeholderAspect = a;
+      } else {
+        setState(() => _placeholderAspect = a);
+      }
+      _maybeFixStoredDims(a);
+    }, onError: (_, _) => stream.removeListener(listener));
+    stream.addListener(listener);
+  }
+
+  /// Stored dimensions that disagree with the decoded image by exactly a
+  /// swap are raw, pre-rotation numbers from an old upload: write them
+  /// back the right way round so the justified layout and the details
+  /// sheet agree with what is on screen.
+  void _maybeFixStoredDims(double decodedAspect) {
+    final w = widget.file.width;
+    final h = widget.file.height;
+    if (w == null || h == null || w <= 0 || h <= 0) return;
+    final stored = w / h;
+    if ((stored - decodedAspect).abs() <= 0.02 * decodedAspect) return;
+    final swapped = h / w;
+    if ((swapped - decodedAspect).abs() > 0.02 * decodedAspect) return;
+    unawaited(DatabaseService().updateDimensions(widget.file.id, h, w));
   }
 
   /// Reported only when a gesture/animation ENDS. Live transform updates
@@ -3310,9 +3358,16 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
   /// aspect-tight hero stops hitting the fullscreen fallback. Silent DB
   /// write; converges per photo.
   void _maybeBackfillDims(Uint8List bytes) {
-    if (widget.file.width != null && widget.file.height != null) return;
-    unawaited(decodeImageDims(bytes).then((dims) {
+    final w = widget.file.width;
+    final h = widget.file.height;
+    unawaited(decodeOrientedImageDims(bytes).then((dims) {
       if (dims == null) return;
+      if (w != null && h != null && w > 0 && h > 0) {
+        final same = w == dims.$1 && h == dims.$2;
+        final swapped = w == dims.$2 && h == dims.$1;
+        // Right already, or a different source (an edit): leave it.
+        if (same || !swapped) return;
+      }
       unawaited(DatabaseService()
           .updateDimensions(widget.file.id, dims.$1, dims.$2));
     }));
@@ -3377,6 +3432,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
   // CRITICAL: Cleanup player when swiping away to free memory
   @override
   void dispose() {
+    _routeAnim?.removeStatusListener(_onRouteStatus);
     _zoomAnim.dispose();
     _zoomCtrl.dispose();
     _disposeVideoPlayer();
@@ -3826,10 +3882,14 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
                 // fall back to the fullscreen hero.
                 final dimW = widget.file.width;
                 final dimH = widget.file.height;
-                final aspect =
-                    (dimW != null && dimH != null && dimW > 0 && dimH > 0)
+                // The decoded placeholder is orientation-correct and is
+                // the very image the flight carries, so it is the truth
+                // for the hero box. Stored dimensions are the fallback;
+                // older rows hold raw, pre-rotation numbers.
+                final aspect = _placeholderAspect ??
+                    ((dimW != null && dimH != null && dimW > 0 && dimH > 0)
                         ? dimW / dimH
-                        : null;
+                        : null);
                 // contain, not cover: stored dimensions can be raw
                 // (pre-EXIF-rotation), and cover would CROP such a photo
                 // at rest. With correct metadata contain == cover inside
@@ -3880,7 +3940,7 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
               // first frame is actually DECODED. Fading on "bytes arrived"
               // (the old _fullOpacity flip) ran the animation while the
               // JPEG was still decoding — nothing to paint yet.
-              if (!_isVideo && _fullImage != null)
+              if (!_isVideo && _fullImage != null && _routeSettled)
                 Image.memory(
                   _fullImage!,
                   fit: fit,

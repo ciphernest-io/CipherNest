@@ -33,7 +33,7 @@ Widget photoHeroShuttle(
   final provider = id == null
       ? null
       : ThumbStore.instance
-          .providerFor(id, width: MediaBudget.thumbDecodeWidth);
+          .warmProviderFor(id, preferred: MediaBudget.thumbDecodeWidth);
   if (provider == null) {
     // No thumbnail resolved yet: fall back to the grid child rather than
     // a blank (rare — the tile the user tapped is always resolved).
@@ -43,4 +43,16 @@ Widget photoHeroShuttle(
     return (gridSide as Hero).child;
   }
   return Image(image: provider, fit: BoxFit.cover, gaplessPlayback: true);
+}
+
+/// The route every photo grid opens the viewer with: the gallery dims in
+/// place behind the flying hero instead of sliding away. One definition so
+/// Pictures, albums, stories, search and the Recycle Bin all open alike.
+Route<T> photoViewerRoute<T>(Widget viewer) {
+  return PageRouteBuilder<T>(
+    transitionDuration: const Duration(milliseconds: 260),
+    reverseTransitionDuration: const Duration(milliseconds: 220),
+    pageBuilder: (_, animation, secondaryAnimation) =>
+        FadeTransition(opacity: animation, child: viewer),
+  );
 }

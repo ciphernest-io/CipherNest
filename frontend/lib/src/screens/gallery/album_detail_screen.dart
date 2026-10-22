@@ -4,12 +4,9 @@ import '../../widgets/theme_icon.dart';
 import '../../models/album_model.dart';
 import '../../models/file_model.dart';
 import '../../../services/database_service.dart';
-import '../../../services/database_backup_service.dart';
-import '../../../services/auto_sync_service.dart';
 import '../../../services/sync_service.dart';
 import '../../../services/notify.dart';
 import 'pictures_tab.dart';
-import 'image_viewer_screen.dart';
 
 class AlbumDetailScreen extends StatefulWidget {
   final CnestAlbum album;
@@ -80,50 +77,14 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     _reload();
   }
 
-  Future<void> _removeFromAlbum(CnestFile file) async {
-    await DatabaseService().removeFileFromAlbum(widget.album.id, file.id);
-    _reload();
-    Notify.info('Removed from album');
-  }
-
-  Future<void> _handleDelete(CnestFile file) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Move to Recycle Bin?'),
-        content: const Text(
-          'The photo will be hidden here and everywhere else in the vault. '
-          'You can restore it from Recycle Bin for the next 30 days.',
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text('Delete',
-                  style:
-                      TextStyle(color: ThemeController().tokens.danger))),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-
-    // Soft-delete only. The cloud blob survives so Recycle Bin can restore
-    // instantly; the 30-day sweeper (recycle_bin_service.dart) is what
-    // eventually purges the ciphertext. DatabaseService.deleteFile also
-    // wipes the local cache and bumps notifyListeners, so this screen
-    // rebuilds without a pull-to-refresh.
-    try {
-      await DatabaseService().deleteFile(file.id);
-      AutoSyncService.trackDeletion(file.filename, file.sizeBytes);
-      DatabaseBackupService().scheduleBackup();
-
-      _reload();
-      Notify.info('Moved to Recycle Bin');
-    } catch (e) {
-      Notify.error('Delete failed: $e');
+  Future<void> _removeFromAlbum(List<CnestFile> files) async {
+    for (final f in files) {
+      await DatabaseService().removeFileFromAlbum(widget.album.id, f.id);
     }
+    _reload();
+    Notify.info(files.length == 1
+        ? 'Removed from album'
+        : '${files.length} removed from album');
   }
 
   Future<void> _showOptions() async {
@@ -213,76 +174,20 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               ? Center(
                   child: Text('No photos in this album',
                       style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withAlpha(120))))
-              : GridView.builder(
-                  padding: EdgeInsets.zero,
-                  // 137 is load-bearing: full-bleed 411/138.5 -> 3 columns
-                  // (same as before), 320 -> 3, 891 landscape -> 7.
-                  gridDelegate:
-                      const SliverGridDelegateWithMaxCrossAxisExtent(
-                    maxCrossAxisExtent: 137,
-                    crossAxisSpacing: 1.5,
-                    mainAxisSpacing: 1.5,
-                  ),
-                  itemCount: _files.length,
-                  itemBuilder: (context, index) {
-                    final file = _files[index];
-                    return GestureDetector(
-                      onTap: () async {
-                        final result = await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => ImageViewerScreen(
-                              files: _files,
-                              initialIndex: index,
-                            ),
-                          ),
-                        );
-                        if (result == true) _reload();
-                      },
-                      onLongPress: () {
-                        if (widget.album.isSmart) {
-                          _handleDelete(file);
-                        } else {
-                          _showItemOptions(file);
-                        }
-                      },
-                      child: GalleryGridItem(
-                          key: ValueKey(file.id), file: file),
-                    );
-                  },
+              // The gallery grid itself: pinch zoom ladder, justified rung,
+              // hero open, drag-select. No date headers (an album is the
+              // grouping). Long-press selects; "Remove from album" joins the
+              // selection actions on custom albums.
+              : PicturesTab(
+                  filesOverride: _files,
+                  embedded: true,
+                  showDateHeaders: false,
+                  onRemoveFromAlbum:
+                      widget.album.isSmart ? null : _removeFromAlbum,
                 ),
     );
   }
 
-  Future<void> _showItemOptions(CnestFile file) async {
-    final cs = Theme.of(context).colorScheme;
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: cs.surface,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: ThemeIcon('minusCircle', color: cs.primary),
-              title: Text('Remove from Album', style: TextStyle(color: cs.onSurface)),
-              onTap: () => Navigator.pop(ctx, 'remove'),
-            ),
-            ListTile(
-              leading: ThemeIcon('trash', color: cs.error),
-              title: Text('Delete from Vault', style: TextStyle(color: cs.error)),
-              onTap: () => Navigator.pop(ctx, 'delete'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (action == 'remove') {
-      _removeFromAlbum(file);
-    } else if (action == 'delete') {
-      _handleDelete(file);
-    }
-  }
 }
 
 // --- Vault photo picker for adding photos to custom albums ---

@@ -30,14 +30,40 @@ class _GalleryScreenState extends State<GalleryScreen> {
   final _albumsKey = GlobalKey<AlbumsTabState>();
   final _storiesKey = GlobalKey<StoriesTabState>();
   final _chrome = GalleryChrome();
+  final _pageCtrl = PageController();
 
   @override
   void dispose() {
+    _pageCtrl.dispose();
     _chrome.dispose();
     super.dispose();
   }
 
+  /// Pill tap: the pages slide, the same motion a swipe produces. The
+  /// pages passed on the way (Pictures to Menu crosses two) must not each
+  /// take the pill for a frame, so page callbacks are ignored meanwhile.
+  bool _pillDriven = false;
+
   void _selectTab(int index) {
+    if (index == _bottomNavIndex) return;
+    _applyTab(index);
+    _pillDriven = true;
+    _pageCtrl
+        .animateToPage(
+          index,
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeOutCubic,
+        )
+        .whenComplete(() => _pillDriven = false);
+  }
+
+  void _onPageChanged(int index) {
+    if (_pillDriven) return;
+    _applyTab(index);
+  }
+
+  /// Shared by the pill and by swipes landing on a page.
+  void _applyTab(int index) {
     if (index == _bottomNavIndex) return;
     // Selection is modal to the Pictures tab — leaving the tab exits it,
     // so the floating bar can never act on photos that aren't visible.
@@ -48,6 +74,10 @@ class _GalleryScreenState extends State<GalleryScreen> {
     // tab re-publish its own scrolled-under state.
     _chrome.chromeHidden.value = false;
     _chrome.showBackToTop.value = false;
+    // The reveal offset belongs to the tab that produced it: a revealed
+    // Albums header must not leave the next tab's buttons pulled down.
+    _chrome.headerReveal.value = 0;
+    _chrome.scrolledUnder.value = false;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       switch (_bottomNavIndex) {
         case 0:
@@ -78,18 +108,45 @@ class _GalleryScreenState extends State<GalleryScreen> {
       child: Scaffold(
       body: Stack(
         children: [
+          // Tabs are pages: a horizontal swipe moves between them and the
+          // pill animates the same way. Each tab is kept alive off-screen
+          // so scroll position, zoom level and selection survive, exactly
+          // as they did in the IndexedStack this replaced.
           Positioned.fill(
-            child: IndexedStack(
-              index: _bottomNavIndex,
-              children: [
-                PicturesTab(key: _picturesKey, chrome: _chrome),
-                AlbumsTab(key: _albumsKey, chrome: _chrome),
-                // No SafeArea wrapper: Stories manages its own top inset in
-                // its header (like Pictures/Albums) so its title lands at the
-                // same level rather than a SafeArea-shifted one.
-                StoriesTab(key: _storiesKey, chrome: _chrome),
-                const SafeArea(bottom: false, child: MenuTab()),
-              ],
+            child: ValueListenableBuilder<bool>(
+              valueListenable: _chrome.swipeLocked,
+              builder: (context, locked, _) => PageView(
+                controller: _pageCtrl,
+                physics: locked
+                    ? const NeverScrollableScrollPhysics()
+                    : const PageScrollPhysics(),
+                onPageChanged: _onPageChanged,
+                // Kept-alive pages stay in the element tree, so a photo
+                // that is both a grid tile and a story cover would be two
+                // heroes with one tag. Only the current page's heroes fly.
+                children: [
+                  HeroMode(
+                    enabled: _bottomNavIndex == 0,
+                    child: _KeepAlive(
+                        child: PicturesTab(key: _picturesKey, chrome: _chrome)),
+                  ),
+                  HeroMode(
+                    enabled: _bottomNavIndex == 1,
+                    child: _KeepAlive(
+                        child: AlbumsTab(key: _albumsKey, chrome: _chrome)),
+                  ),
+                  // No SafeArea wrapper: Stories manages its own top inset in
+                  // its header (like Pictures/Albums) so its title lands at the
+                  // same level rather than a SafeArea-shifted one.
+                  HeroMode(
+                    enabled: _bottomNavIndex == 2,
+                    child: _KeepAlive(
+                        child: StoriesTab(key: _storiesKey, chrome: _chrome)),
+                  ),
+                  const _KeepAlive(
+                      child: SafeArea(bottom: false, child: MenuTab())),
+                ],
+              ),
             ),
           ),
           _topButtons(safeTop),
@@ -265,6 +322,8 @@ class _GalleryScreenState extends State<GalleryScreen> {
     final t = ThemeController().tokens;
     return PopupMenuButton<String>(
       tooltip: 'More',
+      // Below the button, never over it.
+      position: PopupMenuPosition.under,
       icon: ThemeIcon('dotsThreeVertical', color: cs.onSurface),
       color: cs.surface,
       shape: RoundedRectangleBorder(
@@ -447,4 +506,25 @@ class _GalleryScreenState extends State<GalleryScreen> {
     );
   }
 
+}
+
+/// Keeps a PageView page mounted while it is off-screen.
+class _KeepAlive extends StatefulWidget {
+  const _KeepAlive({required this.child});
+  final Widget child;
+
+  @override
+  State<_KeepAlive> createState() => _KeepAliveState();
+}
+
+class _KeepAliveState extends State<_KeepAlive>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return widget.child;
+  }
 }

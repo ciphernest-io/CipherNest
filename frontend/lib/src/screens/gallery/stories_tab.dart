@@ -1,23 +1,17 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:photo_manager/photo_manager.dart';
-import 'package:video_thumbnail/video_thumbnail.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/file_model.dart';
-import '../../../services/cache_manager_service.dart';
 import '../../../services/database_service.dart';
-import '../../../services/cloud/cloud_service.dart';
-import '../../../services/encryption_service.dart';
 import '../../../services/gallery_prefs.dart';
 import '../../../services/sync_service.dart';
 import 'gallery_chrome.dart';
 import 'image_viewer_screen.dart';
+import 'photo_hero.dart';
+import 'pictures_tab.dart' show GalleryGridItem;
 
 class StoriesTab extends StatefulWidget {
   const StoriesTab({super.key, this.chrome});
@@ -50,6 +44,8 @@ class StoriesTabState extends State<StoriesTab> {
 
   static const _cardW = 165.0;
   static const _cardH = 220.0; // 3:4
+  // A card is wider than a grid tile; decode its cover a step larger.
+  static const _coverDecodeWidth = 400;
 
   // Hidden pull-to-reveal title, mirroring Pictures/Albums: the big "Stories"
   // heading lives inside the scroll view above the content and is revealed
@@ -316,7 +312,7 @@ class StoriesTabState extends State<StoriesTab> {
                 itemCount: _stories.length,
                 separatorBuilder: (context, index) =>
                     const SizedBox(width: 12),
-                itemBuilder: (context, i) => _storyCard(_stories[i]),
+                itemBuilder: (context, i) => _storyCard(_stories[i], i),
               ),
             ),
           SizedBox(height: _bottomFiller + 120),
@@ -325,14 +321,33 @@ class StoriesTabState extends State<StoriesTab> {
     );
   }
 
-  Widget _storyCard(_Story s) {
+  /// Hero tags must be unique on a page. Two stories can share a cover, so
+  /// only the first card for a given cover carries the hero.
+  int _heroOwner(String coverId) {
+    for (var i = 0; i < _stories.length; i++) {
+      if (_stories[i].cover.id == coverId) return i;
+    }
+    return -1;
+  }
+
+  Widget _storyCard(_Story s, int index) {
     final t = ThemeController().tokens;
+    // The cover is the gallery's own tile (shared ThumbStore entry), so the
+    // hero flight paints the same decoded image the card shows.
+    final cover = GalleryGridItem(
+      key: ValueKey('story-${s.cover.id}-$index'),
+      file: s.cover,
+      decodeWidth: _coverDecodeWidth,
+      compact: true,
+    );
     return GestureDetector(
       onTap: () => Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (_) => ImageViewerScreen(files: s.files, initialIndex: 0),
-        ),
+        photoViewerRoute(ImageViewerScreen(
+          files: s.files,
+          initialIndex: 0,
+          placeholderDecodeWidth: _coverDecodeWidth,
+        )),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(t.rCardLg),
@@ -342,7 +357,14 @@ class StoriesTabState extends State<StoriesTab> {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              _ThumbnailLoader(file: s.cover),
+              if (_heroOwner(s.cover.id) == index)
+                Hero(
+                  tag: 'photo-${s.cover.id}',
+                  flightShuttleBuilder: photoHeroShuttle,
+                  child: cover,
+                )
+              else
+                cover,
               // Bottom scrim so the white title always reads.
               Container(
                 decoration: const BoxDecoration(
@@ -401,161 +423,5 @@ class StoriesTabState extends State<StoriesTab> {
         ),
       ),
     );
-  }
-}
-
-class _ThumbnailLoader extends StatefulWidget {
-  final CnestFile file;
-  const _ThumbnailLoader({required this.file});
-
-  @override
-  State<_ThumbnailLoader> createState() => _ThumbnailLoaderState();
-}
-
-class _ThumbnailLoaderState extends State<_ThumbnailLoader> {
-  Uint8List? _bytes;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  bool get _isVideo {
-    final ext = widget.file.filename.split('.').last.toLowerCase();
-    return const {'mp4', 'mov', 'avi', 'mkv'}.contains(ext);
-  }
-
-  /// Fire-and-forget: share the obtained frame through the standard
-  /// thumb-cache path so the grid, filmstrip, and viewer reuse it.
-  /// MediaStore-bound files are excluded (same assetId == null gate as the
-  /// viewer/filmstrip persist helpers): Android re-serves their frame on
-  /// demand, and this ungated write — running for every video story card
-  /// the moment the gallery's IndexedStack builds this tab — was why the
-  /// app-cache figure jumped on entering the gallery even though the grid
-  /// itself writes nothing.
-  void _persistFrame(Uint8List bytes) {
-    if (widget.file.assetId != null) return;
-    final cloudId = widget.file.cloudId;
-    if (cloudId == null) return;
-    getTemporaryDirectory().then((dir) async {
-      try {
-        await File('${dir.path}/thumb_$cloudId.jpg').writeAsBytes(bytes);
-      } catch (_) {
-        // Best-effort cache write.
-      }
-    });
-  }
-
-  Future<void> _load() async {
-    // Videos first: their raw bytes are not decodable as an image, so they
-    // need a real frame — same rungs as the gallery grid and filmstrip.
-    if (_isVideo) {
-      // Rung 0 — the shared disk thumb cache. MediaStore-bound files skip
-      // it: Android serves their frame, and a disk thumb here can only be a
-      // stale leftover from a window when the local original was missing
-      // (gallery delete → restore). Serving it first kept the leftover
-      // alive forever.
-      if (widget.file.assetId == null && widget.file.cloudId != null) {
-        final dir = await getTemporaryDirectory();
-        final cached = File('${dir.path}/thumb_${widget.file.cloudId}.jpg');
-        if (await cached.exists()) {
-          final bytes = await cached.readAsBytes();
-          if (mounted) setState(() => _bytes = bytes);
-          return;
-        }
-      }
-      // Rung 1 — MediaStore.
-      if (widget.file.assetId != null) {
-        try {
-          final asset = await AssetEntity.fromId(widget.file.assetId!);
-          final bytes = await asset?.thumbnailDataWithSize(
-            const ThumbnailSize(600, 600),
-          );
-          if (bytes != null) {
-            _persistFrame(bytes);
-            // MediaStore verified as the source — reclaim any leftover
-            // decrypted copies. Stories re-runs _load on every rebuild
-            // (no memo), so this converges even when the grid tile's
-            // session memo skips its own ladder.
-            unawaited(CacheManagerService().reclaimForMediaStoreOriginal(
-              fileId: widget.file.id,
-              cloudId: widget.file.cloudId,
-            ));
-            if (mounted) setState(() => _bytes = bytes);
-            return;
-          }
-        } catch (_) {
-          // fall through
-        }
-      }
-      // Rung 2 — extract a frame from the local original.
-      if (widget.file.localPath != null &&
-          File(widget.file.localPath!).existsSync()) {
-        try {
-          final bytes = await VideoThumbnail.thumbnailData(
-            video: widget.file.localPath!,
-            imageFormat: ImageFormat.JPEG,
-            maxWidth: 600,
-            quality: 70,
-          );
-          if (bytes != null) {
-            _persistFrame(bytes);
-            if (mounted) setState(() => _bytes = bytes);
-            return;
-          }
-        } catch (_) {
-          // fall through to the cloud thumb
-        }
-      }
-      // Rung 3 — the encrypted cloud thumbnail only. Never fall back to the
-      // full video blob: it isn't an image, and it can be hundreds of MB.
-      if (widget.file.thumbnailCloudId == null) return;
-    }
-
-    // LOCAL-FIRST: use device file if it exists (images only — a video
-    // never reaches here with a local original).
-    if (!_isVideo && widget.file.localPath != null) {
-      final localFile = File(widget.file.localPath!);
-      if (await localFile.exists()) {
-        final bytes = await localFile.readAsBytes();
-        if (mounted) setState(() => _bytes = bytes);
-        return;
-      }
-    }
-
-    // CLOUD FALLBACK
-    final targetId = _isVideo
-        ? widget.file.thumbnailCloudId
-        : (widget.file.thumbnailCloudId ?? widget.file.cloudId);
-    if (targetId == null) return;
-
-    try {
-      final cacheDir = await getTemporaryDirectory();
-      final isThumbnail = widget.file.thumbnailCloudId != null;
-      final fileName = isThumbnail
-          ? 'thumb_${widget.file.cloudId}.jpg'
-          : '${widget.file.cloudId}_decrypted.jpg';
-      final cacheFile = File('${cacheDir.path}/$fileName');
-
-      if (await cacheFile.exists()) {
-        final bytes = await cacheFile.readAsBytes();
-        if (mounted) setState(() => _bytes = bytes);
-        return;
-      }
-
-      final enc = await CloudService().downloadFile(targetId);
-      final dec = await EncryptionService.decryptFile(enc);
-      await cacheFile.writeAsBytes(dec);
-      if (mounted) setState(() => _bytes = dec);
-    } catch (_) {}
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_bytes != null) {
-      return Image.memory(_bytes!, fit: BoxFit.cover);
-    }
-    return Container(color: Theme.of(context).colorScheme.surfaceContainerHighest);
   }
 }

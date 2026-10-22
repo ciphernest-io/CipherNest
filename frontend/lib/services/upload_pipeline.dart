@@ -16,6 +16,7 @@ import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../src/models/file_model.dart';
 import '../src/utils/filename_dedup.dart';
+import '../src/utils/image_dims.dart';
 import '../src/utils/media_store_uri.dart';
 import 'activity_center.dart';
 import 'audio_art_parser.dart';
@@ -745,19 +746,10 @@ class UploadPipeline {
     }
   }
 
-  /// Header-only decode: dimensions without rasterizing the image.
-  static Future<(int, int)?> _imageDimensions(Uint8List bytes) async {
-    try {
-      final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
-      final descriptor = await ui.ImageDescriptor.encoded(buffer);
-      final dims = descriptor.width > 0 && descriptor.height > 0
-          ? (descriptor.width, descriptor.height)
-          : null;
-      descriptor.dispose();
-      buffer.dispose();
-      return dims;
-    } catch (_) {
-      return null;
-    }
-  }
+  /// Header-only decode, EXIF orientation applied: a portrait phone photo
+  /// is stored as portrait. The raw container dimensions used to go in,
+  /// and the viewer's hero then flew to a landscape box for a portrait
+  /// image and snapped.
+  static Future<(int, int)?> _imageDimensions(Uint8List bytes) =>
+      decodeOrientedImageDims(bytes);
 }

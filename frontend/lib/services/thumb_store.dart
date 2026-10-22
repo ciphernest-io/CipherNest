@@ -109,6 +109,20 @@ class ThumbStore {
     return built;
   }
 
+  /// The provider most likely to be DECODED right now: the one already
+  /// built at [preferred], else any provider this entry has handed out
+  /// (the grid tile's, whatever its decode width), else a fresh one at
+  /// [preferred]. The hero shuttle paints from this, so the flight never
+  /// starts on an image that still has to decode.
+  ImageProvider? warmProviderFor(String id, {int preferred = 300}) {
+    final e = peek(id);
+    if (e == null || !e.hasSource) return null;
+    final exact = e._providers[preferred];
+    if (exact != null) return exact;
+    if (e._providers.isNotEmpty) return e._providers.values.first;
+    return providerFor(id, width: preferred);
+  }
+
   ImageProvider? _build(ThumbEntry e, int width) {
     final bytes = e.bytes;
     if (bytes != null) return ResizeImage(MemoryImage(bytes), width: width);

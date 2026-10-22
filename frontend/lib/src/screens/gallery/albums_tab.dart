@@ -85,6 +85,7 @@ class AlbumsTabState extends State<AlbumsTab>
       _settleCtrl.stop();
       setState(() {
         _pinchActive = true;
+        widget.chrome?.swipeLocked.value = true;
         _pinchBaseline = _pinchSpan();
         _pinchStartProgress = _viewProgress;
         _slackHeld = true; // hold tail slack across the whole gesture
@@ -139,6 +140,7 @@ class AlbumsTabState extends State<AlbumsTab>
     }
     if (_pinchPointers.isEmpty && _pinchActive) {
       setState(() => _pinchActive = false);
+      widget.chrome?.swipeLocked.value = false;
       _settleToNearest();
     }
   }
@@ -162,13 +164,14 @@ class AlbumsTabState extends State<AlbumsTab>
     setState(() => _viewProgress = saved.clamp(0, 2).toDouble());
   }
 
-  Widget _entryCard(_AlbumEntry entry, double t) {
+  Widget _entryCard(_AlbumEntry entry, double t, double? coverWidth) {
     final album = entry.album;
-    if (album == null) return _buildCreateCard(t);
+    if (album == null) return _buildCreateCard(t, coverWidth);
     return _AlbumCard(
       key: ValueKey(entry.id),
       album: album,
       gridness: t,
+      coverWidth: coverWidth,
       onTap: () => _openAlbum(album),
     );
   }
@@ -635,7 +638,7 @@ class AlbumsTabState extends State<AlbumsTab>
     );
   }
 
-  Widget _buildCreateCard(double g0) {
+  Widget _buildCreateCard(double g0, double? coverWidth) {
     final cs = Theme.of(context).colorScheme;
     final t = ThemeController().tokens;
     final g = g0.clamp(0.0, 1.0).toDouble();
@@ -644,11 +647,7 @@ class AlbumsTabState extends State<AlbumsTab>
       onTap: _createAlbum,
       child: LayoutBuilder(builder: (context, c) {
         final size = Size(c.maxWidth, c.maxHeight);
-        final boxRect = Rect.lerp(
-          Rect.fromLTWH(0, 0, size.height, size.height),
-          Rect.fromLTWH(0, 0, size.width, size.height),
-          g,
-        )!;
+        final boxRect = _morphBoxRect(size, g, coverWidth);
         return Stack(
           children: [
             Positioned.fromRect(
@@ -721,6 +720,23 @@ class AlbumsTabState extends State<AlbumsTab>
   }
 }
 
+/// The cover box inside a morphing card. With a [coverWidth] from the grid
+/// (morphing toward the list rung) the box takes exactly that width, so it
+/// shrinks from the tile to the square without passing through a wide
+/// rectangle. Otherwise it interpolates between the square and the whole
+/// card by gridness, as before.
+Rect _morphBoxRect(Size size, double g, double? coverWidth) {
+  if (coverWidth != null) {
+    return Rect.fromLTWH(
+        0, 0, coverWidth.clamp(0.0, size.width).toDouble(), size.height);
+  }
+  return Rect.lerp(
+    Rect.fromLTWH(0, 0, size.height, size.height),
+    Rect.fromLTWH(0, 0, size.width, size.height),
+    g,
+  )!;
+}
+
 class _AlbumCard extends StatefulWidget {
   final CnestAlbum album;
   final VoidCallback onTap;
@@ -731,11 +747,16 @@ class _AlbumCard extends StatefulWidget {
   /// text layers interpolate continuously.
   final double gridness;
 
+  /// See [_MorphAlbumGrid.buildCard]: the cover box width while morphing
+  /// toward the list rung; null fills the card.
+  final double? coverWidth;
+
   const _AlbumCard({
     super.key,
     required this.album,
     required this.onTap,
     this.gridness = 1.0,
+    this.coverWidth,
   });
 
   @override
@@ -848,11 +869,7 @@ class _AlbumCardState extends State<_AlbumCard> {
       onTap: widget.onTap,
       child: LayoutBuilder(builder: (context, c) {
         final size = Size(c.maxWidth, c.maxHeight);
-        final boxRect = Rect.lerp(
-          Rect.fromLTWH(0, 0, size.height, size.height),
-          Rect.fromLTWH(0, 0, size.width, size.height),
-          g,
-        )!;
+        final boxRect = _morphBoxRect(size, g, widget.coverWidth);
         return Stack(
           children: [
             Positioned.fromRect(
@@ -991,7 +1008,11 @@ class _MorphAlbumGrid extends StatelessWidget {
 
   final List<_AlbumEntry> entries;
   final double progress;
-  final Widget Function(_AlbumEntry, double) buildCard;
+
+  /// (entry, gridness, coverWidth). coverWidth is the width the cover box
+  /// must have while morphing toward the list rung, or null to fill the
+  /// card (every grid rung).
+  final Widget Function(_AlbumEntry, double, double?) buildCard;
 
   Rect _rectFor(int i, int modeIdx, double w) {
     if (modeIdx == 0) return Rect.fromLTWH(0, i * 84.0, w, 76);
@@ -1033,7 +1054,18 @@ class _MorphAlbumGrid extends StatelessWidget {
                 key: ValueKey('pos-${entries[i].id}'),
                 rect: Rect.lerp(
                     _rectFor(i, lo, w), _rectFor(i, hi, w), f)!,
-                child: buildCard(entries[i], gridness),
+                // Toward the list rung the card itself widens to the full
+                // row while it shrinks in height. The cover box must not
+                // follow that width (it read as a wide rectangle before
+                // snapping square): it goes from the 3-across tile width
+                // straight to the 76 px square, in step with the height.
+                child: buildCard(
+                  entries[i],
+                  gridness,
+                  p < 1.0
+                      ? 76.0 + (_rectFor(i, 1, w).width - 76.0) * p
+                      : null,
+                ),
               ),
           ],
         ),

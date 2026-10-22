@@ -51,11 +51,20 @@ class PicturesTab extends StatefulWidget {
   final List<CnestFile>? filesOverride;
   final bool embedded;
 
+  /// False renders one unlabelled section: the album view has no dates.
+  final bool showDateHeaders;
+
+  /// When set, selection gains a "Remove from album" action that receives
+  /// the selected files.
+  final Future<void> Function(List<CnestFile>)? onRemoveFromAlbum;
+
   const PicturesTab({
     super.key,
     this.chrome,
     this.filesOverride,
     this.embedded = false,
+    this.showDateHeaders = true,
+    this.onRemoveFromAlbum,
   });
 
   @override
@@ -461,6 +470,7 @@ class PicturesTabState extends State<PicturesTab>
         _heldCompact = _currentCompact();
       }
       _gestureStartProgress = _zoomProgress.value;
+      widget.chrome?.swipeLocked.value = true;
       setState(() {
         _pinchActive = true;
         _morphActive = _morphActive || _morphEnabled;
@@ -957,6 +967,7 @@ class PicturesTabState extends State<PicturesTab>
     // remains after a pinch shouldn't fling the list.
     if (_pinchPointers.isEmpty && _pinchActive) {
       setState(() => _pinchActive = false);
+      widget.chrome?.swipeLocked.value = false;
       if (_morphActive) {
         // Settle the SAME progress variable to the nearest rung — the
         // release is indistinguishable from a slow finger.
@@ -1540,11 +1551,13 @@ class PicturesTabState extends State<PicturesTab>
         }
 
         final level = _zoomLevels[_zoomIndex];
-        final sections = switch (level.grouping) {
-          _Grouping.year => groupByYear(files),
-          _Grouping.month => groupByMonth(files),
-          _Grouping.day => groupByDate(files),
-        };
+        final sections = !widget.showDateHeaders
+            ? [DateSection(label: '', files: files)]
+            : switch (level.grouping) {
+                _Grouping.year => groupByYear(files),
+                _Grouping.month => groupByMonth(files),
+                _Grouping.day => groupByDate(files),
+              };
 
         // Build a flat list for ImageViewerScreen navigation. Sections are
         // contiguous runs of this list, so a running offset per section
@@ -1627,19 +1640,20 @@ class PicturesTabState extends State<PicturesTab>
                         ),
                       ],
                       for (int s = 0; s < sections.length; s++) ...[
-                        SliverPersistentHeader(
-                          pinned: false,
-                          floating: false,
-                          delegate: _DateHeaderDelegate(
-                            sections[s].label,
-                            selecting: _selectionMode,
-                            selected: _selectionMode &&
-                                sections[s].files.every(
-                                    (f) => _selectedIds.contains(f.id)),
-                            onToggle: () =>
-                                _toggleSection(sections[s].files),
+                        if (widget.showDateHeaders)
+                          SliverPersistentHeader(
+                            pinned: false,
+                            floating: false,
+                            delegate: _DateHeaderDelegate(
+                              sections[s].label,
+                              selecting: _selectionMode,
+                              selected: _selectionMode &&
+                                  sections[s].files.every(
+                                      (f) => _selectedIds.contains(f.id)),
+                              onToggle: () =>
+                                  _toggleSection(sections[s].files),
+                            ),
                           ),
-                        ),
                         if (level.isJustified)
                           _justifiedSliver(
                             sections[s].files,
@@ -1727,20 +1741,12 @@ class PicturesTabState extends State<PicturesTab>
         // instead of sliding away.
         final result = await Navigator.push(
           context,
-          PageRouteBuilder(
-            transitionDuration: const Duration(milliseconds: 260),
-            reverseTransitionDuration: const Duration(milliseconds: 220),
-            pageBuilder: (_, animation, secondaryAnimation) =>
-                FadeTransition(
-              opacity: animation,
-              child: ImageViewerScreen(
-                files: flatFiles,
-                initialIndex: globalIndex,
-                onViewedFileChanged: _followViewerFile,
-                placeholderDecodeWidth: decodeWidth,
-              ),
-            ),
-          ),
+          photoViewerRoute(ImageViewerScreen(
+            files: flatFiles,
+            initialIndex: globalIndex,
+            onViewedFileChanged: _followViewerFile,
+            placeholderDecodeWidth: decodeWidth,
+          )),
         );
         if (result == true) _refresh();
       },
@@ -1906,6 +1912,12 @@ class PicturesTabState extends State<PicturesTab>
               icon: ThemeIcon('shareFat'),
               onPressed: () => _shareSelected(all),
             ),
+            if (widget.onRemoveFromAlbum != null)
+              IconButton(
+                tooltip: 'Remove from album',
+                icon: ThemeIcon('minusCircle'),
+                onPressed: () => _removeSelectedFromAlbum(all),
+              ),
             IconButton(
               icon: ThemeIcon(
                 'trash',
@@ -1917,6 +1929,15 @@ class PicturesTabState extends State<PicturesTab>
         ),
       ),
     );
+  }
+
+  Future<void> _removeSelectedFromAlbum(List<CnestFile> all) async {
+    final remove = widget.onRemoveFromAlbum;
+    if (remove == null) return;
+    final picked = all.where((f) => _selectedIds.contains(f.id)).toList();
+    if (picked.isEmpty) return;
+    await remove(picked);
+    if (mounted) _exitSelection();
   }
 
   /// The revealed 30%-height header: centered title + item count, fading
@@ -1945,7 +1966,7 @@ class PicturesTabState extends State<PicturesTab>
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'Gallery',
+                    'Pictures',
                     style: TextStyle(
                       color: cs.onSurface,
                       fontSize: 30,

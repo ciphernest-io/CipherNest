@@ -37,6 +37,7 @@ import '../../widgets/folder_picker_sheet.dart';
 import '../../widgets/friendly_error_sheet.dart';
 import '../../widgets/theme_icon.dart';
 import '../gallery/image_viewer_screen.dart';
+import '../gallery/photo_hero.dart';
 import '../../utils/safe_filename.dart';
 import '../gallery/pictures_tab.dart' show GalleryGridItem;
 
@@ -85,8 +86,9 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   String? _openingFileId;
 
   /// True when a Free vault is at the cap: the Upload button dims and opens
-  /// the limit sheet instead of a picker.
-  bool _atLimit = false;
+  /// the limit sheet instead of a picker. Seeded from the last known answer
+  /// so the button does not flash enabled for one frame on every push.
+  bool _atLimit = FreeTierGuard.lastKnown?.atLimit ?? false;
 
   // Sort + search over the current level's contents (both suppressed in
   // picker mode, where the browser is a destination chooser).
@@ -1342,12 +1344,18 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
       return;
     }
     if (_isMedia(file)) {
-      // Drive-style preview: THIS file, full-screen, in place. Back
-      // returns here. No filmstrip, no swiping a timeline — that lives in
-      // the Photos & Videos tab.
-      Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => ImageViewerScreen(
-              files: [file], initialIndex: 0, standalone: true)));
+      // The folder's own photos and videos, in the order shown here, so
+      // the viewer swipes through this folder with its strip. A lone media
+      // file keeps the single-file preview (nothing to swipe to).
+      final media = _files.where(_isMedia).toList();
+      final index = media.indexWhere((f) => f.id == file.id);
+      if (media.length <= 1 || index < 0) {
+        Navigator.of(context).push(photoViewerRoute(ImageViewerScreen(
+            files: [file], initialIndex: 0, standalone: true)));
+        return;
+      }
+      Navigator.of(context).push(photoViewerRoute(
+          ImageViewerScreen(files: media, initialIndex: index)));
       return;
     }
     if (file.type == CnestFileType.audio) {

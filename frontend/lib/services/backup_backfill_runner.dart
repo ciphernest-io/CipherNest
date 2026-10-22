@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import 'activity_center.dart';
 import 'auto_sync_service.dart';
 import 'backup_selection_service.dart';
 import 'migration_service.dart';
+import 'notify.dart';
 import 'subscription_service.dart';
 import 'system_folders.dart';
 import 'upload_foreground_guard.dart';
@@ -53,6 +56,24 @@ class BackupBackfillRunner {
   @visibleForTesting
   Future<bool> Function()? debugCanStore;
 
+  // A UI-triggered call that lands while the incremental sync holds the
+  // lease used to return silently: the user ticked "include existing
+  // photos", saw nothing happen, and had to come back later to make it
+  // start. Now it waits its turn and tries again, a few times.
+  Timer? _retryTimer;
+  int _retries = 0;
+  static const int _maxRetries = 18;
+  static const Duration _retryGap = Duration(seconds: 10);
+
+  void _scheduleRetry() {
+    if (_retryTimer != null || _retries >= _maxRetries) return;
+    _retries++;
+    _retryTimer = Timer(_retryGap, () {
+      _retryTimer = null;
+      unawaited(runPending());
+    });
+  }
+
   /// The pending albums that exist on this device, in album-list order.
   /// Pure so it's testable without MediaStore.
   @visibleForTesting
@@ -83,10 +104,14 @@ class BackupBackfillRunner {
     if (MigrationService().isRunning) return;
     var ownsLease = false;
     if (!calledFromSync) {
-      if (AutoSyncService().isSyncing) return;
-      if (!await AutoSyncService.acquireRunLease()) return;
+      if (AutoSyncService().isSyncing ||
+          !await AutoSyncService.acquireRunLease()) {
+        _scheduleRetry();
+        return;
+      }
       ownsLease = true;
     }
+    _retries = 0;
     _running = true;
     _cancelAll = false;
     // Stop draining once the Free cap is hit: every further album would
@@ -125,6 +150,12 @@ class BackupBackfillRunner {
               : await FreeTierGuard.canStoreMore();
           if (!canStore) {
             capped = true;
+            // Only a user-triggered run says so; the per-cycle sync stays
+            // quiet (Home already shows the limit).
+            if (!calledFromSync) {
+              Notify.info('Free vault is full. Existing photos back up '
+                  'after an upgrade');
+            }
             break;
           }
           attempted.add(SystemFolders.normalize(album.name));

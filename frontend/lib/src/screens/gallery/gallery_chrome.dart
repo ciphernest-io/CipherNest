@@ -27,6 +27,10 @@ class GalleryChrome {
   /// Selected-photo count (drives the floating selection bar's label).
   final ValueNotifier<int> selectionCount = ValueNotifier(0);
 
+  /// A tab has a pinch in progress: the shell must not read the fingers as
+  /// a swipe to the next tab.
+  final ValueNotifier<bool> swipeLocked = ValueNotifier(false);
+
   void dispose() {
     scrolledUnder.dispose();
     chromeHidden.dispose();
@@ -34,6 +38,7 @@ class GalleryChrome {
     selectionActive.dispose();
     headerReveal.dispose();
     selectionCount.dispose();
+    swipeLocked.dispose();
   }
 }
 

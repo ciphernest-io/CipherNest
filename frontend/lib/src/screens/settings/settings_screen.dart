@@ -122,13 +122,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder = _backupChildren;
     }
     if (title == null || builder == null) return;
-    final openTitle = title;
-    final openBuilder = builder;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _openSection(openTitle, openBuilder);
-    });
+    // Render the category AS this screen instead of pushing it on top of
+    // the Settings root: back from the gallery Menu's "Settings" tile then
+    // returns to the Menu, not to a Settings page the user never opened.
+    _inlineTitle = title;
+    _inlineChildren = builder;
   }
+
+  /// Set when this screen was opened straight into one category (see
+  /// [didChangeDependencies]); the root list is not shown at all.
+  String? _inlineTitle;
+  List<Widget> Function(ColorScheme)? _inlineChildren;
 
   @override
   void initState() {
@@ -938,6 +942,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final inline = _inlineChildren;
+    if (inline != null) {
+      return Scaffold(
+        appBar: AppBar(title: Text(_inlineTitle ?? 'Settings')),
+        body: ValueListenableBuilder<int>(
+          valueListenable: _rev,
+          builder: (ctx, _, _) => ListView(
+            padding: const EdgeInsets.only(top: 8, bottom: 32),
+            children: inline(Theme.of(ctx).colorScheme),
+          ),
+        ),
+      );
+    }
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(

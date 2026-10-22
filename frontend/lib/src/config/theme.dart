@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'theme_controller.dart';
 import 'theme_packs.dart';
+import 'page_transitions.dart';
 
 // ---------------------------------------------------------------------------
 // SEMANTIC SHIM — AppColors stays as static getters that resolve to the live
@@ -345,8 +346,8 @@ class AppTheme {
 
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: {
-          TargetPlatform.android: CupertinoPageTransitionsBuilder(),
-          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.android: SlideOverPageTransitionsBuilder(),
+          TargetPlatform.iOS: SlideOverPageTransitionsBuilder(),
         },
       ),
     );

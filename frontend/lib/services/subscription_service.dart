@@ -323,6 +323,11 @@ class FreeTierGuard {
   @visibleForTesting
   static void resetThrottleForTest() => _lastCapRefreshMs = null;
 
+  /// The most recent [status] answer, for screens that need a synchronous
+  /// first frame (the Upload button used to flash enabled for the frame
+  /// before its async status landed, every time a folder was entered).
+  static FreeTierStatus? lastKnown;
+
   /// Snapshot for the Home card, the buttons and the limit sheet.
   static Future<FreeTierStatus> status() async {
     final sub = SubscriptionService();
@@ -330,7 +335,10 @@ class FreeTierGuard {
     final db = DatabaseService();
     final stored = await db.countStoredFiles();
     final binned = await db.countBinnedFiles();
-    return FreeTierStatus(isPlus: sub.isPlus, stored: stored, binned: binned);
+    final st =
+        FreeTierStatus(isPlus: sub.isPlus, stored: stored, binned: binned);
+    lastKnown = st;
+    return st;
   }
 
   /// The typed error every blocked upload surfaces, with the counts the

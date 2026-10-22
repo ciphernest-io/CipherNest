@@ -19,6 +19,7 @@ import '../../widgets/doc_thumbnail.dart';
 import '../../models/file_model.dart';
 import '../../models/folder_model.dart';
 import '../gallery/image_viewer_screen.dart';
+import '../gallery/photo_hero.dart';
 import '../gallery/pictures_tab.dart' show GalleryGridItem;
 import '../music/widgets/music_widgets.dart' show TrackArt;
 import 'folder_bin_detail_screen.dart';
@@ -417,6 +418,12 @@ class _FilesBinTabState extends State<_FilesBinTab> {
 
   Future<void> _reload() async {
     final files = await DatabaseService().getDeletedFiles(type: widget.type);
+    // Photos read like the gallery (capture order), not by deletion time,
+    // so the viewer's strip runs the same way it does everywhere else. The
+    // TTL badge on each tile still says when it leaves.
+    if (_isImageTab) {
+      files.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    }
     final deletedAt = <String, int>{};
     for (final f in files) {
       final ts = await DatabaseService().getDeletedAt(f.id);
@@ -622,8 +629,8 @@ class _FilesBinTabState extends State<_FilesBinTab> {
                   _toggle(file.id);
                   return;
                 }
-                Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => ImageViewerScreen(
+                Navigator.of(context).push(photoViewerRoute(
+                    ImageViewerScreen(
                         files: _files,
                         initialIndex: index,
                         fromRecycleBin: true)));
@@ -632,7 +639,11 @@ class _FilesBinTabState extends State<_FilesBinTab> {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  GalleryGridItem(key: ValueKey(file.id), file: file),
+                  Hero(
+                    tag: 'photo-${file.id}',
+                    flightShuttleBuilder: photoHeroShuttle,
+                    child: GalleryGridItem(key: ValueKey(file.id), file: file),
+                  ),
                   // TTL sits opposite the tick (top-right); the selection
                   // tick matches the gallery's top-left corner.
                   Positioned(

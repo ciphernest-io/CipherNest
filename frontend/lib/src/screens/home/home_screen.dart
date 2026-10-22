@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../services/cnest_errors.dart';
 import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
+import '../../config/theme_packs.dart';
 import '../../widgets/account_switcher.dart';
 import '../../widgets/ciphernest_logo.dart';
 import '../cloud_selection/cloud_selection_screen.dart' show CloudSelectionArgs;
@@ -44,7 +45,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// Where the vault stands against the Free cap: drives the counter on
   /// the usage card and turns the Add File button into the limit sheet.
-  FreeTierStatus? _tier;
+  /// Seeded from the last known answer so the first frame is right.
+  FreeTierStatus? _tier = FreeTierGuard.lastKnown;
 
   @override
   void initState() {
@@ -676,22 +678,23 @@ class _VaultUsageCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 4),
-          Text(
-            stats == null
-                ? 'Loading…'
-                : trashCount > 0
-                    ? '$count file${count == 1 ? '' : 's'} · '
-                        '$trashCount in Recycle Bin'
-                    : '$count file${count == 1 ? '' : 's'} encrypted on this account',
-            style: TextStyle(
-              color: cs.onSurface.withAlpha(140),
-              fontSize: 12,
+          // ONE count line. Free vaults read it against the cap (with the
+          // bar); Plus vaults keep the plain count.
+          if (tier != null && !tier!.isPlus)
+            _FreeLimitLine(tier: tier!, onTap: onLimitTap)
+          else
+            Text(
+              stats == null
+                  ? 'Loading…'
+                  : trashCount > 0
+                      ? '$count file${count == 1 ? '' : 's'} · '
+                          '$trashCount in Recycle Bin'
+                      : '$count file${count == 1 ? '' : 's'} encrypted on this account',
+              style: TextStyle(
+                color: cs.onSurface.withAlpha(140),
+                fontSize: 12,
+              ),
             ),
-          ),
-          if (tier != null && !tier!.isPlus) ...[
-            const SizedBox(height: 12),
-            _FreeLimitLine(tier: tier!, onTap: onLimitTap),
-          ],
           if (segments.isNotEmpty) ...[
             const SizedBox(height: 14),
             ClipRRect(
@@ -754,29 +757,38 @@ class _UsageSegment {
 
 /// "N of 1,000 files" with a thin bar, for Free vaults only. Neutral under
 /// 90%, the pack's warning colour from 90%, the danger colour at the cap,
-/// where the line also says how to lift it. Tapping opens the paywall.
+/// where the line also says how to lift it. Binary is monochrome by design
+/// and its warning/danger tokens are greys, so it alone gets a real red
+/// here: the limit is the one thing that must read as a warning in every
+/// pack. Tapping opens the paywall.
 class _FreeLimitLine extends StatelessWidget {
   const _FreeLimitLine({required this.tier, required this.onTap});
   final FreeTierStatus tier;
   final VoidCallback onTap;
 
+  static const _binaryRed = Color(0xFFE53935);
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final t = ThemeController().tokens;
+    final monochrome = ThemeController().pack == ThemePack.binary;
+    final warning = monochrome ? _binaryRed : t.warning;
+    final danger = monochrome ? _binaryRed : t.danger;
     final stored = FreeTierGuard.fmtCount(tier.stored);
     final limit = FreeTierGuard.fmtCount(tier.limit);
+    final bin = tier.binned > 0 ? ' · ${tier.binned} in Recycle Bin' : '';
     final Color color;
     final String text;
     if (tier.atLimit) {
-      color = t.danger;
-      text = 'Free limit reached: $stored of $limit files. Tap for Plus';
+      color = danger;
+      text = '$stored of $limit files$bin · Free limit reached, tap for Plus';
     } else if (tier.nearLimit) {
-      color = t.warning;
-      text = '$stored of $limit files. Approaching the Free limit';
+      color = warning;
+      text = '$stored of $limit files$bin · approaching the Free limit';
     } else {
       color = cs.primary;
-      text = '$stored of $limit Free files';
+      text = '$stored of $limit files$bin';
     }
     return InkWell(
       onTap: onTap,
