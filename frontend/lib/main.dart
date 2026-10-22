@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'dart:ui' show PlatformDispatcher;
 
@@ -46,6 +47,12 @@ Future<void> _warmSplashLogo() {
 }
 
 Future<void> main() async {
+  // MASVS F-12: Flutter does not strip debugPrint from release builds, and
+  // the 120-odd call sites would otherwise reach logcat on every phone. One
+  // override silences them all in release; debug builds keep their output.
+  if (kReleaseMode) {
+    debugPrint = (String? message, {int? wrapWidth}) {};
+  }
   WidgetsFlutterBinding.ensureInitialized();
   CipherNestHttpOverrides.install();
   CipherNestHttpOverrides.install();

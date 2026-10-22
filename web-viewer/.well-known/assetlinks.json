@@ -5,6 +5,7 @@
       "namespace": "android_app",
       "package_name": "io.ciphernest.vault",
       "sha256_cert_fingerprints": [
+        "C6:1B:77:1C:17:10:FD:AC:D3:20:38:9A:CB:75:3C:85:A7:0B:EF:61:BA:0A:05:F3:8E:D9:B1:2A:68:50:D7:5B",
         "FF:CD:23:AE:34:6C:51:F1:F2:E6:56:DA:4E:FA:A3:32:E3:29:45:97:D4:88:F9:1E:A4:A0:40:AA:66:BD:CB:68",
         "C5:EE:12:FD:44:40:26:E4:71:42:E3:B9:F0:14:F5:17:C3:13:DA:D8:A0:31:1A:7F:2A:65:A4:31:17:1C:8C:D0"
       ]
