@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 import 'dart:async';
-import 'dart:ui' show PlatformDispatcher;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -19,7 +18,6 @@ import 'src/screens/splash/splash_screen.dart';
 import 'src/utils/byte_format.dart';
 import 'services/cache_manager_service.dart';
 import 'services/auto_sync_worker.dart';
-import 'services/network_timeouts.dart';
 import 'services/network_timeouts.dart';
 
 /// Decodes the splash mark into the image cache before the first frame.
