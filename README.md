@@ -33,6 +33,13 @@ The full threat model is in [THREAT_MODEL.md](THREAT_MODEL.md). The OWASP MASVS 
 
 Current version: **1.0.0**, on [Google Play](https://play.google.com/store/apps/details?id=io.ciphernest.vault). Release history is in [CHANGELOG.md](CHANGELOG.md).
 
+## Download
+
+Two ways to install, signed with different keys. Pick one; Android will not update one over the other without an uninstall. Your vault is unaffected either way, since the recovery phrase restores everything.
+
+- **Google Play**: https://play.google.com/store/apps/details?id=io.ciphernest.vault. Updates arrive automatically.
+- **Direct APK**: the [latest release](../../releases/latest) on GitHub, with its SHA-256 beside it. For people who do not use the Play Store. Check it as described below before installing. Updates are manual.
+
 ## Verifying a release
 
 Every entry on the [Releases](../../releases) page lists the SHA-256 of its APK. Two checks, for two different questions.
