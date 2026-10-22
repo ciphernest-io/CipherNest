@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../../services/audio_player_service.dart';
 import '../../../services/auto_sync_service.dart';
+import '../../../services/cnest_errors.dart';
 import '../../../services/cover_art_service.dart';
 import '../../../services/database_backup_service.dart';
 import '../../../services/database_service.dart';
@@ -16,6 +17,7 @@ import '../../models/album_model.dart';
 import '../../models/file_model.dart';
 import '../../widgets/activity_pill.dart';
 import '../../widgets/file_actions.dart';
+import '../../widgets/friendly_error_sheet.dart';
 import '../../widgets/theme_icon.dart';
 import '../share/share_dialog.dart';
 import 'audio_details_screen.dart';
@@ -502,6 +504,10 @@ class _MusicHomeScreenState extends State<MusicHomeScreen>
           .setPlaylistCover(playlist: playlist, imageBytes: bytes);
       _refresh();
     } catch (e) {
+      if (e is CnestError) {
+        if (mounted) await showCnestError(context, e);
+        return;
+      }
       Notify.error('Could not set cover: $e');
     }
   }

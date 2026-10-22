@@ -13,6 +13,7 @@ import 'cloud/cloud_service.dart';
 import 'database_backup_service.dart';
 import 'database_service.dart';
 import 'encryption_service.dart';
+import 'subscription_service.dart';
 
 /// Sets custom cover artwork for tracks and playlists, reusing the vault's
 /// existing encrypted-blob machinery (no new schema, no new sync op).
@@ -124,6 +125,12 @@ class CoverArtService {
   }) async {
     final email = CloudService().currentEmail;
     if (email == null) throw Exception('No active account.');
+
+    // The cover is a vault row (hidden from the gallery, but a slot all the
+    // same) so it answers to the Free cap like every other upload.
+    if (!await FreeTierGuard.canStoreMore()) {
+      throw await FreeTierGuard.limitError();
+    }
 
     // Main image (what a future full-size cover view would show) + a small
     // thumbnail (what the playlist grid renders), both encrypted in memory.

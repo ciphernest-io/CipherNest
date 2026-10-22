@@ -2,6 +2,12 @@
 
 All notable changes to CipherNest are recorded here. Versions follow the Play Store release; the number in brackets is the Android `versionCode`.
 
+## Unreleased
+
+- The Free limit now applies to edited copies, captured video frames and playlist covers. Each is a new vault file and took a slot past the cap; Replace original is unaffected. The save sheet says when a copy will not fit.
+- The image editor uses dark chrome in every theme. In a light theme the tick, back and tool icons sat on the package's black bars and disappeared.
+- The About label no longer says Beta. Release builds silence debug logging.
+
 ## 1.0.0 (10), October 2026
 
 First public release.

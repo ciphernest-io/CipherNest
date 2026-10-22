@@ -10,6 +10,7 @@ import 'cloud/cloud_service.dart';
 import 'database_backup_service.dart';
 import 'database_service.dart';
 import 'encryption_service.dart';
+import 'subscription_service.dart';
 
 /// Orchestrates persisting an edited image back to the vault.
 ///
@@ -40,6 +41,15 @@ class ImageEditService {
     String copyLabel = 'edited',
     String? folderId,
   }) async {
+    // A copy (edited image, captured video frame) is a new vault row and
+    // takes a Free slot like any upload; replacing keeps the original's
+    // slot. Asked first, before any compression or encryption, so a vault
+    // at the cap learns it before the work and the typed limit sheet is what
+    // the user sees (the viewer passes CnestErrors straight through).
+    if (!replaceOriginal && !await FreeTierGuard.canStoreMore()) {
+      throw await FreeTierGuard.limitError();
+    }
+
     // 1. Thumbnail. Same parameters auto_sync_service.dart uses.
     final thumbBytes = await FlutterImageCompress.compressWithList(
       editedBytes,

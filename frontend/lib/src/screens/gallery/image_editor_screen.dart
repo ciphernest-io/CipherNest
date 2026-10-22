@@ -3,6 +3,8 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:pro_image_editor/pro_image_editor.dart';
 
+import '../../config/theme.dart';
+import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 
 /// Wraps `ProImageEditor.memory` and returns the edited bytes (or null on
@@ -26,17 +28,29 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    // The editor is dark chrome in every theme, like the Samsung Gallery
+    // editor. Two reasons. The package hard-codes white for the undo/redo
+    // arrows in the tune, crop and paint bars, black/white for the text
+    // editor's style chips and dark fills for its line-width and aspect
+    // sheets; none of those read from the style objects, so a light bar
+    // leaves them invisible. And a photo is judged against a dark surround.
+    // The current pack still supplies the accent and the type, through its
+    // own dark variant, so Burrow's editor is not Binary's.
+    final theme = AppTheme.build(
+      pack: ThemeController().pack,
+      mode: Brightness.dark,
+    );
     final cs = theme.colorScheme;
 
     // pro_image_editor's `theme` hook themes the Material widgets, so the
-    // editor's TEXT buttons pick up the app's textButtonTheme (the pack
-    // ACCENT) — that's the "font" the user saw as aligned. But every
-    // editor's ICON buttons take their own style's bar foreground, which
-    // defaults to a fixed white, so they read off-theme next to the accent
-    // text. Tint the bar foreground with the accent too so icons match the
-    // text, and bind backgrounds / active-tool accents to the pack as well
-    // (its own default active accent is a hardcoded blue, 0xFF004C9E).
+    // editor's TEXT buttons pick up the pack's textButtonTheme (the accent).
+    // Every editor's ICON buttons take their own style's bar foreground,
+    // which defaults to a fixed white, so they are tinted with the accent to
+    // match the text; backgrounds and active-tool accents are bound to the
+    // pack as well (the package's own default is a hardcoded blue,
+    // 0xFF004C9E). Every sub-editor gets its backgrounds set explicitly:
+    // left at the defaults they fell back to the package's black, which is
+    // where a light pack's dark accent and dim grey vanished.
     final barBg = cs.surface; // app-bar / bottom-bar background
     final onBar = cs.primary; // icons + labels on the bars (match accent text)
     final onBarDim = cs.onSurface.withAlpha(140); // inactive tool items
@@ -99,7 +113,10 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
         ),
         paintEditor: PaintEditorConfigs(
           style: PaintEditorStyle(
+            background: canvas,
             appBarColor: onBar,
+            appBarBackground: barBg,
+            bottomBarBackground: barBg,
             bottomBarActiveItemColor: accent,
             bottomBarInactiveItemColor: onBarDim,
           ),
@@ -115,6 +132,8 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
         textEditor: TextEditorConfigs(
           style: TextEditorStyle(
             appBarColor: onBar,
+            appBarBackground: barBg,
+            bottomBarBackground: barBg,
             inputCursorColor: accent,
           ),
           icons: TextEditorIcons(
@@ -125,8 +144,11 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
         ),
         cropRotateEditor: CropRotateEditorConfigs(
           style: CropRotateEditorStyle(
+            background: canvas,
             appBarColor: onBar,
+            appBarBackground: barBg,
             bottomBarColor: onBar,
+            bottomBarBackground: barBg,
             cropCornerColor: accent,
           ),
           icons: CropRotateEditorIcons(
@@ -143,7 +165,10 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
         ),
         filterEditor: FilterEditorConfigs(
           style: FilterEditorStyle(
+            background: canvas,
             appBarColor: onBar,
+            appBarBackground: barBg,
+            previewTextColor: onBarDim,
             previewSelectedTextColor: accent,
           ),
           icons: FilterEditorIcons(
@@ -154,7 +179,10 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
         ),
         tuneEditor: TuneEditorConfigs(
           style: TuneEditorStyle(
+            background: canvas,
             appBarColor: onBar,
+            appBarBackground: barBg,
+            bottomBarBackground: barBg,
             bottomBarActiveItemColor: accent,
             bottomBarInactiveItemColor: onBarDim,
           ),

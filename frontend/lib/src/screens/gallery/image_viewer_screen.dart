@@ -33,6 +33,7 @@ import '../../../services/file_metadata_service.dart';
 import '../../../services/cnest_errors.dart';
 import '../../../services/image_edit_service.dart';
 import '../../../services/notify.dart';
+import '../../../services/subscription_service.dart';
 import '../../../services/upload_pipeline.dart';
 import '../../../services/video_streaming_server.dart';
 import '../../widgets/file_actions.dart';
@@ -1012,6 +1013,16 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     // and isn't a camera-roll original we'd be overwriting in spirit.
     final canReplace = !isCameraRoll && !isUnsyncedVaultFile;
 
+    // A copy is a new row, so at the Free cap the tile says so up front. It
+    // stays tappable: saveEdit throws the typed limit error, and that sheet
+    // carries the Plus and Recycle Bin routes.
+    final tier = await FreeTierGuard.status();
+    final copySubtitle = tier.atLimit
+        ? 'Your vault is at the Free limit. A copy needs a free slot or '
+            'CipherNest Plus.'
+        : 'Keep the original. Recommended: original stays intact.';
+    if (!mounted) return null;
+
     // Surface + corner shape come from the theme's bottomSheetTheme.
     // Scroll-controlled + scrollable: ~347 px of content beats the default
     // 9/16 sheet cap on a 533 px screen and in landscape.
@@ -1047,8 +1058,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                   _SaveOptionTile(
                     icon: 'copy',
                     title: 'Save as copy',
-                    subtitle:
-                        'Keep the original. Recommended: original stays intact.',
+                    subtitle: copySubtitle,
                     onTap: () => Navigator.pop(ctx, _SaveMode.copy),
                   ),
                   const SizedBox(height: 10),
