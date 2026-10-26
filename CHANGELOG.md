@@ -2,8 +2,10 @@
 
 All notable changes to CipherNest are recorded here. Versions follow the Play Store release; the number in brackets is the Android `versionCode`.
 
-## Unreleased
+## 1.0.1 (11), October 2026
 
+- Settings: the system back leaves Settings and returns to the screen it was opened from; the arrow in the bar goes up one level. The per-story switches are hidden, not greyed, while Featured content is off. The theme picker shows name and type sample only, on wider cards. The developer's note in About sits on two lines.
+- Backed-up albums: choosing to include existing photos queues the backup; it starts when the screen is left with Done or back, not while albums are still being ticked. Matches the first-run flow.
 - The Free limit now applies to edited copies, captured video frames and playlist covers. Each is a new vault file and took a slot past the cap; Replace original is unaffected. The save sheet says when a copy will not fit.
 - The image editor uses dark chrome in every theme. In a light theme the tick, back and tool icons sat on the package's black bars and disappeared.
 - The About label no longer says Beta. Release builds silence debug logging.

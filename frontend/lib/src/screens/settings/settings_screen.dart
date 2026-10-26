@@ -945,11 +945,50 @@ class _SettingsScreenState extends State<SettingsScreen> {
         context, AppRoutes.onboarding, (r) => false);
   }
 
+  /// Route name of every category page pushed by [_openSection].
+  static const _kSectionRoute = '/settings/section';
+
+  static bool _isSettingsRoute(Route<dynamic> r) =>
+      r.settings.name == AppRoutes.settings ||
+      r.settings.name == _kSectionRoute;
+
+  /// Two ways out of a category page, two destinations. The system back
+  /// (gesture or button) leaves Settings altogether, back to the gallery or
+  /// Music or wherever Settings was opened from. The arrow in the bar goes
+  /// up one level to the Settings list. The arrow calls `pop` directly, which
+  /// does not consult PopScope; only the system back is intercepted.
+  Widget _sectionScaffold(
+      String title, List<Widget> Function(ColorScheme) children) {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        Navigator.of(context).popUntil((r) => !_isSettingsRoute(r));
+      },
+      child: Builder(
+        builder: (ctx) => Scaffold(
+          appBar: AppBar(
+            leading: BackButton(onPressed: () => Navigator.of(ctx).pop()),
+            title: Text(title),
+          ),
+          body: ValueListenableBuilder<int>(
+            valueListenable: _rev,
+            builder: (ctx, _, _) => ListView(
+              padding: const EdgeInsets.only(top: 8, bottom: 32),
+              children: children(Theme.of(ctx).colorScheme),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final inline = _inlineChildren;
     if (inline != null) {
+      // One route deep: both exits lead to the opener, so no PopScope.
       return Scaffold(
         appBar: AppBar(title: Text(_inlineTitle ?? 'Settings')),
         body: ValueListenableBuilder<int>(
@@ -1026,16 +1065,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _openSection(
       String title, List<Widget> Function(ColorScheme) children) {
     Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => Scaffold(
-        appBar: AppBar(title: Text(title)),
-        body: ValueListenableBuilder<int>(
-          valueListenable: _rev,
-          builder: (ctx, _, _) => ListView(
-            padding: const EdgeInsets.only(top: 8, bottom: 32),
-            children: children(Theme.of(ctx).colorScheme),
-          ),
-        ),
-      ),
+      settings: const RouteSettings(name: _kSectionRoute),
+      builder: (_) => _sectionScaffold(title, children),
     ));
   }
 
@@ -1348,24 +1379,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
             value: _showFeatured,
             onChanged: _toggleFeatured,
           ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-        child: Text('Stories to show',
-            style: TextStyle(
-                color: _showFeatured ? cs.onSurface : muted,
-                fontWeight: FontWeight.w600)),
-      ),
-      for (final k in GalleryPrefs.subKinds)
-        SwitchListTile(
-          secondary: ThemeIcon(icons[k.$1] ?? 'images',
-              color: _showFeatured ? cs.primary : muted),
-          title: Text(k.$2,
-              style: TextStyle(color: _showFeatured ? cs.onSurface : muted)),
-          subtitle: Text(k.$3, style: TextStyle(color: muted)),
-          value: _storyFlags[k.$1] ?? true,
-          // Greyed out, not hidden, while the master switch is off.
-          onChanged: _showFeatured ? (v) => _setStoryFlag(k.$1, v) : null,
+      // The per-kind switches exist only while the master is on.
+      if (_showFeatured) ...[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text('Stories to show',
+              style: TextStyle(
+                  color: cs.onSurface, fontWeight: FontWeight.w600)),
         ),
+        for (final k in GalleryPrefs.subKinds)
+          SwitchListTile(
+            secondary: ThemeIcon(icons[k.$1] ?? 'images', color: cs.primary),
+            title: Text(k.$2, style: TextStyle(color: cs.onSurface)),
+            subtitle: Text(k.$3, style: TextStyle(color: muted)),
+            value: _storyFlags[k.$1] ?? true,
+            onChanged: (v) => _setStoryFlag(k.$1, v),
+          ),
+      ],
     ];
   }
 
@@ -1647,8 +1677,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 14),
             Text(
-              'CipherNest took more than a year to build. Hope you find it '
-              'worth your while.',
+              'CipherNest took more than a year to build.\n'
+              'Hope you find it worth your while.',
               textAlign: TextAlign.center,
               style: TextStyle(color: muted, fontSize: 13, height: 1.55),
             ),
@@ -1921,7 +1951,7 @@ class _ThemePackCarousel extends StatefulWidget {
 class _ThemePackCarouselState extends State<_ThemePackCarousel> {
   static const _packs = ThemePack.values;
   late final PageController _ctrl = PageController(
-    viewportFraction: 0.8,
+    viewportFraction: 0.9,
     initialPage: _packs.indexOf(widget.current),
   );
 
@@ -1945,7 +1975,7 @@ class _ThemePackCarouselState extends State<_ThemePackCarousel> {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 132,
+      height: 118,
       child: PageView.builder(
         controller: _ctrl,
         itemCount: _packs.length,
@@ -2037,16 +2067,6 @@ class _ThemePackTile extends StatelessWidget {
                             ),
                           ),
                         ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        pack.tagline,
-                        style: TextStyle(
-                          fontFamily: t.fontFamily,
-                          color: t.fg2,
-                          fontSize: 12,
-                          height: 1.3,
-                        ),
                       ),
                       const SizedBox(height: 8),
                       Text(

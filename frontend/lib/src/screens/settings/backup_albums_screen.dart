@@ -48,21 +48,31 @@ class _BackupAlbumsScreenState extends State<BackupAlbumsScreen> {
     await _load();
   }
 
+  /// An "include existing photos" answer on this screen queues the album's
+  /// backfill; it is started on exit, not here. Same contract as onboarding,
+  /// where the queue waits for Enter CipherNest: ticking three albums should
+  /// not have the first one uploading while the user is still choosing.
+  bool _startOnExit = false;
+
   Future<void> _toggle(AlbumInfo album, bool enroll) async {
     if (enroll) {
       final backfill = await showBackupEnrollSheet(context, album.name,
           existingCount: album.count);
       if (backfill == null) return; // dismissed = don't enroll
       await BackupSelectionService().enroll(album.name, backfill: backfill);
-      // Deferred (quick settings): the queue is persisted; the onboarding
-      // finish fires runPending once the user actually enters.
-      if (backfill && !widget.deferBackfill) {
-        unawaited(BackupBackfillRunner().runPending());
-      }
+      if (backfill && !widget.deferBackfill) _startOnExit = true;
     } else {
       await BackupSelectionService().unenroll(album.name);
     }
     await _load();
+  }
+
+  @override
+  void dispose() {
+    // Done and the back arrow both land here. Deferred (quick settings):
+    // the queue is persisted and onboarding's finish fires runPending.
+    if (_startOnExit) unawaited(BackupBackfillRunner().runPending());
+    super.dispose();
   }
 
   @override

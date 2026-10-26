@@ -146,7 +146,10 @@ class AppRoutes {
 
       case settings:
         final section = routeSettings.arguments as String?;
+        // Named on purpose: Settings category pages pop everything back to
+        // this route's predecessor on a system back (see SettingsScreen).
         return MaterialPageRoute(
+            settings: routeSettings,
             builder: (_) => SettingsScreen(initialSection: section));
 
       case keyManagement:
