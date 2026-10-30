@@ -1381,6 +1381,15 @@ class DatabaseService extends ChangeNotifier {
     return rows.isEmpty ? null : CnestFile.fromMap(rows.first);
   }
 
+  /// Like [getFileById] but only returns a row that is still LIVE (not
+  /// soft-deleted). Used to detect a cover whose file has been binned.
+  Future<CnestFile?> getLiveFileById(String id) async {
+    final db = await database;
+    final rows = await db.query('files',
+        where: 'id = ? AND is_deleted = 0', whereArgs: [id], limit: 1);
+    return rows.isEmpty ? null : CnestFile.fromMap(rows.first);
+  }
+
   /// Current-account rows owning the given cache artifacts that are
   /// MediaStore-bound (asset_id set) — the candidate set for the
   /// leftover-reclaim sweep (see
@@ -2147,8 +2156,10 @@ class DatabaseService extends ChangeNotifier {
     await SyncCoordinator().record(SyncOpKind.deleteAlbum, albumId);
   }
 
-  Future<void> setAlbumCover(String albumId, String fileId) async {
+  Future<void> setAlbumCover(String albumId, String? fileId) async {
     if (_isVirtualAlbumId(albumId)) return;
+    // A null fileId records the op with an absent target, which op-replay
+    // reads as "clear the cover" — used when a cover file is removed.
     await SyncCoordinator()
         .record(SyncOpKind.setAlbumCover, albumId, folderId: fileId);
   }

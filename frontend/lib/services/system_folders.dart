@@ -80,4 +80,14 @@ class SystemFolders {
           '${_salt(accountId)}album:$deviceKey/${normalize(albumName)}');
 
   static bool isSystemId(String id) => id.startsWith(idPrefix);
+
+  /// Display name of the hidden folder that holds music cover art.
+  static const String albumCoversName = 'Album Covers';
+
+  /// Deterministic id for the hidden "Album Covers" folder. Deliberately
+  /// NOT [idPrefix]-prefixed: it must behave like a normal (hidden) user
+  /// folder — deletable and not shown as "Phone Backup" — while still
+  /// converging to ONE folder across devices via the v5 derivation.
+  static String albumCoversId(String accountId) =>
+      const Uuid().v5(_namespace, '${_salt(accountId)}album-covers-root');
 }

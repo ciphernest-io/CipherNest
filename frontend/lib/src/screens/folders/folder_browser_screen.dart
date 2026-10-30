@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+
+import '../../widgets/cn_menu_button.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
@@ -19,6 +21,7 @@ import '../../../services/database_service.dart';
 import '../../../services/encryption_service.dart';
 import '../../../services/saf_folder_import.dart';
 import '../../../services/subscription_service.dart';
+import '../../../services/system_folders.dart';
 import '../../../services/upload_foreground_guard.dart';
 import '../../../services/upload_pipeline.dart';
 import '../../models/file_model.dart';
@@ -103,6 +106,15 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
   CnestFolder? _self;
 
   String? get _folderId => widget.folder?.id;
+
+  /// The hidden "Album Covers" folder holds music artwork only: no uploads,
+  /// no sub-folders. Files can still be deleted, and the folder itself
+  /// deleted, from here.
+  bool get _isAlbumCoversFolder {
+    final email = CloudService().currentEmail;
+    return email != null &&
+        widget.folder?.id == SystemFolders.albumCoversId(email);
+  }
   bool get _isPicker => widget.pickerSession != null;
 
   @override
@@ -518,7 +530,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
                 ],
               ),
         bottomNavigationBar: _isPicker ? _buildPickerFooter(cs) : null,
-        floatingActionButton: _selectionMode || _isPicker
+        floatingActionButton: _selectionMode || _isPicker || _isAlbumCoversFolder
             ? null
             : FloatingActionButton.extended(
                 onPressed: _isUploading
@@ -597,13 +609,14 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
     return AppBar(
       title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
       actions: [
-        IconButton(
-          tooltip: 'New folder',
-          icon: const ThemeIcon('plus'),
-          onPressed: _createFolder,
-        ),
+        if (!_isAlbumCoversFolder)
+          IconButton(
+            tooltip: 'New folder',
+            icon: const ThemeIcon('plus'),
+            onPressed: _createFolder,
+          ),
         if (widget.folder != null && !_isPicker)
-          PopupMenuButton<String>(
+          CnMenuButton<String>(
             icon: const ThemeIcon('dotsThreeVertical'),
             onSelected: (v) => switch (v) {
               'rename' => _renameFolder(widget.folder!),
@@ -646,7 +659,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
           _FolderSort.dateNewest => 'Date (newest)',
           _FolderSort.dateOldest => 'Date (oldest)',
         };
-    return PopupMenuButton<_FolderSort>(
+    return CnMenuButton<_FolderSort>(
       tooltip: 'Sort',
       icon: const ThemeIcon('sortAscending'),
       initialValue: _sort,
@@ -1155,7 +1168,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
           style: TextStyle(color: cs.onSurface.withAlpha(140), fontSize: 12)),
       trailing: _isPicker
           ? const ThemeIcon('caretRight', size: 16)
-          : PopupMenuButton<String>(
+          : CnMenuButton<String>(
               icon: ThemeIcon('dotsThreeVertical',
                   color: cs.onSurface.withAlpha(120), size: 20),
               // System ("Phone Backup") folders keep the conservative menu:
@@ -1299,7 +1312,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
                   height: 18,
                   child: CircularProgressIndicator(
                       strokeWidth: 2, color: cs.onSurface))
-              : PopupMenuButton<String>(
+              : CnMenuButton<String>(
                   icon: ThemeIcon('dotsThreeVertical',
                       color: cs.onSurface.withAlpha(120), size: 20),
                   itemBuilder: (_) => [

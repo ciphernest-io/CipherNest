@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import 'cn_menu_button.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'theme_icon.dart';
 import '../config/routes.dart';
@@ -80,7 +82,7 @@ class AccountSwitcher extends StatelessWidget {
         if (active == null) {
           return const SizedBox.shrink();
         }
-        return PopupMenuButton<String>(
+        return CnMenuButton<String>(
           tooltip: 'Switch account',
           offset: const Offset(0, 48),
           color: cs.surface,

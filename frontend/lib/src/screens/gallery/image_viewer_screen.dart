@@ -4,6 +4,8 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:async_wallpaper/async_wallpaper.dart';
 import 'package:flutter/material.dart';
+
+import '../../widgets/cn_menu_button.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import '../../widgets/theme_icon.dart';
@@ -474,8 +476,11 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     final resuming = _resumeAfterScrub;
     _resumeAfterScrub = false;
     if (controller != null && fraction != null) {
-      final duration = controller.value.duration;
-      // Exact final landing — unthrottled, so the resting frame is precise.
+      // Effective duration: the player reports Duration.zero for some
+      // containers, which SKIPPED this final seek and left the film snapped
+      // to the start (the "scrubber jumps back and replays" bug). The drag
+      // itself already seeks against the effective duration, so match it.
+      final duration = _effectiveVideoDuration(controller);
       if (duration > Duration.zero) controller.seekTo(duration * fraction);
     }
     if (resuming) {
@@ -555,7 +560,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       double target;
       final controller = _activeVideo;
       if (_videoExpanded && controller != null) {
-        final duration = controller.value.duration;
+        final duration = _effectiveVideoDuration(controller);
         final fraction = duration.inMilliseconds == 0
             ? 0.0
             : (controller.value.position.inMilliseconds /
@@ -578,7 +583,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
     final controller = _activeVideo;
     if (controller == null || !controller.value.isPlaying) return;
     if (!_filmStripController.hasClients) return;
-    final duration = controller.value.duration;
+    final duration = _effectiveVideoDuration(controller);
     if (duration <= Duration.zero) return;
     final fraction = (controller.value.position.inMilliseconds /
             duration.inMilliseconds)
@@ -1410,8 +1415,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
                   if (!widget.fromRecycleBin) ...[
                     // (Rotate lives in the in-app editor; the old top-bar
                     // rotate button was a no-op and has been removed.)
-                    PopupMenuButton<String>(
-                      position: PopupMenuPosition.under,
+                    CnMenuButton<String>(
                       icon:
                           ThemeIcon('dotsThreeVertical', color: overlayColor),
                       itemBuilder: (context) => [
@@ -3681,6 +3685,15 @@ class _SinglePhotoViewState extends State<_SinglePhotoView>
         return;
       }
     }
+
+    // The grid already resolved this tile: its ThumbStore entry holds the
+    // very provider the hero flight is painting. Re-fetching the MediaStore
+    // thumb here produced NEW bytes, and putBytes dropped the warm providers
+    // for them, so the landing frame pointed at an undecoded provider and
+    // painted the scaffold background for one frame (the open flicker on
+    // local photos; cloud-only photos skipped this rung and never flickered).
+    // Nothing below can improve on a warm store entry, so stop here.
+    if (ThumbStore.instance.peek(widget.file.id)?.hasSource == true) return;
 
     // RUNG 1 — Android's MediaStore via photo_manager.
     if (widget.file.assetId != null) {

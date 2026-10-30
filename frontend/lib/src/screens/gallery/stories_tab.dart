@@ -9,6 +9,7 @@ import '../../../services/database_service.dart';
 import '../../../services/gallery_prefs.dart';
 import '../../../services/sync_service.dart';
 import 'gallery_chrome.dart';
+import 'gallery_type_results_screen.dart';
 import 'image_viewer_screen.dart';
 import 'photo_hero.dart';
 import 'pictures_tab.dart' show GalleryGridItem;
@@ -32,7 +33,11 @@ class _Story {
   final String? subtitle;
   final List<CnestFile> files;
   final bool video;
-  const _Story(this.title, this.files, {this.subtitle, this.video = false});
+
+  /// Opens as a resizable grid page (Favorites) instead of the viewer.
+  final bool grid;
+  const _Story(this.title, this.files,
+      {this.subtitle, this.video = false, this.grid = false});
   CnestFile get cover => files.first;
 }
 
@@ -201,6 +206,18 @@ class StoriesTabState extends State<StoriesTab> {
     final db = DatabaseService();
     final stories = <_Story>[];
 
+    // Favorites first and always: it is the user's own curation, not a
+    // generated memory, so the Featured master switch does not govern it.
+    // Newest first, as a header-less grid.
+    final favorites = (await db.getFavorites())
+        .where((f) => f.type == CnestFileType.image)
+        .toList();
+    if (favorites.isNotEmpty) {
+      stories.add(_Story('Favorites', favorites,
+          subtitle: '${favorites.length} item${favorites.length == 1 ? '' : 's'}',
+          grid: true));
+    }
+
     if (showToday) {
       final today = await db.getTodaysRecap();
       if (today.isNotEmpty) {
@@ -356,14 +373,24 @@ class StoriesTabState extends State<StoriesTab> {
       compact: true,
     );
     return GestureDetector(
-      onTap: () => Navigator.push(
-        context,
-        photoViewerRoute(ImageViewerScreen(
-          files: s.files,
-          initialIndex: 0,
-          placeholderDecodeWidth: _coverDecodeWidth,
-        )),
-      ),
+      onTap: () => s.grid
+          ? Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => GalleryTypeResultsScreen(
+                        label: s.title,
+                        files: s.files,
+                        showDateHeaders: false,
+                        searchHint: 'Search favorites',
+                      )))
+          : Navigator.push(
+              context,
+              photoViewerRoute(ImageViewerScreen(
+                files: s.files,
+                initialIndex: 0,
+                placeholderDecodeWidth: _coverDecodeWidth,
+              )),
+            ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(t.rCardLg),
         child: SizedBox(
@@ -423,7 +450,7 @@ class StoriesTabState extends State<StoriesTab> {
                             fontSize: 18,
                             fontWeight: FontWeight.w700,
                             height: 1.1)),
-                    if (!s.video && s.files.length > 1)
+                    if (!s.video && !s.grid && s.files.length > 1)
                       Padding(
                         padding: const EdgeInsets.only(top: 2),
                         child: Text('${s.files.length} photos',

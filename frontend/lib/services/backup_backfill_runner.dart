@@ -6,6 +6,7 @@ import 'activity_center.dart';
 import 'auto_sync_service.dart';
 import 'backup_selection_service.dart';
 import 'migration_service.dart';
+import 'network_policy.dart';
 import 'notify.dart';
 import 'subscription_service.dart';
 import 'system_folders.dart';
@@ -104,6 +105,9 @@ class BackupBackfillRunner {
     if (MigrationService().isRunning) return;
     var ownsLease = false;
     if (!calledFromSync) {
+      // Wi-Fi only on mobile data: leave the pending flags alone. Every
+      // sync pass re-enters here, so the queue resumes on Wi-Fi.
+      if (await NetworkPolicy.backupBlockedByWifiOnly()) return;
       if (AutoSyncService().isSyncing ||
           !await AutoSyncService.acquireRunLease()) {
         _scheduleRetry();

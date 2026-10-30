@@ -35,6 +35,7 @@ import '../../../services/sync_service.dart';
 import '../../../services/thumb_store.dart';
 import '../share/share_dialog.dart';
 import 'gallery_chrome.dart';
+import 'gallery_fast_scroll.dart';
 import 'gallery_layout.dart';
 import 'image_viewer_screen.dart';
 import 'photo_hero.dart';
@@ -103,7 +104,6 @@ class PicturesTabState extends State<PicturesTab>
   static const int _defaultZoomIndex = 3; // 4-column day grid (OneUI)
 
   late Future<List<CnestFile>> _filesFuture;
-  bool _favoritesOnly = false;
   bool _selectionMode = false;
   final Set<String> _selectedIds = {};
 
@@ -288,13 +288,6 @@ class PicturesTabState extends State<PicturesTab>
       duration: const Duration(milliseconds: 450),
       curve: Curves.easeOutCubic,
     );
-  }
-
-  bool get favoritesOnly => _favoritesOnly;
-  void setFavoritesOnly(bool v) {
-    if (_favoritesOnly == v) return;
-    setState(() => _favoritesOnly = v);
-    _refresh();
   }
 
   /// Back-button behavior: leave selection, stay in the gallery.
@@ -614,11 +607,16 @@ class PicturesTabState extends State<PicturesTab>
     return GalleryLayoutOracle.obtain(
       files: _lastFiles!,
       columns: cols,
-      grouping: switch (level.grouping) {
-        _Grouping.year => GalleryGrouping.year,
-        _Grouping.month => GalleryGrouping.month,
-        _Grouping.day => GalleryGrouping.day,
-      },
+      // Header-less grids (albums, Favorites) must not grow date headers
+      // in the morph: the real grid has none, so the travel layer must
+      // lerp to the same header-free geometry.
+      grouping: !widget.showDateHeaders
+          ? GalleryGrouping.none
+          : switch (level.grouping) {
+              _Grouping.year => GalleryGrouping.year,
+              _Grouping.month => GalleryGrouping.month,
+              _Grouping.day => GalleryGrouping.day,
+            },
       width: width,
       ratioOf: _ratioOf,
       ratioEpoch: _ratioEpoch,
@@ -1159,18 +1157,10 @@ class PicturesTabState extends State<PicturesTab>
 
   Future<List<CnestFile>> _loadFiles() async {
     final override = widget.filesOverride;
-    if (override != null) {
-      final list = List<CnestFile>.of(override);
-      return _favoritesOnly
-          ? list.where((f) => f.isFavorite).toList()
-          : list;
-    }
+    if (override != null) return List<CnestFile>.of(override);
     final images =
         await DatabaseService().getFilesByType(CnestFileType.image);
     unawaited(_backfillDimsSweep(images));
-    if (_favoritesOnly) {
-      return images.where((f) => f.isFavorite).toList();
-    }
     return images;
   }
 
@@ -1699,6 +1689,14 @@ class PicturesTabState extends State<PicturesTab>
                   ),
                       ),
                       if (_morphActive) _buildMorphLayer(files),
+                      // Fast-scroll handle: drag the right edge to jump
+                      // anywhere in a long grid. Hidden during a pinch morph.
+                      if (!_morphActive && _scrollCtrl != null)
+                        GalleryFastScroll(
+                          controller: _scrollCtrl!,
+                          topInset: _headerH,
+                          bottomInset: widget.embedded ? 0 : 96,
+                        ),
                     ],
                   ),
                 ),

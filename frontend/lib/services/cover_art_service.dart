@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:exif/exif.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
@@ -14,6 +15,7 @@ import 'database_backup_service.dart';
 import 'database_service.dart';
 import 'encryption_service.dart';
 import 'subscription_service.dart';
+import 'system_folders.dart';
 
 /// Sets custom cover artwork for tracks and playlists, reusing the vault's
 /// existing encrypted-blob machinery (no new schema, no new sync op).
@@ -38,12 +40,74 @@ class CoverArtService {
   /// Prompts for an image from device storage and returns its bytes, or null
   /// if the user cancelled. Shared by the track- and playlist-cover flows.
   static Future<Uint8List?> pickImageBytes() async {
+    return (await pickImageWithName())?.$1;
+  }
+
+  /// Like [pickImageBytes] but also returns the original filename, so a
+  /// playlist cover can be stored under its real name in "Album Covers".
+  static Future<(Uint8List, String)?> pickImageWithName() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.image,
       withData: true,
     );
     if (result == null || result.files.isEmpty) return null;
-    return result.files.first.bytes;
+    final f = result.files.first;
+    final bytes = f.bytes;
+    if (bytes == null) return null;
+    final name = (f.name.trim().isEmpty) ? 'cover.jpg' : f.name.trim();
+    return (bytes, name);
+  }
+
+  /// Compresses [imageBytes] to a JPEG about [minSide] px on its short edge,
+  /// applying EXIF orientation in Dart. The Android compressor reads
+  /// orientation through ExifInterface, which returns 0 for HEIC and for
+  /// some stream-only containers, so a portrait photo came out sideways.
+  /// Reading it here and rotating explicitly fixes that.
+  static Future<Uint8List> _orientedCompress(
+    Uint8List imageBytes, {
+    required int minSide,
+    required int quality,
+  }) async {
+    var rotate = 0;
+    try {
+      final tags = await readExifFromBytes(imageBytes);
+      final tag = tags['Image Orientation'];
+      final o = tag == null ? 1 : tag.values.firstAsInt();
+      rotate = switch (o) {
+        6 => 90,
+        3 => 180,
+        8 => 270,
+        _ => 0,
+      };
+    } catch (_) {
+      // No/unreadable EXIF: assume upright.
+    }
+    final out = await FlutterImageCompress.compressWithList(
+      imageBytes,
+      minHeight: minSide,
+      minWidth: minSide,
+      quality: quality,
+      rotate: rotate,
+      // We applied orientation ourselves; don't let the plugin add its own
+      // (mis)read on top.
+      autoCorrectionAngle: false,
+    );
+    return out;
+  }
+
+  /// Get-or-create the hidden "Album Covers" folder for the active account,
+  /// respecting a prior deletion/purge (never resurrects a binned one).
+  static Future<String?> ensureAlbumCoversFolder() async {
+    final email = CloudService().currentEmail;
+    if (email == null) return null;
+    final id = SystemFolders.albumCoversId(email);
+    final existing = await DatabaseService().getFolderById(id);
+    if (existing != null) return existing.isDeleted ? null : id;
+    if (await DatabaseService().isFolderPurged(id)) return null;
+    await DatabaseService()
+        .createFolder(SystemFolders.albumCoversName, id: id);
+    await DatabaseService().setFolderHidden(id, true);
+    return id;
   }
 
   /// Sets [imageBytes] as [track]'s cover. Returns the refreshed row.
@@ -57,12 +121,8 @@ class CoverArtService {
     // Cover-sized JPEG: this same blob is shown everywhere the track art
     // appears, up to the full-screen player, so keep it larger than a list
     // thumbnail but still small enough to fetch instantly.
-    final coverBytes = await FlutterImageCompress.compressWithList(
-      imageBytes,
-      minHeight: 720,
-      minWidth: 720,
-      quality: 78,
-    );
+    final coverBytes =
+        await _orientedCompress(imageBytes, minSide: 720, quality: 78);
     final encrypted = await EncryptionService.encryptFile(coverBytes);
 
     final oldThumb = track.thumbnailCloudId;
@@ -122,9 +182,11 @@ class CoverArtService {
   Future<void> setPlaylistCover({
     required CnestAlbum playlist,
     required Uint8List imageBytes,
+    String? originalName,
   }) async {
     final email = CloudService().currentEmail;
     if (email == null) throw Exception('No active account.');
+    final coversFolderId = await ensureAlbumCoversFolder();
 
     // The cover is a vault row (hidden from the gallery, but a slot all the
     // same) so it answers to the Free cap like every other upload.
@@ -134,25 +196,21 @@ class CoverArtService {
 
     // Main image (what a future full-size cover view would show) + a small
     // thumbnail (what the playlist grid renders), both encrypted in memory.
-    final mainBytes = await FlutterImageCompress.compressWithList(
-      imageBytes,
-      minHeight: 1080,
-      minWidth: 1080,
-      quality: 82,
-    );
-    final thumbBytes = await FlutterImageCompress.compressWithList(
-      imageBytes,
-      minHeight: 400,
-      minWidth: 400,
-      quality: 60,
-    );
+    final mainBytes =
+        await _orientedCompress(imageBytes, minSide: 1080, quality: 82);
+    final thumbBytes =
+        await _orientedCompress(imageBytes, minSide: 400, quality: 60);
     final encMainFuture = EncryptionService.encryptFile(mainBytes);
     final encThumbFuture = EncryptionService.encryptFile(thumbBytes);
     final encMain = await encMainFuture;
     final encThumb = await encThumbFuture;
 
     final coverId = const Uuid().v4();
-    final coverName = 'Cover (${playlist.name}).jpg';
+    // Keep the original filename the user picked; fall back to a readable
+    // default. Stored inside the hidden "Album Covers" folder.
+    final coverName = (originalName == null || originalName.trim().isEmpty)
+        ? 'Cover (${playlist.name}).jpg'
+        : originalName.trim();
 
     // Row before upload (markAsUploaded updates it) — the insert-before-upload
     // contract every other upload site follows.
@@ -169,6 +227,9 @@ class CoverArtService {
       isUploaded: false,
       // Kept out of the gallery and every specialized view.
       isHidden: true,
+      // Tucked into the hidden Album Covers folder so it never shows at the
+      // vault root in the Files browser (null folderId = root).
+      folderId: coversFolderId,
     ));
 
     String? mainCloudId;
@@ -245,7 +306,14 @@ class CoverArtService {
     try {
       final old = await DatabaseService().getFileById(coverFileId);
       if (old == null || !old.isHidden) return;
-      if (!old.filename.startsWith('Cover (')) return;
+      // Only reclaim files WE created as covers: hidden, and either in the
+      // Album Covers folder (named originals) or carrying the legacy
+      // "Cover (" name from before the folder existed.
+      final coversFolderId = SystemFolders.albumCoversId(
+          CloudService().currentEmail ?? '');
+      final ours = old.folderId == coversFolderId ||
+          old.filename.startsWith('Cover (');
+      if (!ours) return;
       for (final blob in [old.cloudId, old.thumbnailCloudId]) {
         if (blob != null) {
           try {
@@ -257,6 +325,19 @@ class CoverArtService {
     } catch (e) {
       debugPrint('CoverArtService: old cover cleanup failed: $e');
     }
+  }
+
+  /// Permanently removes [playlist]'s custom cover (its blobs and hidden
+  /// row) and clears the album's cover reference. The playlist falls back to
+  /// its note-on-grey placeholder, or to the most-recent-track cover that
+  /// [DatabaseService.getAlbumCoverFile] derives.
+  Future<void> removePlaylistCover(CnestAlbum playlist) async {
+    final coverId = playlist.coverFileId;
+    // Clear the reference first so the UI stops pointing at the file even
+    // if blob deletion lags.
+    await DatabaseService().setAlbumCover(playlist.id, null);
+    await _deleteOwnedCover(coverId);
+    DatabaseBackupService().scheduleBackup();
   }
 
   Future<void> _clearThumbCache(String cloudId) async {

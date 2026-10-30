@@ -3,6 +3,8 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+
+import '../../widgets/cn_menu_button.dart';
 import 'package:flutter/rendering.dart';
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart'; // Launches native PDF reader
@@ -420,7 +422,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
           _DocSort.dateNewest => 'Date (newest)',
           _DocSort.dateOldest => 'Date (oldest)',
         };
-    return PopupMenuButton<_DocSort>(
+    return CnMenuButton<_DocSort>(
       tooltip: 'Sort',
       icon: const ThemeIcon('sortAscending'),
       initialValue: _sort,
@@ -722,9 +724,8 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
   /// [inExpanded]: the large card already shows Send and Save buttons, so
   /// the menu does not repeat them there.
   Widget _menu(ColorScheme cs, CnestFile file, {bool inExpanded = false}) {
-    return PopupMenuButton<String>(
+    return CnMenuButton<String>(
       icon: ThemeIcon('dotsThreeVertical', color: cs.onSurface.withAlpha(140)),
-      position: PopupMenuPosition.under,
       itemBuilder: (_) => [
         if (!inExpanded)
           iconMenuItem(cs, 'send', 'shareFat', 'Send file'),

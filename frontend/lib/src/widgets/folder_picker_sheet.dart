@@ -2,7 +2,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../services/cloud/cloud_service.dart';
 import '../../services/database_service.dart';
+import '../../services/system_folders.dart';
 import '../models/folder_model.dart';
 import 'theme_icon.dart';
 
@@ -112,6 +114,13 @@ Future<List<CnestFolder>> _allLiveFolders() async {
     final children = await DatabaseService().getFolders(parentId: parent);
     out.addAll(children);
     queue.addAll(children.map((f) => f.id));
+  }
+  // The hidden Album Covers folder is managed by the music screens; it must
+  // never be an upload or move destination.
+  final email = CloudService().currentEmail;
+  if (email != null) {
+    final coversId = SystemFolders.albumCoversId(email);
+    out.removeWhere((f) => f.id == coversId);
   }
   return out;
 }

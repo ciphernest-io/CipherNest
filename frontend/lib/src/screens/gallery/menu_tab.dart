@@ -48,9 +48,13 @@ class MenuTab extends StatelessWidget {
           cs,
           'trash',
           'Recycle Bin',
-          // Straight to the Photos & Videos tab of the bin.
+          // Straight to the Photos & Videos tab of the bin. The bar arrow
+          // steps up to the bin's parent Settings page (Storage & cache);
+          // system back returns here.
           () => Navigator.of(context).push(MaterialPageRoute(
-              builder: (_) => const RecycleBinScreen(initialTab: 1))),
+              builder: (_) => const RecycleBinScreen(
+                  initialTab: 1,
+                  barBackSettingsSection: kSettingsStorageSection))),
         ),
         _tile(
           cs,

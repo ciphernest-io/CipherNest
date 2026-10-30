@@ -1,6 +1,8 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+
+import '../../widgets/cn_menu_button.dart';
 import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:just_audio/just_audio.dart';
 
@@ -224,13 +226,12 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                         onPressed: () => Navigator.pop(context),
                       ),
                       const Spacer(),
-                      PopupMenuButton<String>(
+                      CnMenuButton<String>(
                         icon: ThemeIcon(
                           'dotsThreeVertical',
                           color: cs.onSurface,
                         ),
                         onSelected: (v) => switch (v) {
-                          'cover' => setTrackCoverFlow(context, current),
                           'playlist' =>
                             PlaylistPickerSheet.show(context, current),
                           'send' => sendFilesPlain(context, [current]),
@@ -247,8 +248,6 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
                           _ => null,
                         },
                         itemBuilder: (_) => const [
-                          PopupMenuItem(
-                              value: 'cover', child: Text('Set as cover')),
                           PopupMenuItem(
                               value: 'playlist',
                               child: Text('Add to playlist')),

@@ -21,7 +21,6 @@ import '../../widgets/friendly_error_sheet.dart';
 import '../../widgets/theme_icon.dart';
 import '../share/share_dialog.dart';
 import 'audio_details_screen.dart';
-import 'music_actions.dart';
 import 'playlist_detail_screen.dart';
 import 'playlist_picker_sheet.dart';
 import 'playlists_morph.dart';
@@ -197,7 +196,6 @@ class _MusicHomeScreenState extends State<MusicHomeScreen>
     final cs = Theme.of(context).colorScheme;
     return [
       const PopupMenuItem(value: 'playlist', child: Text('Add to playlist')),
-      const PopupMenuItem(value: 'cover', child: Text('Set as cover')),
       const PopupMenuItem(value: 'send', child: Text('Send file')),
       const PopupMenuItem(value: 'share', child: Text('Share secure link')),
       const PopupMenuItem(value: 'save', child: Text('Save to device')),
@@ -214,8 +212,6 @@ class _MusicHomeScreenState extends State<MusicHomeScreen>
     switch (action) {
       case 'playlist':
         PlaylistPickerSheet.show(context, file);
-      case 'cover':
-        setTrackCoverFlow(context, file, onUpdated: (_) => _refresh());
       case 'send':
         sendFilesPlain(context, [file]);
       case 'share':
@@ -497,11 +493,14 @@ class _MusicHomeScreenState extends State<MusicHomeScreen>
   }
 
   Future<void> _changePlaylistCover(CnestAlbum playlist) async {
-    final bytes = await CoverArtService.pickImageBytes();
-    if (bytes == null) return;
+    final picked = await CoverArtService.pickImageWithName();
+    if (picked == null) return;
     try {
-      await CoverArtService()
-          .setPlaylistCover(playlist: playlist, imageBytes: bytes);
+      await CoverArtService().setPlaylistCover(
+        playlist: playlist,
+        imageBytes: picked.$1,
+        originalName: picked.$2,
+      );
       _refresh();
     } catch (e) {
       if (e is CnestError) {
@@ -509,6 +508,15 @@ class _MusicHomeScreenState extends State<MusicHomeScreen>
         return;
       }
       Notify.error('Could not set cover: $e');
+    }
+  }
+
+  Future<void> _removePlaylistCover(CnestAlbum playlist) async {
+    try {
+      await CoverArtService().removePlaylistCover(playlist);
+      _refresh();
+    } catch (e) {
+      Notify.error('Could not remove cover: $e');
     }
   }
 
@@ -565,6 +573,17 @@ class _MusicHomeScreenState extends State<MusicHomeScreen>
                 _changePlaylistCover(playlist);
               },
             ),
+            if (playlist.coverFileId != null)
+              ListTile(
+                leading: ThemeIcon('trash', color: cs.error),
+                title: Text('Remove cover image',
+                    style: TextStyle(color: cs.error)),
+                subtitle: const Text('Deletes the cover photo permanently'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _removePlaylistCover(playlist);
+                },
+              ),
             ListTile(
               leading: ThemeIcon('trash', color: cs.error),
               title: Text('Delete playlist',

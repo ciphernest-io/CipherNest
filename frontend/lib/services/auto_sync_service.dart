@@ -22,6 +22,7 @@ import 'subscription_service.dart';
 import 'encryption_service.dart';
 import 'key_manager_service.dart';
 import 'migration_service.dart';
+import 'network_policy.dart';
 import 'mp4_metadata_parser.dart';
 import 'sync/device_registry_service.dart';
 import 'sync/sync_coordinator.dart';
@@ -129,6 +130,12 @@ class AutoSyncService {
     // and the next cycle rescans everything.
     if (MigrationService().isRunning) {
       return AutoSyncResult(synced: 0, failed: 0, skipped: 0);
+    }
+    // Wi-Fi only: on mobile data the pass waits. The watermark is untouched
+    // so the next pass on Wi-Fi picks up everything since.
+    if (await NetworkPolicy.backupBlockedByWifiOnly()) {
+      return AutoSyncResult(
+          synced: 0, failed: 0, skipped: 0, waitingForWifi: true);
     }
     if (!await acquireRunLease()) {
       // The OTHER isolate's run is live (see lease note above).
@@ -941,6 +948,10 @@ class AutoSyncResult {
   final bool limitReached;
   final int notStored;
 
+  /// The pass did not run: Wi-Fi only is on and the device is on mobile
+  /// data. Nothing was scanned and the watermark did not move.
+  final bool waitingForWifi;
+
   AutoSyncResult({
     required this.synced,
     required this.failed,
@@ -948,6 +959,7 @@ class AutoSyncResult {
     this.offlineFailures = 0,
     this.limitReached = false,
     this.notStored = 0,
+    this.waitingForWifi = false,
   });
 
   bool get allFailuresOffline => failed > 0 && offlineFailures >= failed;

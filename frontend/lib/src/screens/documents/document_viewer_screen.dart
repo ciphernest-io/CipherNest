@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+
+import '../../widgets/cn_menu_button.dart';
 import 'package:pdfx/pdfx.dart';
 
 import '../../../services/cloud/cloud_service.dart';
@@ -120,9 +122,8 @@ class _DocumentViewerScreenState extends State<DocumentViewerScreen> {
         title: Text(widget.file.filename,
             maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
-          PopupMenuButton<String>(
+          CnMenuButton<String>(
             icon: ThemeIcon('dotsThreeVertical'),
-            position: PopupMenuPosition.under,
             itemBuilder: (_) => [
               iconMenuItem(cs, 'send', 'shareFat', 'Send file'),
               iconMenuItem(

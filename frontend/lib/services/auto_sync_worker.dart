@@ -46,6 +46,16 @@ const String _kIntervalAppliedPref = 'auto_sync_interval_applied';
 
 const int kAutoSyncIntervalDefaultMinutes = 360;
 
+/// SharedPreferences key: back up over Wi-Fi only. Off by default. When on,
+/// the periodic task requires an unmetered network and every foreground
+/// backup pass checks the active network before it starts.
+const String _kWifiOnlyPref = 'auto_sync_wifi_only';
+
+/// The Wi-Fi-only value most recently REGISTERED with Workmanager, so a
+/// change re-registers with `update` while an unchanged value keeps the
+/// running timer (same reasoning as [_kIntervalAppliedPref]).
+const String _kWifiOnlyAppliedPref = 'auto_sync_wifi_only_applied';
+
 /// Picker choices, minutes. 15 is Workmanager's floor.
 const List<int> kAutoSyncIntervalChoices = [15, 60, 360, 1440];
 
@@ -134,34 +144,55 @@ class AutoSyncScheduler {
     await _applyMode(await readMode());
   }
 
+  /// Whether backup is restricted to Wi-Fi (unmetered networks).
+  static Future<bool> readWifiOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_kWifiOnlyPref) ?? false;
+  }
+
+  /// Persists the Wi-Fi-only choice and re-registers the periodic task with
+  /// the matching network constraint.
+  static Future<void> writeWifiOnly(bool wifiOnly) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kWifiOnlyPref, wifiOnly);
+    await _applyMode(await readMode());
+  }
+
   static Future<void> _applyMode(AutoSyncMode mode) async {
     if (mode == AutoSyncMode.background) {
       try {
         final prefs = await SharedPreferences.getInstance();
         final desired = await readInterval();
         final applied = prefs.getInt(_kIntervalAppliedPref);
+        final wifiOnly = await readWifiOnly();
+        final wifiApplied = prefs.getBool(_kWifiOnlyAppliedPref) ?? false;
         // `keep` when the registered task already runs at the desired
-        // interval (re-registers only if the OS dropped it); `update` when
-        // the user picked a new interval. Never unconditionally replace —
-        // that resets the periodic timer on every cold start.
-        final policy = applied == desired.inMinutes
-            ? ExistingPeriodicWorkPolicy.keep
-            : ExistingPeriodicWorkPolicy.update;
+        // interval with the desired network constraint (re-registers only
+        // if the OS dropped it); `update` when the user changed either.
+        // Never unconditionally replace — that resets the periodic timer on
+        // every cold start.
+        final policy =
+            applied == desired.inMinutes && wifiApplied == wifiOnly
+                ? ExistingPeriodicWorkPolicy.keep
+                : ExistingPeriodicWorkPolicy.update;
         await Workmanager().registerPeriodicTask(
           _kPeriodicTaskUniqueName,
           autoSyncTaskName,
           frequency: desired,
           existingWorkPolicy: policy,
           constraints: Constraints(
-            networkType: NetworkType.connected,
+            networkType:
+                wifiOnly ? NetworkType.unmetered : NetworkType.connected,
             requiresBatteryNotLow: true,
           ),
           backoffPolicy: BackoffPolicy.exponential,
           backoffPolicyDelay: _kBackoffDelay,
         );
         await prefs.setInt(_kIntervalAppliedPref, desired.inMinutes);
+        await prefs.setBool(_kWifiOnlyAppliedPref, wifiOnly);
         await _log('background mode enabled: periodic task scheduled '
-            'every ${desired.inMinutes}m (policy ${policy.name})');
+            'every ${desired.inMinutes}m (policy ${policy.name}, '
+            '${wifiOnly ? 'Wi-Fi only' : 'any network'})');
       } catch (e) {
         debugPrint('AutoSyncScheduler: registerPeriodicTask failed: $e');
       }

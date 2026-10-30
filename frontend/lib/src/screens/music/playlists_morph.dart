@@ -307,7 +307,9 @@ class _PlaylistMorphCard extends StatelessWidget {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    PlaylistCover(coverFileId: playlist.coverFileId),
+                    PlaylistCover(
+                        coverFileId: playlist.coverFileId,
+                        albumId: playlist.id),
                     if (g > 0.001)
                       Positioned(
                         left: 0,

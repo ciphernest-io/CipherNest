@@ -16,10 +16,18 @@ class GalleryTypeResultsScreen extends StatefulWidget {
     super.key,
     required this.label,
     required this.files,
+    this.showDateHeaders = true,
+    this.searchHint,
   });
 
   final String label;
   final List<CnestFile> files;
+
+  /// False for grids that are one flat run sorted by date (Favorites).
+  final bool showDateHeaders;
+
+  /// Placeholder for the bottom search field; defaults to the type wording.
+  final String? searchHint;
 
   @override
   State<GalleryTypeResultsScreen> createState() =>
@@ -98,6 +106,7 @@ class _GalleryTypeResultsScreenState extends State<GalleryTypeResultsScreen> {
                 key: _tabKey,
                 chrome: _chrome,
                 embedded: true,
+                showDateHeaders: widget.showDateHeaders,
                 filesOverride: files,
               ),
             ),
@@ -126,7 +135,8 @@ class _GalleryTypeResultsScreenState extends State<GalleryTypeResultsScreen> {
                       icon: ThemeIcon('magnifyingGlass',
                           size: 18,
                           color: cs.onSurface.withValues(alpha: 0.55)),
-                      hintText: 'Search ${widget.label} files',
+                      hintText:
+                          widget.searchHint ?? 'Search ${widget.label} files',
                       hintStyle: TextStyle(
                           color: cs.onSurface.withValues(alpha: 0.5)),
                     ),

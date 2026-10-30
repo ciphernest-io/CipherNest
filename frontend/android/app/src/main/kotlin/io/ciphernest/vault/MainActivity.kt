@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
 import android.os.PersistableBundle
@@ -247,6 +248,13 @@ class MainActivity : AudioServiceFragmentActivity() {
                 "isIgnoringBatteryOptimizations" -> {
                     val pm = getSystemService(POWER_SERVICE) as PowerManager
                     result.success(pm.isIgnoringBatteryOptimizations(packageName))
+                }
+                "isNetworkMetered" -> {
+                    // Null when there is no active network: the Dart side
+                    // treats unknown as "do not block".
+                    val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+                    val active = cm.activeNetwork
+                    result.success(if (active == null) null else cm.isActiveNetworkMetered)
                 }
                 "openBatteryOptimizationSettings" -> {
                     // The list screen needs no permission (unlike the

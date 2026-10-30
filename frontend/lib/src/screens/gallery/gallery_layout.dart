@@ -5,7 +5,16 @@ import '../../utils/date_grouper.dart';
 
 /// Which date decomposition a zoom rung uses (public mirror of the
 /// pictures tab's private grouping).
-enum GalleryGrouping { year, month, day }
+enum GalleryGrouping {
+  year,
+  month,
+  day,
+
+  /// One section, no header row: album pages, the Favorites grid and other
+  /// embedded grids that show no dates. The morph layer draws whatever the
+  /// oracle emits, so these grids must not get date headers mid-pinch.
+  none,
+}
 
 /// One packed row of the justified (masonry) layout — the exact greedy
 /// algorithm the justified sliver renders, factored out so the layout
@@ -163,14 +172,18 @@ class GalleryLayoutOracle {
       GalleryGrouping.year => groupByYear(files),
       GalleryGrouping.month => groupByMonth(files),
       GalleryGrouping.day => groupByDate(files),
+      GalleryGrouping.none => [DateSection(label: '', files: files)],
     };
+    final withHeaders = grouping != GalleryGrouping.none;
     var y = 0.0;
     var start = 0;
     if (columns > 0) {
       _tileW = (width - (columns - 1) * spacing) / columns;
       for (final section in sections) {
-        headers.add((y: y, label: section.label));
-        y += headerExtent;
+        if (withHeaders) {
+          headers.add((y: y, label: section.label));
+          y += headerExtent;
+        }
         final n = section.files.length;
         _sections.add(_SectionGeo(start, n, y));
         final rows = (n / columns).ceil();
@@ -179,8 +192,10 @@ class GalleryLayoutOracle {
       }
     } else {
       for (final section in sections) {
-        headers.add((y: y, label: section.label));
-        y += headerExtent;
+        if (withHeaders) {
+          headers.add((y: y, label: section.label));
+          y += headerExtent;
+        }
         for (final row in packJustified(section.files, width, ratioOf)) {
           final xs = <double>[];
           var x = 0.0;

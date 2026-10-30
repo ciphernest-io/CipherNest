@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../widgets/cn_menu_button.dart';
+
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 import 'albums_tab.dart';
@@ -105,6 +107,10 @@ class _GalleryScreenState extends State<GalleryScreen> {
         child: child!,
       ),
       child: Scaffold(
+      // The bottom pill is a Positioned child of the body, so a shrinking
+      // body (keyboard for "Create album") would carry it up. Nothing on
+      // these tabs needs to avoid the keyboard: dialogs handle their own.
+      resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
           // Tabs are pages: a horizontal swipe moves between them and the
@@ -160,13 +166,6 @@ class _GalleryScreenState extends State<GalleryScreen> {
   // ---- top-left: search + overflow, translucent pill when scrolled ----
 
   Widget _topButtons(double safeTop) {
-    // The Menu tab has no search or overflow actions — no top chrome there.
-    // MUST stay a Positioned (not a bare SizedBox): a non-positioned zero-size
-    // child collapses the body Stack to 0x0 under loose constraints, which
-    // clipped the ENTIRE Menu tab (grid, pill, everything) to nothing.
-    if (_bottomNavIndex == 3) {
-      return const Positioned(top: 0, left: 0, child: SizedBox.shrink());
-    }
     return ValueListenableBuilder<bool>(
       valueListenable: _chrome.selectionActive,
       builder: (context, selection, _) => ValueListenableBuilder<double>(
@@ -175,9 +174,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
           // The buttons belong to the grid's top edge: revealing the title
           // box pushes them DOWN with the content; their collapsed spot is
           // their upper limit when scrolling back up.
-          final top = safeTop +
-              6 +
-              (_bottomNavIndex <= 2 ? reveal : 0);
+          final top = safeTop + 6 + reveal;
           // Selection swaps the CONTENT of this same line — the count and
           // the selection actions fill it edge to edge. Same top rule, so
           // it never rides into the title box, and being an overlay it
@@ -190,7 +187,31 @@ class _GalleryScreenState extends State<GalleryScreen> {
               child: _selectionBar(),
             );
           }
-          return Positioned(top: top, right: 10, child: _plainTopButtons());
+          // Each tab OWNS its top pill. It rides horizontally with its own
+          // page: Pictures' pill slides out to the left as you swipe to
+          // Albums, and the Albums pill slides in from the right, instead of
+          // one shared pill snapping. Driven by the live PageView offset.
+          final w = MediaQuery.sizeOf(context).width;
+          return AnimatedBuilder(
+            animation: _pageCtrl,
+            builder: (context, _) {
+              final page = _pageCtrl.hasClients && _pageCtrl.page != null
+                  ? _pageCtrl.page!
+                  : _bottomNavIndex.toDouble();
+              return Stack(
+                children: [
+                  // Tabs 0..2 carry chrome; the Menu tab (3) has none.
+                  for (var i = 0; i < 3; i++)
+                    if ((i - page).abs() < 1.0)
+                      Positioned(
+                        top: top,
+                        right: 10 + (page - i) * w,
+                        child: _plainTopButtonsFor(i),
+                      ),
+                ],
+              );
+            },
+          );
         },
       ),
     );
@@ -253,7 +274,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
     );
   }
 
-  Widget _plainTopButtons() {
+  Widget _plainTopButtonsFor(int tabIndex) {
     final cs = Theme.of(context).colorScheme;
     final t = ThemeController().tokens;
     return ValueListenableBuilder<bool>(
@@ -265,7 +286,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
           // Pictures, Albums and Stories all have the reveal header, so the
           // pill only solidifies once their content scrolls under it. The
           // Menu tab (3) has no reveal, so it stays solid.
-          final pillBg = _bottomNavIndex <= 2 ? under : true;
+          final pillBg = under;
           return IgnorePointer(
             ignoring: !visible,
             child: AnimatedOpacity(
@@ -286,7 +307,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (_bottomNavIndex == 1)
+                    if (tabIndex == 1)
                       IconButton(
                         tooltip: 'New album',
                         icon: ThemeIcon('plus', color: cs.onSurface),
@@ -305,7 +326,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
                     ),
                     // Only Pictures has overflow actions (Settings lives in
                     // the Menu tab); the other tabs get no three-dot.
-                    if (_bottomNavIndex == 0) _overflowMenu(cs),
+                    if (tabIndex == 0) _overflowMenu(cs),
                   ],
                 ),
               ),
@@ -318,10 +339,9 @@ class _GalleryScreenState extends State<GalleryScreen> {
 
   Widget _overflowMenu(ColorScheme cs) {
     final t = ThemeController().tokens;
-    return PopupMenuButton<String>(
+    return CnMenuButton<String>(
       tooltip: 'More',
       // Below the button, never over it.
-      position: PopupMenuPosition.under,
       icon: ThemeIcon('dotsThreeVertical', color: cs.onSurface),
       color: cs.surface,
       shape: RoundedRectangleBorder(
@@ -331,21 +351,16 @@ class _GalleryScreenState extends State<GalleryScreen> {
         switch (v) {
           case 'select':
             pictures?.startSelection();
-          case 'favorites':
-            pictures?.setFavoritesOnly(!(pictures.favoritesOnly));
           case 'sync':
             pictures?.handleSync();
         }
       },
+      // Favorites live on the Stories tab as their own grid, not as a
+      // filter on Pictures.
       itemBuilder: (ctx) {
-        final favs = _picturesKey.currentState?.favoritesOnly ?? false;
         return [
           if (_bottomNavIndex == 0) ...[
             const PopupMenuItem(value: 'select', child: Text('Select')),
-            PopupMenuItem(
-              value: 'favorites',
-              child: Text(favs ? 'Show all' : 'Favorites only'),
-            ),
             const PopupMenuItem(value: 'sync', child: Text('Sync now')),
           ],
         ];

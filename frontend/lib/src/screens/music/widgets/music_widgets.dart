@@ -1,6 +1,8 @@
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
+
+import '../../../widgets/cn_menu_button.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../../../../services/audio_player_service.dart';
@@ -61,9 +63,15 @@ class TrackArt extends StatelessWidget {
 class PlaylistCover extends StatefulWidget {
   final String? coverFileId;
   final BorderRadius borderRadius;
+
+  /// When set, a cover file that has gone missing or been deleted clears
+  /// itself from this album on the next render, so a removed cover photo
+  /// does not linger as a broken reference.
+  final String? albumId;
   const PlaylistCover({
     super.key,
     this.coverFileId,
+    this.albumId,
     this.borderRadius = BorderRadius.zero,
   });
 
@@ -92,7 +100,13 @@ class _PlaylistCoverState extends State<PlaylistCover> {
   Future<void> _resolve() async {
     final id = widget.coverFileId;
     if (id == null) return;
-    final f = await DatabaseService().getFileById(id);
+    final f = await DatabaseService().getLiveFileById(id);
+    // Reconcile: the cover file was deleted (its folder binned, or the user
+    // removed it) but the album still points at it. Clear the reference so
+    // the placeholder shows and the dangling id is dropped.
+    if (f == null && widget.albumId != null) {
+      await DatabaseService().setAlbumCover(widget.albumId!, null);
+    }
     if (mounted) setState(() => _cover = f);
   }
 
@@ -173,7 +187,7 @@ class TrackRow extends StatelessWidget {
                   ),
                 ),
                 if (menuBuilder != null)
-                  PopupMenuButton<String>(
+                  CnMenuButton<String>(
                     icon: ThemeIcon(
                       'dotsThreeVertical',
                       size: 20,

@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+
+import '../../widgets/cn_menu_button.dart';
 import 'package:flutter/rendering.dart';
+import '../../config/routes.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 
@@ -161,11 +164,18 @@ class FolderPathText extends StatelessWidget {
 /// never flood the type tabs. Type tabs show individually-deleted files
 /// (plus orphans whose cause folder is gone).
 class RecycleBinScreen extends StatefulWidget {
-  const RecycleBinScreen({super.key, this.initialTab = 0});
+  const RecycleBinScreen(
+      {super.key, this.initialTab = 0, this.barBackSettingsSection});
 
   /// Which tab to open on. 0 = Folders, 1 = Photos & Videos, 2 = Documents,
   /// 3 = Music, 4 = Other. The gallery Menu opens straight to Photos & Videos.
   final int initialTab;
+
+  /// When set, the AppBar arrow does not pop: it replaces this screen with
+  /// Settings opened at that section (the bin's parent page), so the arrow
+  /// steps up the settings tree while system back still returns to the
+  /// opener. Null = the arrow pops like any other screen.
+  final String? barBackSettingsSection;
 
   @override
   State<RecycleBinScreen> createState() => _RecycleBinScreenState();
@@ -202,6 +212,13 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
         appBar: AppBar(
           centerTitle: false,
           title: const Text('Recycle Bin'),
+          leading: widget.barBackSettingsSection == null
+              ? null
+              : BackButton(
+                  onPressed: () => Navigator.pushReplacementNamed(
+                      context, AppRoutes.settings,
+                      arguments: widget.barBackSettingsSection),
+                ),
           actions: [
             IconButton(
               tooltip: 'Search the bin',
@@ -343,7 +360,7 @@ class _FoldersBinTabState extends State<_FoldersBinTab> {
             ],
           ),
           isThreeLine: true,
-          trailing: PopupMenuButton<String>(
+          trailing: CnMenuButton<String>(
             icon: const ThemeIcon('dotsThreeVertical'),
             onSelected: (v) => switch (v) {
               'restore' => _restore(folder),
@@ -400,6 +417,17 @@ class _FilesBinTabState extends State<_FilesBinTab> {
   Timer? _autoScrollTimer;
   double _autoScrollVel = 0;
   Offset? _lastDragGlobal;
+
+  // Pinch-to-resize the photo grid (2..6 columns), mirroring the gallery.
+  // Tracked on raw pointers so it coexists with one-finger scroll and
+  // long-press drag-select; scrolling is frozen only while two fingers pinch.
+  static const int _minBinCols = 2;
+  static const int _maxBinCols = 6;
+  int _binCols = 3;
+  final Map<int, Offset> _pinchPointers = {};
+  bool _binPinching = false;
+  double _pinchStartDist = 0;
+  int _pinchStartCols = 3;
 
   @override
   void initState() {
@@ -610,8 +638,11 @@ class _FilesBinTabState extends State<_FilesBinTab> {
       GridView.builder(
         key: _gridKey,
         controller: _scrollCtrl,
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
+        physics: _binPinching
+            ? const NeverScrollableScrollPhysics()
+            : const AlwaysScrollableScrollPhysics(),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: _binCols,
           crossAxisSpacing: 1.5,
           mainAxisSpacing: 1.5,
         ),
@@ -801,7 +832,7 @@ class _FilesBinTabState extends State<_FilesBinTab> {
                                 ? cs.primary
                                 : cs.onSurface.withAlpha(120),
                             size: 22)
-                        : PopupMenuButton<String>(
+                        : CnMenuButton<String>(
                             icon: ThemeIcon('dotsThreeVertical',
                                 color: cs.onSurface.withAlpha(120), size: 20),
                             onSelected: (v) => switch (v) {
@@ -887,7 +918,7 @@ class _FilesBinTabState extends State<_FilesBinTab> {
                                 : cs.onSurface.withAlpha(120),
                             size: 22),
                       )
-                    : PopupMenuButton<String>(
+                    : CnMenuButton<String>(
                         icon: ThemeIcon('dotsThreeVertical',
                             color: cs.onSurface.withAlpha(120), size: 20),
                         onSelected: (v) => switch (v) {
@@ -953,17 +984,55 @@ class _FilesBinTabState extends State<_FilesBinTab> {
   /// tag its children with MetaData(index) so the hit-test can find them.
   Widget _wrapDragSelect(Widget scrollable) {
     return Listener(
+      onPointerDown: (e) {
+        _pinchPointers[e.pointer] = e.position;
+        if (_pinchPointers.length == 2 && _isImageTab) {
+          // A second finger landed: this is a pinch, not a drag-select.
+          final pts = _pinchPointers.values.toList();
+          _pinchStartDist = (pts[0] - pts[1]).distance;
+          _pinchStartCols = _binCols;
+          if (_dragSelecting) _endDragSelect();
+          setState(() => _binPinching = true);
+        }
+      },
       onPointerMove: (e) {
+        if (_binPinching) {
+          if (_pinchPointers.containsKey(e.pointer)) {
+            _pinchPointers[e.pointer] = e.position;
+          }
+          _updatePinch();
+          return;
+        }
         if (_dragSelecting) _updateDragSelect(e.position);
       },
-      onPointerUp: (_) {
+      onPointerUp: (e) {
+        _pinchPointers.remove(e.pointer);
+        if (_binPinching && _pinchPointers.length < 2) {
+          setState(() => _binPinching = false);
+        }
         if (_dragSelecting) _endDragSelect();
       },
-      onPointerCancel: (_) {
+      onPointerCancel: (e) {
+        _pinchPointers.remove(e.pointer);
+        if (_binPinching && _pinchPointers.length < 2) {
+          setState(() => _binPinching = false);
+        }
         if (_dragSelecting) _endDragSelect();
       },
       child: scrollable,
     );
+  }
+
+  void _updatePinch() {
+    if (_pinchPointers.length < 2 || _pinchStartDist <= 0) return;
+    final pts = _pinchPointers.values.toList();
+    final dist = (pts[0] - pts[1]).distance;
+    // Fingers apart => bigger tiles => fewer columns.
+    final ratio = dist / _pinchStartDist;
+    final target = (_pinchStartCols / ratio)
+        .round()
+        .clamp(_minBinCols, _maxBinCols);
+    if (target != _binCols) setState(() => _binCols = target);
   }
 
   void _beginDragSelect(String id, int index) {

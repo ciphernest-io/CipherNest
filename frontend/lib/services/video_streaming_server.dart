@@ -459,11 +459,28 @@ class VideoStreamingServer {
       final spec = rangeHeader.substring(6);
       final parts = spec.split('-');
       if (parts.length == 2) {
-        rangeStart = int.tryParse(parts[0]) ?? 0;
-        if (parts[1].isNotEmpty) {
-          rangeEnd = int.tryParse(parts[1]) ?? (total - 1);
+        final startStr = parts[0].trim();
+        final endStr = parts[1].trim();
+        if (startStr.isEmpty) {
+          // Suffix range `bytes=-N`: the LAST N bytes. ExoPlayer uses this
+          // to read a moov atom at the END of an MP4 so it can report the
+          // duration. The old code read it as start=0,end=N and served the
+          // FIRST N+1 bytes with a matching-but-wrong Content-Range, so the
+          // player got the file head where it expected the moov tail: no
+          // duration (00:00), and seeking never worked. Serve the real tail.
+          final suffix = int.tryParse(endStr);
+          if (suffix != null && suffix > 0) {
+            rangeStart = suffix >= total ? 0 : total - suffix;
+            rangeEnd = total - 1;
+            isPartial = true;
+          }
+        } else {
+          rangeStart = int.tryParse(startStr) ?? 0;
+          if (endStr.isNotEmpty) {
+            rangeEnd = int.tryParse(endStr) ?? (total - 1);
+          }
+          isPartial = true;
         }
-        isPartial = true;
       }
     }
 

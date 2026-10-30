@@ -10,3 +10,4 @@ const String kAppVersionLabel = 'CipherNest v1.0.1';
 const String kSettingsGallerySection = 'gallery';
 const String kSettingsBackupSection = 'backup';
 const String kSettingsMusicSection = 'music';
+const String kSettingsStorageSection = 'storage';

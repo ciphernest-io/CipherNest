@@ -82,6 +82,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _lastBgSyncDisplay = "hasn't run yet";
   // Null = unknown / not Android.
   bool? _batteryExempt;
+  bool _wifiOnly = false;
 
   // Gallery
   bool _showFeatured = true;
@@ -124,6 +125,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } else if (arg == kSettingsMusicSection) {
       title = 'Music';
       builder = _musicChildren;
+    } else if (arg == kSettingsStorageSection) {
+      title = 'Storage & cache';
+      builder = _storageChildren;
     }
     if (title == null || builder == null) return;
     // Render the category AS this screen instead of pushing it on top of
@@ -173,6 +177,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final prefs = await SharedPreferences.getInstance();
     final mode = await AutoSyncScheduler.readMode();
     final interval = await AutoSyncScheduler.readInterval();
+    final wifiOnly = await AutoSyncScheduler.readWifiOnly();
     final batteryExempt = await BatteryOptimization.isExempt();
     final backupSel = await BackupSelectionService().load();
     if (mounted) {
@@ -185,6 +190,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ? 'All albums'
             : 'Selected albums';
         _autoSyncIntervalMinutes = interval.inMinutes;
+        _wifiOnly = wifiOnly;
         _showFeatured = prefs.getBool('gallery_show_featured') ?? true;
         for (final k in GalleryPrefs.subKinds) {
           _storyFlags[k.$1] = prefs.getBool(k.$1) ?? true;
@@ -727,6 +733,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) _setState(() => _autoSyncIntervalMinutes = picked);
   }
 
+  Future<void> _toggleWifiOnly(bool v) async {
+    await AutoSyncScheduler.writeWifiOnly(v);
+    if (mounted) _setState(() => _wifiOnly = v);
+  }
+
   Future<void> _handleSyncNow() async {
     if (AutoSyncService().isSyncing) {
       Notify.info('Backup already running');
@@ -744,7 +755,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final result = await AutoSyncService().runFullSync();
       // Honest tally — a failed batch must never read as a clean one.
       final String msg;
-      if (result.failed > 0) {
+      if (result.waitingForWifi) {
+        msg = 'Waiting for Wi-Fi. Backup is set to Wi-Fi only';
+      } else if (result.failed > 0) {
         final base = '${result.synced} backed up · ${result.failed} failed';
         msg = result.allFailuresOffline
             ? '$base, you appear to be offline'
@@ -988,9 +1001,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final cs = Theme.of(context).colorScheme;
     final inline = _inlineChildren;
     if (inline != null) {
-      // One route deep: both exits lead to the opener, so no PopScope.
+      // One route deep. System back pops to the opener (the gallery Menu).
+      // The bar arrow steps UP instead: it swaps this category for the
+      // Settings hub in place, so the arrow walks the settings tree the way
+      // it does for a category opened from the hub, while back still
+      // returns to where the user came from.
       return Scaffold(
-        appBar: AppBar(title: Text(_inlineTitle ?? 'Settings')),
+        appBar: AppBar(
+          title: Text(_inlineTitle ?? 'Settings'),
+          leading: BackButton(
+            onPressed: () => _setState(() {
+              _inlineTitle = null;
+              _inlineChildren = null;
+            }),
+          ),
+        ),
         body: ValueListenableBuilder<int>(
           valueListenable: _rev,
           builder: (ctx, _, _) => ListView(
@@ -1292,6 +1317,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ],
               ),
+            ),
+            SwitchListTile(
+              secondary: ThemeIcon('wifiHigh', color: cs.primary),
+              title: Text('Back up over Wi-Fi only',
+                  style: TextStyle(color: cs.onSurface)),
+              subtitle: Text(
+                _wifiOnly
+                    ? 'Waits for Wi-Fi. Nothing is backed up on mobile data'
+                    : 'Backs up on Wi-Fi and mobile data',
+                style: TextStyle(
+                    color: cs.onSurface.withAlpha(140), fontSize: 12),
+              ),
+              value: _wifiOnly,
+              onChanged: _toggleWifiOnly,
             ),
             if (_autoSyncMode == AutoSyncMode.background) ...[
               ListTile(
@@ -1706,6 +1745,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     'https://ciphernest.io/source'),
                 _aboutLink(_brandSvg('gitlab', cs), 'GitLab',
                     'https://gitlab.com/ciphernest-io'),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _aboutLink(
+                    ThemeIcon('shieldCheck', size: 16, color: cs.primary),
+                    'Privacy policy',
+                    'https://ciphernest.io/privacy'),
+                _aboutLink(
+                    ThemeIcon('fileText', size: 16, color: cs.primary),
+                    'Terms of service',
+                    'https://ciphernest.io/terms'),
               ],
             ),
           ],

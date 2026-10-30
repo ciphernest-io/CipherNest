@@ -226,10 +226,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                 child: Text('Remove from playlist'),
                               ),
                             const PopupMenuItem(
-                              value: 'cover',
-                              child: Text('Set as cover'),
-                            ),
-                            const PopupMenuItem(
                               value: 'share',
                               child: Text('Share'),
                             ),
@@ -249,10 +245,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                 await DatabaseService().removeFileFromAlbum(
                                     widget.playlist.id, file.id);
                                 _refresh();
-                              case 'cover':
-                                if (context.mounted) {
-                                  await setTrackCoverFlow(context, file);
-                                }
                               case 'delete':
                                 if (context.mounted) {
                                   await deleteTrack(context, file,
