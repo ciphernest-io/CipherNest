@@ -469,7 +469,7 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
 
   /// Called when an expanded-scrub drag/fling settles: issue the exact final
   /// seek and resume playback if we paused it for the scrub.
-  void _finishScrub() {
+  Future<void> _finishScrub() async {
     final controller = _activeVideo;
     final fraction = _pendingScrubFraction;
     _pendingScrubFraction = null;
@@ -481,22 +481,23 @@ class _ImageViewerScreenState extends State<ImageViewerScreen> {
       // to the start (the "scrubber jumps back and replays" bug). The drag
       // itself already seeks against the effective duration, so match it.
       final duration = _effectiveVideoDuration(controller);
-      if (duration > Duration.zero) controller.seekTo(duration * fraction);
+      if (duration > Duration.zero) {
+        // AWAIT the seek so the live frame actually sits AT the target before
+        // we reveal it. Firing it async and then play()-ing / clearing the
+        // preview immediately exposed the pre-scrub frame for a beat while the
+        // seek was still in flight — the "frame A flashes before it plays from
+        // frame B" bug.
+        await controller.seekTo(duration * fraction);
+      }
     }
-    if (resuming) {
-      controller?.play();
-      _scrubPreview.value = null; // playback covers it immediately
-      _scrubFraction.value = null;
-    } else {
-      // Keep the preview one beat so the seeked live frame is presented before
-      // we reveal it (no flash back to the pre-scrub frame). The time readout
-      // clears with it — by then the controller reports the landed position.
-      Future.delayed(const Duration(milliseconds: 120), () {
-        if (!mounted) return;
-        _scrubPreview.value = null;
-        _scrubFraction.value = null;
-      });
-    }
+    if (!mounted) return;
+    // A new scrub may have begun during the await; don't stomp its preview.
+    if (_pendingScrubFraction != null) return;
+    if (resuming) controller?.play();
+    // The live frame is now at the target, so dropping the preview reveals the
+    // scrubbed frame, never the pre-scrub one.
+    _scrubPreview.value = null;
+    _scrubFraction.value = null;
   }
 
   /// After a drag/fling settles, lock the strip onto the nearest item so the

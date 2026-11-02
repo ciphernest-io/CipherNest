@@ -1,6 +1,5 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:pro_image_editor/pro_image_editor.dart';
 
 import '../../config/theme.dart';
@@ -28,17 +27,15 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // The editor is dark chrome in every theme, like the Samsung Gallery
-    // editor. Two reasons. The package hard-codes white for the undo/redo
-    // arrows in the tune, crop and paint bars, black/white for the text
-    // editor's style chips and dark fills for its line-width and aspect
-    // sheets; none of those read from the style objects, so a light bar
-    // leaves them invisible. And a photo is judged against a dark surround.
-    // The current pack still supplies the accent and the type, through its
-    // own dark variant, so Burrow's editor is not Binary's.
+    // The editor follows the app's current brightness: a light-mode app gets
+    // a light editor, dark gets dark. Every bar foreground, background and
+    // canvas below is bound to the pack's tokens (primary / surface /
+    // scaffold), which flip with the brightness, so the chrome stays legible
+    // in both. The pack and its light/dark variant still supply the accent
+    // and type, so Burrow's editor is not Binary's.
     final theme = AppTheme.build(
       pack: ThemeController().pack,
-      mode: Brightness.dark,
+      mode: Theme.of(context).brightness,
     );
     final cs = theme.colorScheme;
 
@@ -62,10 +59,33 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
     // have to arrive via the ThemeData's iconTheme — every editor re-applies
     // this theme through a Material `Theme`, which installs an IconTheme the
     // leaf Icons inherit. The cut still rides each themeIconData() below.
+    // The OS bars follow the editor's brightness too: in a light-mode app the
+    // status bar (clock, wifi, battery) and the bottom gesture/navigation bar
+    // get dark icons on a light surface, in dark mode light icons on a dark
+    // surface. Each sub-editor wraps itself in an AnnotatedRegion built from
+    // its own style's `uiOverlayStyle`, but every sub-editor ALSO builds a
+    // Material `AppBar`, and an AppBar injects its OWN deeper AnnotatedRegion
+    // from `appBarTheme.systemOverlayStyle`. That inner region wins, and the
+    // app's default value is the const `SystemUiOverlayStyle.dark/.light`,
+    // which hardcodes a black nav bar with light icons. So the real lever is
+    // the editor theme's `appBarTheme.systemOverlayStyle`; the per-style
+    // `uiOverlayStyle` below is the matching outer layer.
+    final isLight = Theme.of(context).brightness == Brightness.light;
+    final barIcons = isLight ? Brightness.dark : Brightness.light;
+    final overlay = SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: barIcons,
+      statusBarBrightness: isLight ? Brightness.light : Brightness.dark,
+      systemNavigationBarColor: barBg,
+      systemNavigationBarDividerColor: barBg,
+      systemNavigationBarIconBrightness: barIcons,
+    );
+
     final axes = themeIconAxes();
     final editorTheme = theme.copyWith(
       iconTheme: theme.iconTheme.merge(axes),
       appBarTheme: theme.appBarTheme.copyWith(
+        systemOverlayStyle: overlay,
         iconTheme: (theme.appBarTheme.iconTheme ?? const IconThemeData())
             .merge(axes),
         actionsIconTheme:
@@ -92,6 +112,7 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
         // Stickers, emoji, and blur are deferred.
         mainEditor: MainEditorConfigs(
           style: MainEditorStyle(
+            uiOverlayStyle: overlay,
             background: canvas,
             appBarColor: onBar,
             appBarBackground: barBg,
@@ -113,6 +134,7 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
         ),
         paintEditor: PaintEditorConfigs(
           style: PaintEditorStyle(
+            uiOverlayStyle: overlay,
             background: canvas,
             appBarColor: onBar,
             appBarBackground: barBg,
@@ -144,6 +166,7 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
         ),
         cropRotateEditor: CropRotateEditorConfigs(
           style: CropRotateEditorStyle(
+            uiOverlayStyle: overlay,
             background: canvas,
             appBarColor: onBar,
             appBarBackground: barBg,
@@ -165,6 +188,7 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
         ),
         filterEditor: FilterEditorConfigs(
           style: FilterEditorStyle(
+            uiOverlayStyle: overlay,
             background: canvas,
             appBarColor: onBar,
             appBarBackground: barBg,
@@ -179,6 +203,7 @@ class _ImageEditorScreenState extends State<ImageEditorScreen> {
         ),
         tuneEditor: TuneEditorConfigs(
           style: TuneEditorStyle(
+            uiOverlayStyle: overlay,
             background: canvas,
             appBarColor: onBar,
             appBarBackground: barBg,

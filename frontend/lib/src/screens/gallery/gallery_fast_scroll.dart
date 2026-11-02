@@ -111,15 +111,22 @@ class _GalleryFastScrollState extends State<GalleryFastScroll> {
     final t = ThemeController().tokens;
 
     return Positioned(
-      top: widget.topInset == 0 ? MediaQuery.paddingOf(context).top : 0,
+      // Non-embedded grids float the search/overflow pills over their top
+      // 56dp; the track must begin at the first date row, just under them,
+      // and never ride up over the chrome. Embedded grids have no top pills,
+      // so the track starts at the safe-area top.
+      top: widget.topInset == 0
+          ? MediaQuery.paddingOf(context).top
+          : MediaQuery.paddingOf(context).top + 56,
       bottom: widget.bottomInset,
       right: 0,
       child: LayoutBuilder(
         builder: (context, _) {
           // The track height is the available column minus the handle and
-          // its end pads; fraction 0 sits the handle at the top.
+          // its end pads; fraction 0 sits the handle at the top. A narrow
+          // lane so it doesn't swallow edge swipes meant for the grid.
           return SizedBox(
-            width: 40,
+            width: 24,
             child: _FastScrollColumn(
               visible: _visible || _dragging,
               dragging: _dragging,

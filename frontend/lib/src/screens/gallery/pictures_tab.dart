@@ -35,7 +35,6 @@ import '../../../services/sync_service.dart';
 import '../../../services/thumb_store.dart';
 import '../share/share_dialog.dart';
 import 'gallery_chrome.dart';
-import 'gallery_fast_scroll.dart';
 import 'gallery_layout.dart';
 import 'image_viewer_screen.dart';
 import 'photo_hero.dart';
@@ -1606,6 +1605,11 @@ class PicturesTabState extends State<PicturesTab>
                     key: _repaintKey,
                     child: NotificationListener<ScrollNotification>(
                     onNotification: _onScrollNotification,
+                    // Bare CustomScrollView: this is the exact structure that
+                    // 1.0.1 shipped grey-free. The fast-scroll handle is a
+                    // separate controller-driven overlay added to the OUTER
+                    // Stack below (see _FastScrollHandle), not a wrapper here,
+                    // so it cannot touch this subtree's first paint.
                     child: CustomScrollView(
                     key: _gridKey,
                     controller: _scrollCtrl,
@@ -1689,13 +1693,25 @@ class PicturesTabState extends State<PicturesTab>
                   ),
                       ),
                       if (_morphActive) _buildMorphLayer(files),
-                      // Fast-scroll handle: drag the right edge to jump
-                      // anywhere in a long grid. Hidden during a pinch morph.
-                      if (!_morphActive && _scrollCtrl != null)
-                        GalleryFastScroll(
+                      // Fast-scroll handle: fixed-size draggable pill on the
+                      // right edge. A narrow right-edge lane (never over the
+                      // grid), driven entirely by the scroll controller via an
+                      // AnimatedBuilder, so it repaints only itself. It maps
+                      // the scrub range to [_headerH .. maxScrollExtent], i.e.
+                      // it starts exactly at the first date row and never rides
+                      // up into the pulled-down title; it hides whenever the
+                      // title is in view or the grid is too short to need it.
+                      if (_scrollCtrl != null)
+                        _FastScrollHandle(
                           controller: _scrollCtrl!,
-                          topInset: _headerH,
-                          bottomInset: widget.embedded ? 0 : 96,
+                          scrubMin: _headerH,
+                          topInset: widget.embedded
+                              ? 8
+                              : MediaQuery.paddingOf(context).top + 56,
+                          bottomInset: MediaQuery.paddingOf(context).bottom +
+                              (widget.embedded ? 8 : 96),
+                          color: cs.primary.withAlpha(170),
+                          radius: 10,
                         ),
                     ],
                   ),
@@ -1983,6 +1999,194 @@ class PicturesTabState extends State<PicturesTab>
               ),
               ),
             ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Samsung-style fast-scroll handle: a fixed-size draggable pill on the right
+/// edge of a long grid. Lives in the grid's outer Stack as a narrow right-edge
+/// lane (never over the grid area) and is driven entirely by the shared
+/// [ScrollController] through an [AnimatedBuilder], so it repaints only itself
+/// and cannot wash the grid on first paint the way a setState-on-scroll sibling
+/// did. It fades in while the grid scrolls (or while held) and out when idle.
+///
+/// The scrub range is [scrubMin .. maxScrollExtent]: scrubMin is the collapsed
+/// park offset (the hidden pull-to-reveal header), so the handle starts exactly
+/// at the first date row and never travels up into the title. It hides whenever
+/// the offset drops below scrubMin (the title is being pulled into view) or the
+/// grid is too short to be worth scrubbing.
+class _FastScrollHandle extends StatefulWidget {
+  const _FastScrollHandle({
+    required this.controller,
+    required this.scrubMin,
+    required this.topInset,
+    required this.bottomInset,
+    required this.color,
+    required this.radius,
+  });
+
+  final ScrollController controller;
+  final double scrubMin;
+  final double topInset;
+  final double bottomInset;
+  final Color color;
+  final double radius;
+
+  @override
+  State<_FastScrollHandle> createState() => _FastScrollHandleState();
+}
+
+class _FastScrollHandleState extends State<_FastScrollHandle> {
+  static const double _thumbH = 52;
+  static const double _laneW = 28;
+  static const double _thumbW = 18; // grab zone (transparent)
+  static const double _pillW = 6; // visible pill, Samsung-slim
+  // Below this much scrubbable content the handle is clutter, not help.
+  static const double _minScrollable = 600;
+
+  // Visibility only — position comes straight from the controller via the
+  // AnimatedBuilder, so a scroll tick never calls setState.
+  final ValueNotifier<bool> _active = ValueNotifier<bool>(false);
+  bool _dragging = false;
+  double _dragTop = 0;
+  Timer? _hideTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_onScroll);
+  }
+
+  @override
+  void didUpdateWidget(_FastScrollHandle old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.controller, widget.controller)) {
+      old.controller.removeListener(_onScroll);
+      widget.controller.addListener(_onScroll);
+    }
+  }
+
+  @override
+  void dispose() {
+    _hideTimer?.cancel();
+    widget.controller.removeListener(_onScroll);
+    _active.dispose();
+    super.dispose();
+  }
+
+  double? _scrubMax() {
+    final c = widget.controller;
+    if (!c.hasClients || c.positions.length != 1) return null;
+    final pos = c.position;
+    if (!pos.hasContentDimensions) return null;
+    final max = pos.maxScrollExtent;
+    if (max - widget.scrubMin < _minScrollable) return null;
+    return max;
+  }
+
+  void _onScroll() {
+    if (_dragging) return;
+    final max = _scrubMax();
+    final off = widget.controller.hasClients ? widget.controller.offset : 0.0;
+    final eligible = max != null && off >= widget.scrubMin - 1;
+    if (eligible) {
+      _active.value = true;
+      _scheduleHide();
+    } else {
+      _active.value = false;
+    }
+  }
+
+  void _scheduleHide() {
+    _hideTimer?.cancel();
+    _hideTimer = Timer(const Duration(milliseconds: 1400), () {
+      if (mounted && !_dragging) _active.value = false;
+    });
+  }
+
+  void _jumpToFraction(double fraction) {
+    final max = _scrubMax();
+    if (max == null || !widget.controller.hasClients) return;
+    final range = max - widget.scrubMin;
+    final target = widget.scrubMin + fraction.clamp(0.0, 1.0) * range;
+    widget.controller.jumpTo(target.clamp(widget.scrubMin, max));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      top: widget.topInset,
+      bottom: widget.bottomInset,
+      right: 0,
+      width: _laneW,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final laneH = constraints.maxHeight;
+          final travel = math.max(0.0, laneH - _thumbH);
+          return AnimatedBuilder(
+            animation: Listenable.merge([widget.controller, _active]),
+            builder: (context, _) {
+              final max = _scrubMax();
+              final visible = _active.value && max != null;
+              final off = widget.controller.hasClients
+                  ? widget.controller.offset
+                  : widget.scrubMin;
+              final range = (max ?? (widget.scrubMin + 1)) - widget.scrubMin;
+              final frac = range <= 0
+                  ? 0.0
+                  : ((off - widget.scrubMin) / range).clamp(0.0, 1.0);
+              final top = _dragging ? _dragTop : frac * travel;
+              return IgnorePointer(
+                ignoring: !visible,
+                child: AnimatedOpacity(
+                  opacity: visible ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 180),
+                  child: Stack(
+                    children: [
+                      Positioned(
+                        top: top,
+                        right: 5,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onVerticalDragStart: (_) {
+                            _dragging = true;
+                            _hideTimer?.cancel();
+                            _dragTop = top;
+                            _active.value = true;
+                          },
+                          onVerticalDragUpdate: (d) {
+                            _dragTop =
+                                (_dragTop + d.delta.dy).clamp(0.0, travel);
+                            _jumpToFraction(travel <= 0 ? 0.0 : _dragTop / travel);
+                          },
+                          onVerticalDragEnd: (_) {
+                            _dragging = false;
+                            _scheduleHide();
+                          },
+                          child: Container(
+                            width: _thumbW,
+                            height: _thumbH,
+                            alignment: Alignment.centerRight,
+                            child: Container(
+                              width: _pillW,
+                              height: _thumbH,
+                              decoration: BoxDecoration(
+                                color: widget.color,
+                                borderRadius:
+                                    BorderRadius.circular(widget.radius),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
           );
         },
       ),

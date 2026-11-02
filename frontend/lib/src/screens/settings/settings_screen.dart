@@ -961,36 +961,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// Route name of every category page pushed by [_openSection].
   static const _kSectionRoute = '/settings/section';
 
-  static bool _isSettingsRoute(Route<dynamic> r) =>
-      r.settings.name == AppRoutes.settings ||
-      r.settings.name == _kSectionRoute;
-
-  /// Two ways out of a category page, two destinations. The system back
-  /// (gesture or button) leaves Settings altogether, back to the gallery or
-  /// Music or wherever Settings was opened from. The arrow in the bar goes
-  /// up one level to the Settings list. The arrow calls `pop` directly, which
-  /// does not consult PopScope; only the system back is intercepted.
+  /// A category opened from the hub is ordinary navigation: the bar arrow and
+  /// the system back both pop one level to the previous page. The "return to
+  /// where Settings was opened from" jump belongs only to the four designated
+  /// entry points (the gallery Menu's three and Music's one), which open
+  /// Settings inline rather than through here, so this page does not override
+  /// the system back at all.
   Widget _sectionScaffold(
       String title, List<Widget> Function(ColorScheme) children) {
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (didPop) return;
-        Navigator.of(context).popUntil((r) => !_isSettingsRoute(r));
-      },
-      child: Builder(
-        builder: (ctx) => Scaffold(
-          appBar: AppBar(
-            leading: BackButton(onPressed: () => Navigator.of(ctx).pop()),
-            title: Text(title),
-          ),
-          body: ValueListenableBuilder<int>(
-            valueListenable: _rev,
-            builder: (ctx, _, _) => ListView(
-              padding: const EdgeInsets.only(top: 8, bottom: 32),
-              children: children(Theme.of(ctx).colorScheme),
-            ),
-          ),
+    return Scaffold(
+      appBar: AppBar(
+        leading: const BackButton(),
+        title: Text(title),
+      ),
+      body: ValueListenableBuilder<int>(
+        valueListenable: _rev,
+        builder: (ctx, _, _) => ListView(
+          padding: const EdgeInsets.only(top: 8, bottom: 32),
+          children: children(Theme.of(ctx).colorScheme),
         ),
       ),
     );
@@ -1324,7 +1312,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   style: TextStyle(color: cs.onSurface)),
               subtitle: Text(
                 _wifiOnly
-                    ? 'Waits for Wi-Fi. Nothing is backed up on mobile data'
+                    ? 'Nothing uploads on mobile data'
                     : 'Backs up on Wi-Fi and mobile data',
                 style: TextStyle(
                     color: cs.onSurface.withAlpha(140), fontSize: 12),

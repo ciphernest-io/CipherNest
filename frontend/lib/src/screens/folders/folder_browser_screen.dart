@@ -1090,8 +1090,7 @@ class _FolderBrowserScreenState extends State<FolderBrowserScreen> {
               widget.folder == null
                   ? 'No folders yet.\nTap + to create one, or Upload to '
                       'add files.'
-                  : 'This folder is empty.\nUpload here, or move files in '
-                      'from any tab\'s selection mode.',
+                  : 'This folder is empty.',
               textAlign: TextAlign.center,
               style: TextStyle(color: cs.onSurface.withAlpha(140)),
             ),

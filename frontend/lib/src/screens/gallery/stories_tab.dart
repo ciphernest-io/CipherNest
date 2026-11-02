@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import '../../config/media_budget.dart';
 import '../../config/theme_controller.dart';
 import '../../widgets/theme_icon.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,7 +10,6 @@ import '../../../services/database_service.dart';
 import '../../../services/gallery_prefs.dart';
 import '../../../services/sync_service.dart';
 import 'gallery_chrome.dart';
-import 'gallery_type_results_screen.dart';
 import 'image_viewer_screen.dart';
 import 'photo_hero.dart';
 import 'pictures_tab.dart' show GalleryGridItem;
@@ -34,15 +34,14 @@ class _Story {
   final List<CnestFile> files;
   final bool video;
 
-  /// Opens as a resizable grid page (Favorites) instead of the viewer.
-  final bool grid;
-  const _Story(this.title, this.files,
-      {this.subtitle, this.video = false, this.grid = false});
+  const _Story(this.title, this.files, {this.subtitle, this.video = false});
   CnestFile get cover => files.first;
 }
 
 class StoriesTabState extends State<StoriesTab> {
   List<_Story> _stories = [];
+  // The user's own favourites, shown as a grid section below the carousel.
+  List<CnestFile> _favorites = [];
   bool _loading = true;
   bool _showFeatured = true;
   bool _showYearAgo = true;
@@ -206,17 +205,11 @@ class StoriesTabState extends State<StoriesTab> {
     final db = DatabaseService();
     final stories = <_Story>[];
 
-    // Favorites first and always: it is the user's own curation, not a
-    // generated memory, so the Featured master switch does not govern it.
-    // Newest first, as a header-less grid.
+    // Favorites are the user's own curation (not a generated memory), shown
+    // as their own grid section below the carousel — not a story card.
     final favorites = (await db.getFavorites())
         .where((f) => f.type == CnestFileType.image)
         .toList();
-    if (favorites.isNotEmpty) {
-      stories.add(_Story('Favorites', favorites,
-          subtitle: '${favorites.length} item${favorites.length == 1 ? '' : 's'}',
-          grid: true));
-    }
 
     if (showToday) {
       final today = await db.getTodaysRecap();
@@ -286,6 +279,7 @@ class StoriesTabState extends State<StoriesTab> {
     if (mounted) {
       setState(() {
         _stories = stories;
+        _favorites = favorites;
         _loading = false;
       });
     }
@@ -347,6 +341,36 @@ class StoriesTabState extends State<StoriesTab> {
                 itemBuilder: (context, i) => _storyCard(_stories[i], i),
               ),
             ),
+          // ---- Favourites: the user's own curation, its own grid below the
+          // memory carousel. Always present (empty note when none). ----
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 26, 16, 10),
+            child: Text('Favourites',
+                style: TextStyle(
+                    color: cs.onSurface,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700)),
+          ),
+          if (_favorites.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text('No favourites yet',
+                  style: TextStyle(
+                      color: cs.onSurface.withAlpha(140), fontSize: 14)),
+            )
+          else
+            GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              padding: EdgeInsets.zero,
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 4,
+                crossAxisSpacing: 1.5,
+                mainAxisSpacing: 1.5,
+              ),
+              itemCount: _favorites.length,
+              itemBuilder: (context, i) => _favTile(_favorites[i], i),
+            ),
           SizedBox(height: _bottomFiller + 120),
         ],
       ),
@@ -362,6 +386,34 @@ class StoriesTabState extends State<StoriesTab> {
     return -1;
   }
 
+  /// One favourite thumbnail. Opens the viewer over the full favourites list.
+  /// Heroed only when the photo is not also a carousel cover (that card owns
+  /// the shared per-photo hero tag), so the two never collide on the page.
+  Widget _favTile(CnestFile f, int index) {
+    final tile = GalleryGridItem(
+      key: ValueKey('fav-${f.id}'),
+      file: f,
+      decodeWidth: MediaBudget.thumbDecodeWidth,
+      compact: true,
+    );
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        photoViewerRoute(ImageViewerScreen(
+          files: _favorites,
+          initialIndex: index,
+          placeholderDecodeWidth: MediaBudget.thumbDecodeWidth,
+        )),
+      ),
+      child: _heroOwner(f.id) == -1
+          ? Hero(
+              tag: 'photo-${f.id}',
+              flightShuttleBuilder: photoHeroShuttle,
+              child: tile)
+          : tile,
+    );
+  }
+
   Widget _storyCard(_Story s, int index) {
     final t = ThemeController().tokens;
     // The cover is the gallery's own tile (shared ThumbStore entry), so the
@@ -373,24 +425,14 @@ class StoriesTabState extends State<StoriesTab> {
       compact: true,
     );
     return GestureDetector(
-      onTap: () => s.grid
-          ? Navigator.push(
-              context,
-              MaterialPageRoute(
-                  builder: (_) => GalleryTypeResultsScreen(
-                        label: s.title,
-                        files: s.files,
-                        showDateHeaders: false,
-                        searchHint: 'Search favorites',
-                      )))
-          : Navigator.push(
-              context,
-              photoViewerRoute(ImageViewerScreen(
-                files: s.files,
-                initialIndex: 0,
-                placeholderDecodeWidth: _coverDecodeWidth,
-              )),
-            ),
+      onTap: () => Navigator.push(
+        context,
+        photoViewerRoute(ImageViewerScreen(
+          files: s.files,
+          initialIndex: 0,
+          placeholderDecodeWidth: _coverDecodeWidth,
+        )),
+      ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(t.rCardLg),
         child: SizedBox(
@@ -450,7 +492,7 @@ class StoriesTabState extends State<StoriesTab> {
                             fontSize: 18,
                             fontWeight: FontWeight.w700,
                             height: 1.1)),
-                    if (!s.video && !s.grid && s.files.length > 1)
+                    if (!s.video && s.files.length > 1)
                       Padding(
                         padding: const EdgeInsets.only(top: 2),
                         child: Text('${s.files.length} photos',

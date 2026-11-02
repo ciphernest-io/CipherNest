@@ -191,6 +191,10 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
   // swipes are untouched.
   bool _edgeBackGuard = false;
 
+  // True while the photo tab is being pinch-resized (two fingers). The
+  // TabBarView freezes so the pinch never doubles as a section swipe.
+  final ValueNotifier<bool> _pinching = ValueNotifier(false);
+
   @override
   void initState() {
     super.initState();
@@ -200,6 +204,7 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
   @override
   void dispose() {
     _pillInset.release();
+    _pinching.dispose();
     super.dispose();
   }
 
@@ -256,18 +261,27 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
           onPointerCancel: (_) {
             if (_edgeBackGuard) setState(() => _edgeBackGuard = false);
           },
-          child: TabBarView(
-            // Frozen for an edge-born touch so the OS back-swipe wins.
-            physics: _edgeBackGuard
-                ? const NeverScrollableScrollPhysics()
-                : null,
-            children: const [
-              _FoldersBinTab(),
-              _FilesBinTab(type: CnestFileType.image, noun: 'photo'),
-              _FilesBinTab(type: CnestFileType.document, noun: 'document'),
-              _FilesBinTab(type: CnestFileType.audio, noun: 'track'),
-              _FilesBinTab(type: CnestFileType.other, noun: 'file'),
-            ],
+          child: ValueListenableBuilder<bool>(
+            valueListenable: _pinching,
+            builder: (context, pinching, _) => TabBarView(
+              // Frozen for an edge-born touch (OS back-swipe wins) and while
+              // the photo grid is being pinch-resized (so the pinch is never
+              // read as a swipe to the next section).
+              physics: _edgeBackGuard || pinching
+                  ? const NeverScrollableScrollPhysics()
+                  : null,
+              children: [
+                const _FoldersBinTab(),
+                _FilesBinTab(
+                    type: CnestFileType.image,
+                    noun: 'photo',
+                    pinching: _pinching),
+                const _FilesBinTab(
+                    type: CnestFileType.document, noun: 'document'),
+                const _FilesBinTab(type: CnestFileType.audio, noun: 'track'),
+                const _FilesBinTab(type: CnestFileType.other, noun: 'file'),
+              ],
+            ),
           ),
         ),
       ),
@@ -387,7 +401,11 @@ class _FoldersBinTabState extends State<_FoldersBinTab> {
 class _FilesBinTab extends StatefulWidget {
   final CnestFileType type;
   final String noun;
-  const _FilesBinTab({required this.type, required this.noun});
+
+  /// Set true while this tab is pinch-resizing, so the parent TabBarView
+  /// freezes. Only the photo tab pinches, so only it is given one.
+  final ValueNotifier<bool>? pinching;
+  const _FilesBinTab({required this.type, required this.noun, this.pinching});
 
   @override
   State<_FilesBinTab> createState() => _FilesBinTabState();
@@ -993,6 +1011,7 @@ class _FilesBinTabState extends State<_FilesBinTab> {
           _pinchStartCols = _binCols;
           if (_dragSelecting) _endDragSelect();
           setState(() => _binPinching = true);
+          widget.pinching?.value = true;
         }
       },
       onPointerMove: (e) {
@@ -1009,6 +1028,7 @@ class _FilesBinTabState extends State<_FilesBinTab> {
         _pinchPointers.remove(e.pointer);
         if (_binPinching && _pinchPointers.length < 2) {
           setState(() => _binPinching = false);
+          widget.pinching?.value = false;
         }
         if (_dragSelecting) _endDragSelect();
       },
@@ -1016,6 +1036,7 @@ class _FilesBinTabState extends State<_FilesBinTab> {
         _pinchPointers.remove(e.pointer);
         if (_binPinching && _pinchPointers.length < 2) {
           setState(() => _binPinching = false);
+          widget.pinching?.value = false;
         }
         if (_dragSelecting) _endDragSelect();
       },
