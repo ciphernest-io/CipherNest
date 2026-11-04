@@ -61,14 +61,16 @@
     /* Centered brand lockup: logo mark over the wordmark over a small badge. */
     header { display: flex; flex-direction: column; align-items: center;
       gap: 10px; margin-bottom: 26px; text-align: center; }
-    .logo-mark { height: 104px; aspect-ratio: 765 / 1024;
+    .logo-mark { height: 150px; aspect-ratio: 765 / 1024;
       background: center / contain no-repeat var(--logo); }
     header .logo { font-family: 'BungeeHairline', -apple-system, system-ui, sans-serif;
-      font-weight: 400; font-size: 26px; letter-spacing: 0.5px; color: var(--fg);
-      line-height: 1; }
-    header .badge { font-size: 11px; padding: 3px 9px; background: var(--surface);
-      border: 1px solid var(--hairline); border-radius: 999px; color: var(--muted);
-      letter-spacing: 0.02em; }
+      font-weight: 400; font-size: 30px; letter-spacing: 1px; color: var(--fg);
+      line-height: 1;
+      /* BungeeHairline is a true hairline weight; stroke it so the wordmark
+         reads with presence instead of near-invisible threads. */
+      -webkit-text-stroke: 0.8px var(--fg); }
+    header .badge { font-size: 10px; text-transform: uppercase; letter-spacing: 0.16em;
+      color: var(--muted); font-weight: 600; }
 
     .panel { background: var(--surface); border: 1px solid var(--hairline);
       border-radius: 14px; padding: 26px 24px; text-align: center; }
@@ -129,17 +131,19 @@
     .file-meta .size { font-size: 12px; color: var(--muted); }
 
     /* Referral surface: this page is the first CipherNest most recipients see. */
-    .get { margin-top: 22px; text-align: center; }
-    .get a { display: inline-block; padding: 9px 18px; border-radius: 999px;
-      border: 1px solid var(--hairline); color: var(--fg); font-size: 13px;
-      font-weight: 500; }
-    .get a:hover { background: var(--surface2); text-decoration: none; }
+    .get { margin-top: 24px; text-align: center; }
+    .get a { display: inline-block; padding: 12px 30px; border-radius: 10px;
+      background: var(--accent); color: var(--on-accent); font-size: 14px;
+      font-weight: 600; letter-spacing: 0.01em; }
+    .get a:hover { background: var(--accent-press); text-decoration: none; }
 
     footer { color: var(--muted); font-size: 11px; margin-top: 26px;
       text-align: center; line-height: 1.7; }
-    .pill { display: inline-block; padding: 2px 8px; background: var(--surface);
-      border: 1px solid var(--hairline);
-      border-radius: 999px; font-size: 11px; color: var(--muted); margin: 0 3px; }
+    /* Crypto credentials as a single understated technical line, not a row of
+       generic chips. */
+    .crypto { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px; letter-spacing: 0.05em; color: var(--muted);
+      text-transform: uppercase; }
   </style>
 </head>
 <body>
@@ -186,9 +190,7 @@
     </div>
 
     <footer>
-      <span class="pill">Zero-knowledge</span>
-      <span class="pill">AES-256-GCM</span>
-      <span class="pill">Argon2id</span>
+      <div class="crypto">Zero-knowledge &middot; AES-256-GCM &middot; Argon2id</div>
       <div style="margin-top: 8px;">The server cannot read this file.</div>
     </footer>
   </div>
